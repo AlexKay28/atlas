@@ -1,0 +1,52 @@
+{
+  "task": "GitHub issue #45: KB recall — FTS5 ranking over values",
+  "run_id": "sprint1-45-kb-recall",
+  "seal": "bcc2623f5cffa3e5a67b58129a12068f237ec05d0630e5bac60bd37866cbaa9c",
+  "terminal_status": "succeeded",
+  "steps_planned": 19,
+  "steps_executed": 19,
+  "acceptance": [
+    {
+      "criterion": "recall('deploy') ranks the key whose value mentions deploy first",
+      "passed": true,
+      "evidence": "tests/test_memory.py::test_recall_ranks_matching_key_first — seeds kb.config, kb.deploy_steps, kb.notes; recall('deploy') returns kb.deploy_steps as results[0][0]"
+    },
+    {
+      "criterion": "delete() removes a key from recall results",
+      "passed": true,
+      "evidence": "tests/test_memory.py::test_delete_removes_key_from_recall — seeds kb.alpha and kb.beta with 'deploy' in values; after delete('kb.alpha'), recall('deploy') no longer returns kb.alpha"
+    },
+    {
+      "criterion": "exact get/keys behavior unchanged (existing tests pass unchanged)",
+      "passed": true,
+      "evidence": "All 760 pre-existing tests pass unmodified; get(), keys(), __contains__, and _resolve_kb_ref in coordinator.py are untouched; 764 total (760 existing + 4 new) passed in 21.15s"
+    },
+    {
+      "criterion": "recall on empty KB returns []",
+      "passed": true,
+      "evidence": "tests/test_memory.py::test_recall_empty_kb_returns_empty — fresh KnowledgeBase, recall('anything') returns []"
+    },
+    {
+      "criterion": "FTS5 shadow table maintained inside set()/delete() so it can never drift",
+      "passed": true,
+      "evidence": "src/tikhon/memory.py set() (lines 103-109): DELETE+INSERT on knowledge_fts after UPSERT on knowledge; delete() (line 132): DELETE on knowledge_fts after DELETE on knowledge"
+    },
+    {
+      "criterion": "Schema version stored defensively; lazy recreation on old DB files",
+      "passed": true,
+      "evidence": "tests/test_memory.py::test_recall_lazy_creation_on_old_db — creates a DB with knowledge table only (no FTS5), reopens with new KnowledgeBase, recall('created') returns the backfilled row; _meta table stores fts_schema_version='1'"
+    },
+    {
+      "criterion": "Full pytest suite green at 760+",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q -> 764 passed in 21.15s"
+    },
+    {
+      "criterion": "git status --porcelain shows only owned files",
+      "passed": true,
+      "evidence": "git status --porcelain: M src/tikhon/memory.py, M tests/test_memory.py, ?? demo/runs/sprint1-45-kb-recall/ — all within owned file scope"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": []
+}
