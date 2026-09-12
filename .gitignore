@@ -12,3 +12,4 @@ build/
 # Local tooling unrelated to the published project
 .skill-work/
 .opencode/commands/
+.claude/

@@ -31,6 +31,14 @@ Waiting orchestration frames (a parent CALL awaiting its child) hold no
 slot: only handler executions and child step executions acquire the
 semaphore, so a one-worker budget cannot deadlock a parent waiting on a
 child.
+
+Issue #41 extensions:
+
+- ``max_total_tokens`` caps the total tokens spent across all receipt
+  metrics in a run; :class:`BudgetGate` accumulates spent tokens and
+  reports token exhaustion through the standard ``RUN_FINISHED`` path.
+- ``elapsed_offset`` on :class:`BudgetGate` carries pre-crash wall-clock
+  time so a resumed run enforces the *remaining* global deadline.
 """
 
 from __future__ import annotations
@@ -56,12 +64,16 @@ class ExecutionBudget:
     bounds the whole run wall-clock; ``per_invocation_deadline_seconds``
     bounds each dispatch; ``max_child_depth`` bounds child-run nesting
     (run-id ``:`` count).  ``None`` deadlines mean unbounded.
+
+    ``max_total_tokens`` (issue #41) caps the total tokens spent across
+    all result receipts in a run; ``None`` means unlimited.
     """
 
     max_concurrent_workers: int = 4
     global_deadline_seconds: float | None = None
     per_invocation_deadline_seconds: float | None = None
     max_child_depth: int = 8
+    max_total_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -92,6 +104,15 @@ class ExecutionBudget:
                 "max_child_depth must be an integer >= 0, got"
                 f" {self.max_child_depth!r}"
             )
+        if self.max_total_tokens is not None and (
+            not isinstance(self.max_total_tokens, int)
+            or isinstance(self.max_total_tokens, bool)
+            or self.max_total_tokens < 0
+        ):
+            raise ValueError(
+                "max_total_tokens must be a non-negative integer or None,"
+                f" got {self.max_total_tokens!r}"
+            )
 
 
 class BudgetDeadlineExceeded(Exception):
@@ -106,16 +127,32 @@ class BudgetGate:
     the semaphore, the global-deadline clock and the depth rule are
     shared across the whole execution tree while separate ``execute``
     calls stay independent.
+
+    ``elapsed_offset`` (issue #41) shifts the wall-clock start backwards
+    by the given number of seconds so a resumed run enforces the
+    *remaining* global deadline using pre-crash elapsed time.  The
+    coordinator derives it from the run's first event timestamp.
+
+    ``spent_tokens`` (issue #41) accumulates token counts from result
+    receipts; when it exceeds ``budget.max_total_tokens`` the run fails
+    with ``RUN_FINISHED`` reason ``"token budget exceeded"``.
     """
 
-    def __init__(self, budget: ExecutionBudget):
+    def __init__(
+        self,
+        budget: ExecutionBudget,
+        *,
+        elapsed_offset: float = 0.0,
+    ):
         if not isinstance(budget, ExecutionBudget):
             raise TypeError(
                 f"budget must be an ExecutionBudget, got {type(budget).__name__}"
             )
         self.budget = budget
         self._slots = threading.BoundedSemaphore(max(1, budget.max_concurrent_workers))
-        self._started = time.monotonic()
+        self._started = time.monotonic() - elapsed_offset
+        self._spent_tokens = 0
+        self._lock = threading.Lock()
 
     # -- concurrency slots --------------------------------------------
 
@@ -141,6 +178,26 @@ class BudgetGate:
         if deadline is None:
             return None
         return max(0.0, deadline - (time.monotonic() - self._started))
+
+    # -- token accumulation (issue #41) ----------------------------------
+
+    def add_tokens(self, count: int) -> None:
+        """Accumulate spent tokens from a result receipt."""
+        with self._lock:
+            self._spent_tokens += count
+
+    @property
+    def spent_tokens(self) -> int:
+        with self._lock:
+            return self._spent_tokens
+
+    def token_cap_exceeded(self) -> bool:
+        """Whether the accumulated token spend has exceeded the cap."""
+        cap = self.budget.max_total_tokens
+        if cap is None:
+            return False
+        with self._lock:
+            return self._spent_tokens > cap
 
     # -- child depth -----------------------------------------------------
 

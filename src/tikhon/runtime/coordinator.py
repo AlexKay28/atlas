@@ -386,6 +386,28 @@ def _effectful_commands() -> frozenset[str]:
     return _EFFECTFUL_COMMANDS
 
 
+_COMMAND_MAX_ATTEMPTS: dict[str, int] | None = None
+
+
+def _command_max_attempts(command: str) -> int | None:
+    """The registry's ``contract.budget.max_attempts`` for *command*.
+
+    Returns ``None`` for commands unknown to the builtin registry
+    (custom worker handlers), so the attempt cap is never enforced
+    on commands the registry does not govern (issue #41).
+    """
+    global _COMMAND_MAX_ATTEMPTS
+    if _COMMAND_MAX_ATTEMPTS is None:
+        from tikhon.registry.registry import builtin_registry
+
+        registry = builtin_registry()
+        _COMMAND_MAX_ATTEMPTS = {
+            name: registry.resolve(name).budget.max_attempts
+            for name in registry.names()
+        }
+    return _COMMAND_MAX_ATTEMPTS.get(command)
+
+
 def _uses_kb_refs(program: Program) -> bool:
     """Whether any invocation argument mentions a ``KB.`` reference."""
     for statement in program.statements:
@@ -2994,6 +3016,19 @@ class SequentialCoordinator:
             payload={"result": result},
         )
 
+        # Issue #41: feed the budget gate's token accumulator from
+        # the result receipt if the worker carries usage info.
+        if gate is not None and isinstance(result, dict):
+            receipt = result.get("_receipt")
+            if isinstance(receipt, dict):
+                usage = receipt.get("usage")
+                if isinstance(usage, dict):
+                    tokens = usage.get("tokens", 0)
+                    if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
+                        gate.add_tokens(tokens)
+            if gate.token_cap_exceeded():
+                return ("failed", "token budget exceeded", None)
+
         target_values, validation_error = map_results_to_targets(
             body.targets, result
         )
@@ -3849,6 +3884,7 @@ class SequentialCoordinator:
                 crash_hook=crash_hook,
                 max_workers=max_workers,
                 gate=gate,
+                claims=claims,
             )
 
         return self._drive_plan(
@@ -3875,6 +3911,7 @@ class SequentialCoordinator:
         claims: "ResourceLedger | None" = None,
         branch_workspace: str | None = None,
         branch_claim: str | None = None,
+        max_workers: int = 1,
     ) -> dict[str, Any]:
         """Continue a non-terminal run (issue #10 core, shared with #20).
 
@@ -4065,7 +4102,7 @@ class SequentialCoordinator:
         }
 
         if concurrent_run:
-            max_workers = int(
+            resume_workers = max_workers if max_workers > 1 else int(
                 self.store.run(run_id)["metadata"].get("max_workers") or 2
             )
             return self._drive_plan_concurrent(
@@ -4075,8 +4112,9 @@ class SequentialCoordinator:
                 values,
                 statement_to_task,
                 initial_terminal=frozenset(terminal_indices),
-                max_workers=max_workers,
+                max_workers=resume_workers,
                 gate=gate,
+                claims=claims,
             )
 
         return self._drive_plan(
@@ -4363,6 +4401,9 @@ class SequentialCoordinator:
 
         failed = False
         error_msg: str | None = None
+
+        # Issue #41: per-invocation attempt count for max_attempts enforcement.
+        attempt_counts: dict[str, int] = {}
 
         # Issue #3: conditionals anchored before the first invocation (their
         # refs can only be declared INPUT nodes) are evaluated up front.  On
@@ -4876,6 +4917,24 @@ class SequentialCoordinator:
                     return anchor_result
                 continue
 
+            # Issue #41: enforce contract.budget.max_attempts at the
+            # coordinator dispatch layer — refuse to dispatch when the
+            # invocation's attempt count already meets the cap.
+            cap = _command_max_attempts(statement.command)
+            if cap is not None:
+                prior_attempts = attempt_counts.get(invocation_id, 0)
+                if prior_attempts >= cap:
+                    failed = True
+                    error_msg = (
+                        f"max_attempts ({cap}) exceeded for"
+                        f" {statement.command} on {invocation_id}"
+                    )
+                    finish_failed_invocation(
+                        idx, statement.step_id, invocation_id, task_id, error_msg
+                    )
+                    break
+                attempt_counts[invocation_id] = prior_attempts + 1
+
             try:
                 result = self._execute_worker_call(
                     statement.command, resolved_kwargs, gate
@@ -4904,6 +4963,24 @@ class SequentialCoordinator:
                 task_id=task_id,
                 payload={"result": result},
             )
+
+            # Issue #41: feed the budget gate's token accumulator from
+            # the result receipt if the worker carries usage info.
+            if gate is not None and isinstance(result, dict):
+                receipt = result.get("_receipt")
+                if isinstance(receipt, dict):
+                    usage = receipt.get("usage")
+                    if isinstance(usage, dict):
+                        tokens = usage.get("tokens", 0)
+                        if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
+                            gate.add_tokens(tokens)
+                if gate.token_cap_exceeded():
+                    failed = True
+                    error_msg = "token budget exceeded"
+                    finish_failed_invocation(
+                        idx, statement.step_id, invocation_id, task_id, error_msg
+                    )
+                    break
 
             target_values, validation_error = map_results_to_targets(
                 statement.targets, result
@@ -5218,6 +5295,7 @@ class SequentialCoordinator:
         crash_hook: "Callable[[int], None] | None" = None,
         max_workers: int = 2,
         gate: "BudgetGate | None" = None,
+        claims: "ResourceLedger | None" = None,
     ) -> dict[str, Any]:
         """Drive the plan through a ready-task frontier (issue #21).
 
@@ -5267,20 +5345,30 @@ class SequentialCoordinator:
         in_flight: dict[int, concurrent.futures.Future] = {}
         anchor_evaluated: set[int] = set()
         dispatched_at: dict[int, float] = {}
+        # Issue #41: per-invocation claim tracking for the concurrent path.
+        held_claims: dict[int, str] = {}
+        # Issue #41: per-invocation attempt count for max_attempts enforcement.
+        attempt_counts: dict[str, int] = {}
         executor: concurrent.futures.ThreadPoolExecutor | None = None
 
-        def drain_in_flight() -> None:
+        def drain_in_flight(timeout: float | None = 1.0) -> None:
             """Discard outstanding pool work (issue #21 cancellation rule).
 
             Not-yet-started futures are cancelled; started handlers
             cannot be interrupted, so they run to completion and their
             results are dropped uncommitted — a late result can never
             overwrite an accepted output or resurrect a failed run.
+
+            Issue #41: the wait is bounded by ``timeout`` seconds so a
+            hung handler cannot block ``execute()`` indefinitely after
+            the run was already finalized.
             """
             for future in in_flight.values():
                 future.cancel()
             if in_flight:
-                concurrent.futures.wait(list(in_flight.values()))
+                concurrent.futures.wait(
+                    list(in_flight.values()), timeout=timeout
+                )
             in_flight.clear()
 
         def cancel_all_unsettled(exclude: int | None = None) -> list[_Record]:
@@ -5658,26 +5746,66 @@ class SequentialCoordinator:
                     ),
                 )
 
+            # Issue #41: enforce contract.budget.max_attempts at the
+            # coordinator dispatch layer.
+            cap = _command_max_attempts(statement.command)
+            if cap is not None:
+                prior_attempts = attempt_counts.get(invocation_id, 0)
+                if prior_attempts >= cap:
+                    return (
+                        "run_failed",
+                        finish_failed_invocation(
+                            idx, statement.step_id, invocation_id, task_id,
+                            f"max_attempts ({cap}) exceeded for"
+                            f" {statement.command} on {invocation_id}",
+                        ),
+                    )
+                attempt_counts[invocation_id] = prior_attempts + 1
+
+            # Issue #41: thread claims through the concurrent path.
+            # Effectful dispatches claim workspace:<run_id>:<invocation_id>
+            # for the handler's duration, mirroring the sequential loop.
+            dispatch_root = self.workspace_root
+            claim_resource: str | None = None
             if (
-                self.workspace_root is not None
+                dispatch_root is not None
                 and statement.command in _effectful_commands()
             ):
-                resolved_kwargs["_workspace_root"] = self.workspace_root
+                resolved_kwargs["_workspace_root"] = dispatch_root
+                if claims is not None:
+                    claim_resource = f"workspace:{run_id}:{invocation_id}"
+                    owner = f"{run_id}:{invocation_id}"
+                    if not claims.claim(claim_resource, owner):
+                        return (
+                            "run_failed",
+                            finish_failed_invocation(
+                                idx, statement.step_id, invocation_id,
+                                task_id,
+                                f"resource claim failed: {claim_resource}"
+                                f" is held by"
+                                f" {claims.holder(claim_resource)!r}",
+                            ),
+                        )
 
             if EventType.INVOCATION_DISPATCHED not in prior_types:
+                dispatched_payload: dict[str, Any] = {
+                    "args": resolved_kwargs,
+                    "idempotency_key": f"{run_id}:{invocation_id}",
+                }
+                if claim_resource is not None:
+                    dispatched_payload["resource_claims"] = [claim_resource]
                 self.store.append(
                     run_id,
                     EventType.INVOCATION_DISPATCHED,
                     instruction_id=statement.step_id,
                     invocation_id=invocation_id,
                     task_id=task_id,
-                    payload={
-                        "args": resolved_kwargs,
-                        "idempotency_key": f"{run_id}:{invocation_id}",
-                    },
+                    payload=dispatched_payload,
                 )
 
             assert executor is not None
+            if claim_resource is not None:
+                held_claims[idx] = claim_resource
             future = executor.submit(
                 self._dispatch_worker_call,
                 statement.command,
@@ -5702,9 +5830,16 @@ class SequentialCoordinator:
             try:
                 outcome = future.result()
             except Exception as exc:
+                # Issue #41: release the held claim on failure.
+                if idx in held_claims and claims is not None:
+                    claims.release(held_claims.pop(idx), f"{run_id}:{invocation_id}")
                 return finish_failed_invocation(
                     idx, instruction_id, invocation_id, task_id, str(exc)
                 )
+
+            # Issue #41: release the held claim after the handler returns.
+            if idx in held_claims and claims is not None:
+                claims.release(held_claims.pop(idx), f"{run_id}:{invocation_id}")
 
             if call is not None:
                 child_run_id = f"{run_id}:{invocation_id}"
@@ -5813,6 +5948,22 @@ class SequentialCoordinator:
                 task_id=task_id,
                 payload={"result": result},
             )
+
+            # Issue #41: feed the budget gate's token accumulator from
+            # the result receipt if the worker carries usage info.
+            if gate is not None and isinstance(result, dict):
+                receipt = result.get("_receipt")
+                if isinstance(receipt, dict):
+                    usage = receipt.get("usage")
+                    if isinstance(usage, dict):
+                        tokens = usage.get("tokens", 0)
+                        if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
+                            gate.add_tokens(tokens)
+                if gate.token_cap_exceeded():
+                    return finish_failed_invocation(
+                        idx, statement.step_id, invocation_id, task_id,
+                        "token budget exceeded",
+                    )
 
             target_values, validation_error = map_results_to_targets(
                 statement.targets, result
@@ -5937,10 +6088,11 @@ class SequentialCoordinator:
             terminal.add(idx)
             return None
 
-        with concurrent.futures.ThreadPoolExecutor(
+        pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=max_workers
-        ) as pool:
-            executor = pool
+        )
+        executor = pool
+        try:
             while True:
                 # Issue #22: the global deadline is checked before each
                 # dispatch cycle; work remaining + expired deadline fails
@@ -5949,8 +6101,10 @@ class SequentialCoordinator:
                 if gate is not None and gate.global_expired() and not all(
                     idx in terminal for idx in range(len(plan))
                 ):
-                    # record the failure (marking in-flight invocations
-                    # cancelled) BEFORE draining the pool work
+                    # Issue #41: record the failure (marking in-flight
+                    # invocations cancelled) BEFORE draining the pool
+                    # work; the drain is bounded so a hung handler
+                    # cannot block execute() indefinitely.
                     result = fail_global_deadline(next_ready())
                     drain_in_flight()
                     return result
@@ -6013,6 +6167,8 @@ class SequentialCoordinator:
                 # Issue #22: per-invocation deadlines of still-running
                 # futures — an overrunning invocation fails through the
                 # standard atomic path; its late result is discarded.
+                # Issue #41: the failure batch is committed BEFORE
+                # draining, and the drain is bounded.
                 if (
                     gate is not None
                     and in_flight
@@ -6038,14 +6194,24 @@ class SequentialCoordinator:
                         )
                         in_flight.pop(idx)
                         del dispatched_at[idx]
-                        drain_in_flight()
-                        return finish_failed_invocation(
+                        # Issue #41: finalize the failure batch BEFORE
+                        # draining the pool so a hung handler cannot
+                        # block the commit; the drain is bounded.
+                        result = finish_failed_invocation(
                             idx,
                             instruction_id,
                             f"inv-{idx + 1}",
                             statement_to_task[idx],
                             "deadline exceeded",
                         )
+                        drain_in_flight()
+                        return result
+        finally:
+            # Issue #41: shutdown with wait=False so a hung handler
+            # cannot block execute() at pool exit — the failure batch
+            # was already committed above; outstanding pool work is
+            # discarded.
+            pool.shutdown(wait=False)
 
         for statement in program.statements:
             if isinstance(statement, Return):

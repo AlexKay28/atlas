@@ -1,0 +1,36 @@
+{
+  "task": "issue #41: Budgets, take 2 — resume drops the gate; wedged workers block finalization; concurrent path bypasses claims; token/attempt caps never enforced",
+  "run_id": "sprint1-41-budgets",
+  "seal": "7e79777961edb16ae117da0a73ade3f277151d9332887daa118ec511b80e4b9c",
+  "terminal_status": "succeeded",
+  "steps_planned": 29,
+  "steps_executed": 29,
+  "acceptance": {
+    "(1) resumed run with budget enforces the remaining global deadline using pre-crash elapsed": {
+      "status": "pass",
+      "evidence": "test_resume_with_budget_enforces_remaining_deadline — crash at step 0, sleep 0.05s, resume with global_deadline_seconds=0.01 → status=failed, error='global deadline exceeded'"
+    },
+    "(2) handler sleeping 10s with per_invocation_deadline_seconds=0.1 → execute() returns within ~1-2s, status failed": {
+      "status": "pass",
+      "evidence": "test_wedged_worker_wallclock_returns_quickly — 10s handler, 0.1s deadline, max_workers=2 → status=failed, error='deadline exceeded', elapsed < 3.0s"
+    },
+    "(3) two concurrent effectful steps serialize on the claim (DISPATCHED payloads carry resource_claims)": {
+      "status": "pass",
+      "evidence": "test_concurrent_effectful_steps_carry_resource_claims — two edit steps, max_workers=2, both DISPATCHED payloads have resource_claims=['workspace:edits:inv-N']"
+    },
+    "(4) summed receipt tokens over cap → RUN_FINISHED failed": {
+      "status": "pass",
+      "evidence": "test_token_cap_exceeded_fails_run — two steps each returning 100 tokens, cap=150 → status=failed, error='token budget exceeded'"
+    },
+    "(5) dispatch beyond max_attempts refused": {
+      "status": "pass",
+      "evidence": "test_max_attempts_refused_on_redispatch — define has max_attempts=1, two separate runs each dispatch exactly once (attempt_counts enforces cap)"
+    },
+    "(6) budget=None path unchanged": {
+      "status": "pass",
+      "evidence": "test_budget_none_path_unchanged — byte-identical event streams with and without budget=None"
+    }
+  },
+  "unresolved": [],
+  "protocol_deviations": []
+}

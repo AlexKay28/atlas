@@ -47,6 +47,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from tikhon.budgets import BudgetGate, ExecutionBudget
 from tikhon.runtime.coordinator import SequentialCoordinator, _uses_kb_refs
 from tikhon.runtime.events import EventStore, EventType
 from tikhon.syntax import validate_program
@@ -66,6 +67,8 @@ def resume_run(
     memory: "KnowledgeBase | None" = None,
     protocols_dir: str | None = None,
     workspace_root: str | None = None,
+    budget: "ExecutionBudget | None" = None,
+    max_workers: int | None = None,
 ) -> dict[str, Any]:
     """Resume an interrupted run; same result shape as ``execute``.
 
@@ -77,6 +80,15 @@ def resume_run(
 
     ``workspace_root`` mirrors the coordinator's WorkspacePolicy hook so
     a resumed run dispatches effectful commands exactly like ``run``.
+
+    ``budget`` (issue #41) installs an :class:`ExecutionBudget` on the
+    resumed run.  The gate's wall-clock start is shifted backwards by the
+    pre-crash elapsed time (derived from the run's first event timestamp)
+    so the resumed run enforces the *remaining* global deadline.
+
+    ``max_workers`` (issue #41) selects the execution strategy, mirroring
+    ``execute``.  ``None`` defaults to 1 (sequential), matching the
+    historical resume behavior.
     """
     validate_program(
         program,
@@ -142,4 +154,31 @@ def resume_run(
         workspace_root=workspace_root,
         protocols_dir=protocols_dir,
     )
-    return coordinator._resume_existing_run(program, run_id)
+
+    # Issue #41: build a gate from the budget, shifting the wall-clock
+    # start backwards by the pre-crash elapsed time so the resumed run
+    # enforces the *remaining* global deadline.  The offset is derived
+    # from the run's first event timestamp (occurred_at) relative to now.
+    gate: BudgetGate | None = None
+    if budget is not None:
+        if not isinstance(budget, ExecutionBudget):
+            raise TypeError(
+                f"budget must be an ExecutionBudget or None,"
+                f" got {type(budget).__name__}"
+            )
+        elapsed_offset = 0.0
+        if budget.global_deadline_seconds is not None and events:
+            first_ts = events[0].occurred_at
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            elapsed_offset = (now - first_ts).total_seconds()
+            elapsed_offset = max(0.0, elapsed_offset)
+        gate = BudgetGate(budget, elapsed_offset=elapsed_offset)
+
+    workers = max_workers if max_workers is not None else 1
+    return coordinator._resume_existing_run(
+        program,
+        run_id,
+        gate=gate,
+        max_workers=workers,
+    )
