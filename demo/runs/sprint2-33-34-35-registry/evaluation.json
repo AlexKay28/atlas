@@ -1,0 +1,86 @@
+{
+  "task": "GitHub issues #33 + #34 + #35 (registry correctness bundle): hash full specs in registry_digest, fix prerelease ordering and minimum_tier enforcement, validate the bounded-type contract grammar and raise SchemaError",
+  "run_id": "sprint2-33-34-35-registry",
+  "seal": "4d9eb3ea0f9a18da42a9fb2e5f6adaaba1e6ab235c7111123ab2d8e0e2106701",
+  "terminal_status": "succeeded",
+  "steps_planned": 10,
+  "steps_executed": 10,
+  "acceptance": [
+    {
+      "criterion": "#33 (1): capability change → different digest",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_digest_changes_on_capability_change"
+    },
+    {
+      "criterion": "#33 (2): budget change → different digest",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_digest_changes_on_budget_change"
+    },
+    {
+      "criterion": "#33 (3): digest stays order-invariant",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_digest_invariant_to_registration_order"
+    },
+    {
+      "criterion": "#33 (4): doc count matches len(builtin_registry().names())",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_builtin_registry_has_23_commands; docs/design/01-reasoning-language-foundation.md:54 says '23 commands'; len(builtin_registry().names()) == 23"
+    },
+    {
+      "criterion": "#33: committed artifact with old digest reported, not broken",
+      "passed": true,
+      "evidence": "Old digest 9160b5ecc029cd02da9c109fe578c7e1ec1714c6b82267bc17157addb73381b7 embedded in demo/runs/issue-15-registry-digest/ (evaluation.json, WORKLOG.md, solution.md) — left unchanged as committed evidence; new builtin digest is c711361d0b75aa4a56fb60278ab38d0547bb61e1e28b931ffa0fba8f821e91b4"
+    },
+    {
+      "criterion": "#34 (1): alpha.10 resolves over alpha.2; release beats prerelease",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_prerelease_alpha10_sorts_after_alpha2, ::test_release_beats_prerelease, ::test_resolve_picks_alpha10_over_alpha2, ::test_resolve_release_beats_prerelease"
+    },
+    {
+      "criterion": "#34 (2): RoutingPolicy rejects sub-minimum permitted_tiers",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_routing_policy_rejects_permitted_tier_below_minimum; spec.py RoutingPolicy.__post_init__ raises ContractError for permitted_tiers below minimum_tier"
+    },
+    {
+      "criterion": "#34 (3): worker dispatch refuses a below-minimum model",
+      "passed": true,
+      "evidence": "tests/test_worker_adapter.py::test_worker_dispatch_refuses_below_minimum_tier_model; worker_adapter.py _resolve_model raises WorkerError when preferred_tier < minimum_tier"
+    },
+    {
+      "criterion": "#34: fix the three builtin profiles (fetch, prove, delegate)",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_builtin_fetch_permitted_tiers_all_above_minimum, ::test_builtin_prove_permitted_tiers_all_above_minimum, ::test_builtin_delegate_permitted_tiers_all_above_minimum; builtins.py: fetch permitted_tiers=(T1,T2,T3), prove permitted_tiers=(T2,T3), delegate permitted_tiers=(T2,T3); solve also fixed (same violation)"
+    },
+    {
+      "criterion": "#35 (1): unknown type suffix → SchemaError",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_unknown_type_suffix_raises_schema_error"
+    },
+    {
+      "criterion": "#35 (2): unbounded int parameter → SchemaError",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_unbounded_int_parameter_raises_schema_error"
+    },
+    {
+      "criterion": "#35 (3): all 23 builtins still register",
+      "passed": true,
+      "evidence": "tests/test_registry_correctness.py::test_all_23_builtins_register_with_type_validation; builtin_registry() has 23 commands"
+    },
+    {
+      "criterion": "Full pytest suite green",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q → 893 passed in 22.10s (864 baseline + 29 new)"
+    },
+    {
+      "criterion": "git status --porcelain shows only owned files",
+      "passed": true,
+      "evidence": "Modified: src/tahoe/registry/builtins.py, src/tahoe/registry/registry.py, src/tahoe/registry/spec.py, src/tahoe/worker_adapter.py, tests/test_registry.py, tests/test_worker_adapter.py; New: tests/test_registry_correctness.py, demo/runs/sprint2-33-34-35-registry/"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The sealed ATLAS plan from issue #33's comment was adapted: string literals mentioning src/atlas/ were updated to src/tahoe/ per the #53 TAHOE rebrand. Logic is identical to the sealed plan. This protocol note is recorded here as required by the STEP 0 instructions.",
+    "Fixed solve in addition to the three named builtins (fetch, prove, delegate) — solve had the same minimum_tier violation (min T1, permitted T0) and would fail to register with the new RoutingPolicy validation.",
+    "The old builtin registry digest (9160b5ecc...) is embedded in committed artifacts in demo/runs/issue-15-registry-digest/. Per the issue instruction 'report instead of breaking it', these files were left unchanged. The new builtin digest is c711361d..."
+  ]
+}

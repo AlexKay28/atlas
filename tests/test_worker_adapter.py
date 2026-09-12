@@ -124,6 +124,47 @@ def test_missing_model_everywhere_raises_worker_error():
         worker.execute("search", {"query": "q"})
 
 
+# ------------------------------------------ issue #34: minimum_tier enforcement
+
+
+def test_worker_dispatch_refuses_below_minimum_tier_model():
+    """Acceptance (3): worker dispatch refuses a below-minimum model.
+
+    A custom spec with minimum_tier T2 but preferred_tier T1 (which now
+    cannot be constructed through RoutingPolicy validation, but the
+    worker guard is a defensive runtime check) triggers WorkerError.
+    """
+    import dataclasses
+    from tahoe.registry import Registry, CommandSpec, Budget, EffectClass
+    from tahoe.registry import ExecutionMode, FailureKind, FailureSpec
+    from tahoe.registry import IdempotencyMode, RoutingPolicy, RoutingTier
+
+    base = builtin_registry().resolve("define")
+    # Bypass RoutingPolicy validation by patching the frozen spec's
+    # __dict__ directly (bypasses __post_init__).
+    custom_routing = object.__new__(RoutingPolicy)
+    object.__setattr__(custom_routing, "minimum_tier", RoutingTier.T2)
+    object.__setattr__(custom_routing, "permitted_tiers",
+                       (RoutingTier.T1, RoutingTier.T2, RoutingTier.T3))
+    object.__setattr__(custom_routing, "preferred_tier", RoutingTier.T1)
+    object.__setattr__(custom_routing, "validator_tier", RoutingTier.T2)
+    object.__setattr__(custom_routing, "confidence_policy", "none")
+    object.__setattr__(custom_routing, "escalation_on", ())
+    object.__setattr__(custom_routing, "fallback_chain", ())
+    custom_spec = dataclasses.replace(base, routing=custom_routing)
+    r = Registry()
+    r.register(custom_spec)
+    worker = ModelWorker(
+        registry=r,
+        transport=recording_transport(),
+        tier_models={"T1": "weak-model", "T2": "strong-model"},
+        default_model="fallback",
+    )
+    with pytest.raises(WorkerError, match="below.*minimum_tier"):
+        worker.execute("define", {"request": "x"})
+
+
+
 def test_commands_property_returns_registry_names():
     worker = ModelWorker(
         registry=builtin_registry(),
