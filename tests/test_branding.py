@@ -15,7 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_no_tikhon_references_in_live_code():
-    """No 'tikhon' (case-insensitive) in src/ tests/ README.md docs/ pyproject.toml .opencode/."""
+    """No pre-rebrand name (case-insensitive) in live code/docs.
+
+    This test file is excluded from the sweep because the search
+    pattern itself must appear here.
+    """
     scopes = [
         "src/",
         "tests/",
@@ -23,6 +27,7 @@ def test_no_tikhon_references_in_live_code():
         "docs/",
         "pyproject.toml",
         ".opencode/",
+        ":(exclude)tests/test_branding.py",
     ]
     result = subprocess.run(
         [
@@ -36,8 +41,8 @@ def test_no_tikhon_references_in_live_code():
     )
     # git grep returns 0 if matches found, 1 if no matches
     assert result.returncode == 1, (
-        f"Found 'tikhon' references in live code/docs:\n{result.stdout}"
+        f"Found pre-rebrand name references in live code/docs:\n{result.stdout}"
     )
     assert result.stdout == "", (
-        f"Unexpected 'tikhon' matches:\n{result.stdout}"
+        f"Unexpected matches:\n{result.stdout}"
     )
