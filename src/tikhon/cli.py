@@ -53,7 +53,11 @@ from tikhon.registry import builtin_registry
 from tikhon.resume import resume_run
 from tikhon.runtime import DeterministicWorker, EventStore, EventType, SequentialCoordinator
 from tikhon.syntax import ParseError, parse_program, seal_digest, validate_program
-from tikhon.worker_adapter import DEFAULT_TIMEOUT_SECONDS, ModelWorker
+from tikhon.worker_adapter import (
+    DEFAULT_TIMEOUT_SECONDS,
+    ModelWorker,
+    TransportResult,
+)
 
 
 def _load_source(path: str) -> str:
@@ -294,7 +298,7 @@ class _HybridModelWorker:
 def _make_http_transport(api_base: str, api_key: str) -> Any:
     """Minimal stdlib OpenAI-compatible chat-completions transport."""
 
-    def transport(model: str, prompt: str) -> str:
+    def transport(model: str, prompt: str) -> Any:
         url = api_base.rstrip("/") + "/chat/completions"
         payload = json.dumps(
             {
@@ -314,7 +318,24 @@ def _make_http_transport(api_base: str, api_key: str) -> Any:
         )
         with urllib.request.urlopen(request, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
             body = json.loads(response.read().decode("utf-8"))
-        return body["choices"][0]["message"]["content"]
+        # Some gateways wrap the OpenAI payload (e.g. {"key": ..., "response": {...}});
+        # unwrap a single level when the shape matches.
+        if not isinstance(body, dict) or "choices" not in body:
+            inner = body.get("response") if isinstance(body, dict) else None
+            if isinstance(inner, dict) and "choices" in inner:
+                body = inner
+        usage = body.get("usage") if isinstance(body, dict) else None
+        mapped = None
+        if isinstance(usage, dict):
+            tokens = usage.get("total_tokens")
+            if tokens is None:
+                prompt_tokens = usage.get("prompt_tokens")
+                completion_tokens = usage.get("completion_tokens")
+                if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
+                    tokens = prompt_tokens + completion_tokens
+            if isinstance(tokens, int):
+                mapped = {"tokens": tokens, "cost": None}
+        return TransportResult(body["choices"][0]["message"]["content"], mapped)
 
     return transport
 

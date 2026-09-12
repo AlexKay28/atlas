@@ -48,7 +48,7 @@ the next integration layer.
 | Subcommand | Required flags | Purpose |
 | --- | --- | --- |
 | `lint` | `program` | Parse and validate a `.think` program file |
-| `seal` | `program` | Print the sealed SHA-256 digest of a program |
+| `seal` | `program` | Print the sealed SHA-256 digest of a program; `--check --seal <digest>` verifies a file against its seal (exit 0 = match, 4 = drifted) |
 | `run` | `program`, `--db`, `--run-id`, `--seal` | Execute a sealed program; optional `--workspace`, `--worker` |
 | `resume` | `--db`, `--run-id`, `--program`, `--seal` | Resume an interrupted run after a crash; optional `--workspace`, `--worker` |
 | `status` | `--db`, `--run-id` | Print run status and progress bar |
@@ -61,6 +61,8 @@ the next integration layer.
 | `ready` | `--db`, `--run-id`, `--program`, `--seal` | Render and claim the next ready invocation; optional `--workspace`, `--claim-timeout` |
 | `claim` | `--db`, `--run-id`, `--program`, `--seal` | Like `ready` but records a claimant name; optional `--claimant`, `--workspace`, `--claim-timeout` |
 | `renew` | `--db`, `--run-id`, `--program`, `--seal`, `--invocation-id`, `--claim-token` | Extend an open claim's freshness by a heartbeat so long work is not re-issued; optional `--claim-timeout` |
+
+All commands print human-readable output by default; `status`, `audit`, `learn`, `bench` and `run` accept `--json` for machine-readable output (route `--out` confirmations to stderr). Exit codes: `0` ok, `1` usage/input error, `2` program execution failed, `3` audit violations found, `4` seal mismatch (argparse syntax errors exit `2`).
 
 See the [design doc](docs/design/01-reasoning-language-foundation.md) for the
 reasoning behind the frozen 23-command registry, the [CHANGELOG](CHANGELOG.md)
