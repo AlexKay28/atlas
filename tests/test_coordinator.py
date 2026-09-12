@@ -1302,7 +1302,11 @@ def make_protocol_worker(**overrides):
     return DeterministicWorker(handlers=handlers)
 
 
-def test_program_calling_protocol_executes_with_protocol_tasks(tmp_path):
+def test_call_creates_isolated_child_run_and_adopts_targets(tmp_path):
+    # Issue #20: a CALL no longer expands the protocol inline.  It spawns
+    # an isolated child run in the same EventStore; the parent's ledger
+    # holds one "CALL ..." task and the child's ledger the protocol's own
+    # tasks; parent state receives only the adopted CALL targets.
     protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
     program = parse_program(CALLER_TEST_PROGRAM)
     with EventStore(tmp_path / "events.db") as store:
@@ -1315,31 +1319,78 @@ def test_program_calling_protocol_executes_with_protocol_tasks(tmp_path):
         assert result["outputs"]["G.plan"] == {"echo": {"echo": "frame the kb issue"}}
         assert result["outputs"]["OUT.brief"].startswith("brief of")
 
-        state = store.project_state("run-call")
-        # Protocol RETURN values landed on the caller's CALL targets.
-        assert state["nodes"]["G.plan"]["value"] == {"echo": {"echo": "frame the kb issue"}}
-        assert state["nodes"]["V.analysis"]["value"]["schema"] == "frame_analysis"
-        # Protocol-internal state nodes exist (inline execution).
-        assert "E.context" in state["nodes"]
-        assert "ART.sources" in state["nodes"]
+        parent_state = store.project_state("run-call")
+        # Adopted CALL targets carry the protocol-produced values.
+        assert parent_state["nodes"]["G.plan"]["value"] == {"echo": {"echo": "frame the kb issue"}}
+        assert parent_state["nodes"]["V.analysis"]["value"]["schema"] == "frame_analysis"
+        # Child-internal state nodes never leak into the parent projection.
+        assert "E.context" not in parent_state["nodes"]
+        assert "ART.sources" not in parent_state["nodes"]
 
-        ledger = store.task_ledger("run-call")
-        texts = [task.text for task in ledger.tasks.values()]
-        assert texts == [
+        child_run_id = "run-call:inv-2"
+        child_state = store.project_state(child_run_id)
+        # The child's namespace holds its own steps' outputs plus the
+        # INPUT binding resolved from the explicit CALL argument.
+        assert child_state["nodes"]["G.plan"]["value"] == {"echo": {"echo": "frame the kb issue"}}
+        assert child_state["nodes"]["E.context"]["value"] == [
+            "hit:" + str({"echo": {"echo": "frame the kb issue"}}) + ":src/tikhon"
+        ]
+        assert child_state["metadata"]["child_of"] == "run-call"
+        assert child_state["metadata"]["call"] == "protocol.framing"
+
+        parent_ledger = store.task_ledger("run-call")
+        assert [task.text for task in parent_ledger.tasks.values()] == [
             "step.ask: DO define",
-            "protocol.framing: step.frame: DO define",
-            "protocol.framing: step.locate: DO search",
-            "protocol.framing: step.read: DO fetch",
-            "protocol.framing: step.analyze: DO extract",
+            "CALL protocol.framing",
             "step.wrap: DO summarize",
         ]
-        profile = ledger.profile()
-        assert profile["counts"]["total"] == 6
-        assert profile["counts"]["completed"] == 6
-        assert profile["percent_complete"] == 100.0
+        assert parent_ledger.profile()["counts"]["completed"] == 3
+        child_ledger = store.task_ledger(child_run_id)
+        assert [task.text for task in child_ledger.tasks.values()] == [
+            "step.frame: DO define",
+            "step.locate: DO search",
+            "step.read: DO fetch",
+            "step.analyze: DO extract",
+        ]
+        assert child_ledger.profile()["percent_complete"] == 100.0
 
 
-def test_protocol_invocation_ids_continue_parent_sequence(tmp_path):
+def test_child_run_started_marks_lineage_and_own_invocation_sequence(tmp_path):
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(program, run_id="run-call")
+
+        child_run_id = "run-call:inv-2"
+        started = next(
+            event
+            for event in store.events(child_run_id)
+            if event.event_type is EventType.RUN_STARTED
+        )
+        assert started.payload["child_of"] == "run-call"
+        assert started.payload["call"] == "protocol.framing"
+
+        # The child's invocation ids restart in its own namespace; the
+        # parent's ids cover its own plan (ask, CALL, wrap).
+        child_grouped = events_by_invocation(store.events(child_run_id))
+        assert sorted(child_grouped) == ["inv-1", "inv-2", "inv-3", "inv-4"]
+        parent_grouped = events_by_invocation(store.events("run-call"))
+        assert sorted(parent_grouped) == ["inv-1", "inv-2", "inv-3"]
+        call_ready = [
+            event
+            for event in store.events("run-call")
+            if event.event_type is EventType.INVOCATION_READY
+            and event.invocation_id == "inv-2"
+        ]
+        assert call_ready[0].instruction_id == "protocol.framing"
+        assert call_ready[0].payload["command"] == "CALL protocol.framing"
+
+
+def test_adopted_call_records_child_adopted_before_succeeded(tmp_path):
+    from tikhon.audit import audit_run
+
     protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
     program = parse_program(CALLER_TEST_PROGRAM)
     with EventStore(tmp_path / "events.db") as store:
@@ -1348,28 +1399,70 @@ def test_protocol_invocation_ids_continue_parent_sequence(tmp_path):
         ).execute(program, run_id="run-call")
 
         history = store.events("run-call")
-        grouped = events_by_invocation(history)
-        # One invocation per plan entry; ids continue across the protocol
-        # boundary instead of restarting a child namespace.
-        assert sorted(grouped, key=lambda name: int(name.split("-")[1])) == [
-            "inv-1", "inv-2", "inv-3", "inv-4", "inv-5", "inv-6",
+        adopted = [
+            event for event in history
+            if event.event_type is EventType.CHILD_ADOPTED
         ]
-        instructions = [
-            event.instruction_id
-            for event in history
-            if event.event_type is EventType.INVOCATION_READY
+        assert len(adopted) == 1
+        event = adopted[0]
+        assert event.payload["child_run_id"] == "run-call:inv-2"
+        assert event.payload["adopted"] == {"G.plan": "G.plan", "V.analysis": "V.analysis"}
+        assert event.payload["child_status"] == "succeeded"
+        assert event.invocation_id == "inv-2"
+        # The adoption precedes the CALL's SUCCEEDED delta in the parent log.
+        succeeded = next(
+            candidate
+            for candidate in history
+            if candidate.event_type is EventType.SUCCEEDED
+            and candidate.invocation_id == "inv-2"
+        )
+        assert event.seq < succeeded.seq
+
+        report = audit_run(store, "run-call")
+        assert report.ok, [finding.to_dict() for finding in report.findings]
+
+
+def test_repeated_calls_stay_isolated_and_map_returns_per_target(tmp_path):
+    # Two CALLs to the same protocol, each targeting different parent
+    # refs with identical child-local names: separate child runs, no
+    # leakage, per-target mapping.
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
+    program = parse_program("""\
+PROGRAM twice VERSION 1.0
+
+INPUT
+    G.request = "first"
+
+step.ask: DO define(request = G.request) -> G.probe
+CALL protocol.framing(request = G.probe, scope = "a") -> V.analysis
+CALL protocol.framing(request = G.request, scope = "b") -> E.context
+
+RETURN V.analysis, E.context
+""")
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(program, run_id="run-twice")
+
+        assert result["status"] == "succeeded"
+        # Per-target mapping: each child returned a distinct ref.
+        assert result["outputs"]["V.analysis"]["schema"] == "frame_analysis"
+        assert result["outputs"]["E.context"] == ["hit:" + str({"echo": "first"}) + ":b"]
+
+        first_state = store.project_state("run-twice:inv-2")
+        second_state = store.project_state("run-twice:inv-3")
+        # Isolated namespaces: identical child-local names never collide.
+        assert first_state["nodes"]["E.context"]["value"] == [
+            "hit:" + str({"echo": {"echo": "first"}}) + ":a"
         ]
-        assert instructions == [
-            "step.ask",
-            "step.frame",
-            "step.locate",
-            "step.read",
-            "step.analyze",
-            "step.wrap",
+        assert second_state["nodes"]["E.context"]["value"] == [
+            "hit:" + str({"echo": "first"}) + ":b"
         ]
-        for events in grouped.values():
-            assert tuple(event.event_type for event in events) == LIFECYCLE
-            assert all(event.task_id for event in events)
+        parent_state = store.project_state("run-twice")
+        assert parent_state["nodes"]["V.analysis"]["value"]["schema"] == "frame_analysis"
+        assert parent_state["nodes"]["E.context"]["value"] == [
+            "hit:" + str({"echo": "first"}) + ":b"
+        ]
 
 
 def test_protocol_call_events_replay_identically_after_reopen(tmp_path):
@@ -1381,22 +1474,26 @@ def test_protocol_call_events_replay_identically_after_reopen(tmp_path):
             store=store, worker=make_protocol_worker(), protocols_dir=protocols
         ).execute(program, run_id="run-call")
         assert result["status"] == "succeeded"
-        state_before = store.project_state("run-call")
-        ledger_before = store.task_ledger("run-call")
-        tasks_before = ledger_before.tasks
-        profile_before = ledger_before.profile()
+        parent_before = store.project_state("run-call")
+        child_before = store.project_state("run-call:inv-2")
+        parent_ledger_before = store.task_ledger("run-call")
+        child_ledger_before = store.task_ledger("run-call:inv-2")
+        parent_events_before = store.events("run-call")
+        child_events_before = store.events("run-call:inv-2")
 
     reopened = EventStore(db)
     try:
-        assert reopened.project_state("run-call") == state_before
-        ledger_after = reopened.task_ledger("run-call")
-        assert ledger_after.tasks == tasks_before
-        assert ledger_after.profile() == profile_before
+        assert reopened.project_state("run-call") == parent_before
+        assert reopened.project_state("run-call:inv-2") == child_before
+        assert reopened.task_ledger("run-call").tasks == parent_ledger_before.tasks
+        assert reopened.task_ledger("run-call:inv-2").tasks == child_ledger_before.tasks
+        assert reopened.events("run-call") == parent_events_before
+        assert reopened.events("run-call:inv-2") == child_events_before
     finally:
         reopened.close()
 
 
-def test_protocol_call_run_audits_clean(tmp_path):
+def test_protocol_call_runs_audit_clean_parent_and_child(tmp_path):
     from tikhon.audit import audit_run
 
     protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
@@ -1406,11 +1503,12 @@ def test_protocol_call_run_audits_clean(tmp_path):
             store=store, worker=make_protocol_worker(), protocols_dir=protocols
         ).execute(program, run_id="run-call")
 
-        report = audit_run(store, "run-call")
-        assert report.ok, [finding.to_dict() for finding in report.findings]
+        for run_id in ("run-call", "run-call:inv-2"):
+            report = audit_run(store, run_id)
+            assert report.ok, (run_id, [f.to_dict() for f in report.findings])
 
 
-def test_failing_protocol_step_fails_caller_atomically(tmp_path):
+def test_failing_child_fails_caller_atomically(tmp_path):
     protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
 
     def broken_extract(artifact, schema):
@@ -1427,17 +1525,30 @@ def test_failing_protocol_step_fails_caller_atomically(tmp_path):
         assert "protocol boom" in result["error"]
         assert result["outputs"] == {}
 
-        history = store.events("run-fail")
-        assert history[-1].event_type is EventType.RUN_FINISHED
-        assert history[-1].payload["status"] == "failed"
-        failed = [event for event in history if event.event_type is EventType.FAILED]
+        # The child run itself is terminal-failed in its own history.
+        child_history = store.events("run-fail:inv-2")
+        assert child_history[-1].event_type is EventType.RUN_FINISHED
+        assert child_history[-1].payload["status"] == "failed"
+
+        parent_history = store.events("run-fail")
+        assert parent_history[-1].event_type is EventType.RUN_FINISHED
+        assert parent_history[-1].payload["status"] == "failed"
+        failed = [e for e in parent_history if e.event_type is EventType.FAILED]
         assert len(failed) == 1
-        assert failed[0].instruction_id == "step.analyze"
-        assert failed[0].invocation_id == "inv-5"
+        assert failed[0].instruction_id == "protocol.framing"
+        assert failed[0].invocation_id == "inv-2"
+        # No adoption happened: no CHILD_ADOPTED, no CALL SUCCEEDED.
+        assert not any(
+            e.event_type is EventType.CHILD_ADOPTED for e in parent_history
+        )
+        assert not any(
+            e.event_type is EventType.SUCCEEDED and e.invocation_id == "inv-2"
+            for e in parent_history
+        )
 
         ledger = store.task_ledger("run-fail")
         profile = ledger.profile()
-        assert profile["counts"]["completed"] == 4
+        assert profile["counts"]["completed"] == 1
         assert profile["counts"]["cancelled"] == 2
         assert profile["counts"]["pending"] == 0
         assert profile["counts"]["in_progress"] == 0
@@ -1445,13 +1556,50 @@ def test_failing_protocol_step_fails_caller_atomically(tmp_path):
             task.text for task in ledger.tasks.values()
             if task.status is TaskStatus.CANCELLED
         }
-        # The failing protocol task and the unreached caller step cancel
-        # together through the standard atomic failure path.
-        assert "protocol.framing: step.analyze: DO extract" in cancelled_texts
+        assert "CALL protocol.framing" in cancelled_texts
         assert "step.wrap: DO summarize" in cancelled_texts
 
         state = store.project_state("run-fail")
         assert "OUT.brief" not in state["nodes"]
+        assert "G.plan" not in state["nodes"]
+        assert "V.analysis" not in state["nodes"]
+
+
+def test_child_stop_blocked_fails_caller_without_adoption(tmp_path):
+    # Any non-succeeded child terminal (here a conditional STOP blocked)
+    # fails the parent through the standard atomic path.
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL.replace(
+        "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis",
+        "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis\n"
+        "IF C.scope == \"nowhere\" STOP blocked(E.context)",
+    ))
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(program, run_id="run-not-blocked")
+
+        assert result["status"] == "succeeded"  # condition false: child succeeds
+
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL.replace(
+        "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis",
+        "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis\n"
+        "IF C.scope == \"src/tikhon\" STOP blocked(E.context)",
+    ))
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(program, run_id="run-blocked")
+
+        assert result["status"] == "failed"
+        assert "blocked" in result["error"]
+        child_history = store.events("run-blocked:inv-2")
+        assert child_history[-1].payload["status"] == "blocked"
+        assert not any(
+            e.event_type is EventType.CHILD_ADOPTED
+            for e in store.events("run-blocked")
+        )
 
 
 def test_missing_protocol_rejected_before_run_creation(tmp_path):
@@ -1469,6 +1617,8 @@ def test_missing_protocol_rejected_before_run_creation(tmp_path):
 
 
 def test_nested_protocol_call_executes(tmp_path):
+    # A child executes another child: parent -> child -> grandchild, all
+    # with deterministic run ids and surviving reopen/replay.
     protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL.replace(
         "step.read: DO fetch(resource_refs = E.context) -> ART.sources",
         "step.read: DO fetch(resource_refs = E.context) -> ART.sources\n"
@@ -1493,13 +1643,28 @@ RETURN E.deep1, E.deep2
         ).execute(program, run_id="run-nested")
 
         assert result["status"] == "succeeded"
-        texts = [
-            task.text for task in store.task_ledger("run-nested").tasks.values()
+        # Three runs in the tree: parent, child (framing), grandchild
+        # (inner) — deterministic ids chained through invocation ids.
+        grandchild_id = "run-nested:inv-2:inv-4"
+        grandchild_ledger = store.task_ledger(grandchild_id)
+        grandchild_texts = [
+            task.text for task in grandchild_ledger.tasks.values()
         ]
-        assert "protocol.inner: step.deep: DO define" in texts
-        assert "protocol.inner: step.deeper: DO extract" in texts
-        state = store.project_state("run-nested")
-        assert state["nodes"]["E.deep2"]["value"]["schema"] == "deep"
+        assert grandchild_texts == [
+            "step.deep: DO define",
+            "step.deeper: DO extract",
+        ]
+        grandchild_state = store.project_state(grandchild_id)
+        assert grandchild_state["nodes"]["E.deep2"]["value"]["schema"] == "deep"
+        assert grandchild_state["metadata"]["child_of"] == "run-nested:inv-2"
+        # The grandchild's internal nodes stay out of the parent and the
+        # child's projections; the child adopts only its own CALL targets.
+        child_state = store.project_state("run-nested:inv-2")
+        assert "E.deep1" in child_state["nodes"]  # adopted by the child's CALL
+        parent_state = store.project_state("run-nested")
+        assert "E.deep1" not in parent_state["nodes"]
+        assert "E.deep2" not in parent_state["nodes"]
+        assert parent_state["nodes"]["G.plan"]["value"] == {"echo": {"echo": "frame the kb issue"}}
 
 
 # -- revise/retire node deltas (issue #7) ---------------------------------
@@ -1674,26 +1839,75 @@ def test_revise_retire_run_replays_identically_and_audits_clean(tmp_path):
         reopened.close()
 
 
-def test_retire_within_protocol_expansion_reaches_caller_state(tmp_path):
-    # Protocol steps share the caller's run state, so a RETIRE inside the
-    # expansion removes the node from the one shared projection.
+def test_retire_inside_child_is_child_local_and_blocks_adoption(tmp_path):
+    # Issue #20 isolation: a RETIRE inside a protocol's child run removes
+    # the node from the CHILD's namespace only.  A RETURNed ref the child
+    # retired is no longer committed, so adopting it fails the parent
+    # through the standard atomic path instead of publishing a phantom.
     protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL.replace(
         "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis",
         "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis\n"
         "step.trim: DO summarize(source_refs = V.analysis, budget = 10) -> E.trim RETIRE E.context",
     ))
-    program = parse_program(CALLER_TEST_PROGRAM)
+    caller = parse_program("""\
+PROGRAM caller VERSION 1.0
+
+INPUT
+    G.request = "frame the kb issue"
+
+step.ask: DO define(request = G.request) -> G.probe
+CALL protocol.framing(request = G.probe, scope = "src/tikhon") -> E.context
+
+RETURN E.context
+""")
     with EventStore(tmp_path / "events.db") as store:
         result = SequentialCoordinator(
             store=store, worker=make_protocol_worker(), protocols_dir=protocols
-        ).execute(program, run_id="run-protocol-retire")
+        ).execute(caller, run_id="run-protocol-retire")
+
+        # The caller adopts E.context, which the child retired.
+        assert result["status"] == "failed"
+        assert "did not commit RETURN reference E.context" in result["error"]
+        child_state = store.project_state("run-protocol-retire:inv-2")
+        # The retirement is visible in the child's own projection...
+        assert "E.context" not in child_state["nodes"]
+        assert child_state["nodes"]["E.trim"]["value"].startswith("brief of")
+        parent_state = store.project_state("run-protocol-retire")
+        # ...but nothing was published to the caller.
+        assert "E.context" not in parent_state["nodes"]
+        assert "E.trim" not in parent_state["nodes"]
+
+    # A protocol that retires a ref it does NOT return keeps succeeding;
+    # the caller simply never sees the retired child-internal node.
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL.replace(
+        "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis",
+        "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis\n"
+        "step.trim: DO summarize(source_refs = V.analysis, budget = 10) -> E.trim RETIRE E.context",
+    ).replace(
+        "RETURN G.plan, E.context, ART.sources, V.analysis",
+        "RETURN G.plan, ART.sources, V.analysis",
+    ))
+    caller = parse_program("""\
+PROGRAM caller VERSION 1.0
+
+INPUT
+    G.request = "frame the kb issue"
+
+step.ask: DO define(request = G.request) -> G.probe
+CALL protocol.framing(request = G.probe, scope = "src/tikhon") -> G.plan, V.analysis
+
+RETURN G.plan, V.analysis
+""")
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(caller, run_id="run-retire-ok")
 
         assert result["status"] == "succeeded"
-        state = store.project_state("run-protocol-retire")
-        # The protocol's own step retired its own earlier node.
-        assert "E.context" not in state["nodes"]
-        assert "ART.sources" in state["nodes"]
-        assert state["nodes"]["E.trim"]["value"].startswith("brief of")
+        child_state = store.project_state("run-retire-ok:inv-2")
+        assert "E.context" not in child_state["nodes"]
+        parent_state = store.project_state("run-retire-ok")
+        assert parent_state["nodes"]["V.analysis"]["value"]["schema"] == "frame_analysis"
 
 
 # --------------------------------------------------------------------------

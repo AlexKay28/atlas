@@ -9,13 +9,14 @@ W0a-W12) that is correct-by-construction with the current event schema:
   This covers W4, W10, W11 and W12 — no resume is possible or needed.
 - Otherwise the first plan entry without a terminal SUCCEEDED event is
   re-executed through the coordinator's own machinery
-  (``SequentialCoordinator._drive_plan``).  Committed lifecycle events
-  (task_started / INVOCATION_READY / INVOCATION_DISPATCHED) are never
-  re-emitted, but the worker call IS re-executed: dispatch never implies
-  success (at-least-once for the worker call; the ``run_id:invocation_id``
-  idempotency key carried by INVOCATION_DISPATCHED payloads since wave 4
-  is the dedup contract for effectful workers).  RESULT_RECEIVED,
-  VALIDATION_PASSED and the atomic SUCCEEDED batch are appended fresh.
+  (:meth:`SequentialCoordinator._resume_existing_run`).  Committed
+  lifecycle events (task_started / INVOCATION_READY /
+  INVOCATION_DISPATCHED) are never re-emitted, but the worker call IS
+  re-executed: dispatch never implies success (at-least-once for the
+  worker call; the ``run_id:invocation_id`` idempotency key carried by
+  INVOCATION_DISPATCHED payloads since wave 4 is the dedup contract for
+  effectful workers).  RESULT_RECEIVED, VALIDATION_PASSED and the atomic
+  SUCCEEDED batch are appended fresh.
 - Tasks missing because the crash predated the task-creation batch (W0a)
   are created first with the same text/mapping rule as a normal start.
 - Tasks for already-completed steps are COMPLETED; the resumed step's
@@ -25,6 +26,16 @@ W0a-W12) that is correct-by-construction with the current event schema:
 - Append-only: resume appends new events with the continuing gapless
   seq the EventStore guarantees, and a second SUCCEEDED terminal for the
   same invocation is impossible by the store's duplicate guard.
+
+Child runs (issue #20): a parent crash during a CALL resumes through the
+CALL entry itself.  ``_execute_call`` finds the child run under the
+deterministic id ``"<parent_run_id>:<invocation_id>"`` and either adopts
+an already-terminal child without re-executing it (crash after child
+completion, before parent adoption) or re-drives a non-terminal child
+through the same resume core (at-least-once; the child's own
+idempotency keys cover its effectful steps).  Adoption commits in the
+same atomic batch as the CALL's SUCCEEDED delta, so crashes before/after
+adoption never duplicate output commits.
 
 Deferred windows (see solution.md): W5 result adoption without a worker
 re-call (the resume path re-executes instead — at-least-once), and the
@@ -37,8 +48,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from tikhon.runtime.coordinator import SequentialCoordinator, _uses_kb_refs
-from tikhon.runtime.events import EventStore, EventType, _Record
-from tikhon.state import StateDelta
+from tikhon.runtime.events import EventStore, EventType
 from tikhon.syntax import validate_program
 
 if TYPE_CHECKING:
@@ -60,10 +70,10 @@ def resume_run(
     """Resume an interrupted run; same result shape as ``execute``.
 
     Loads the run's events; returns the recorded terminal status when a
-    RUN_FINISHED exists, otherwise rebuilds run state, ensures the plan's
-    tasks exist, and drives the remaining steps through a
-    :class:`SequentialCoordinator` with the same ledger/event invariants
-    as a fresh start.
+    RUN_FINISHED exists, otherwise verifies the run's identity and hands
+    the remaining plan to the coordinator's
+    :meth:`SequentialCoordinator._resume_existing_run` with the same
+    ledger/event invariants as a fresh start.
 
     ``workspace_root`` mirrors the coordinator's WorkspacePolicy hook so
     a resumed run dispatches effectful commands exactly like ``run``.
@@ -125,29 +135,6 @@ def resume_run(
             result["error"] = payload["error"]
         return result
 
-    # -- rebuild the run-state values mapping --------------------------
-    # INPUT declarations seed the mapping exactly like a fresh start;
-    # committed SUCCEEDED deltas then replay in seq order (add/revise
-    # write, retire pops) so the reconstruction matches the values the
-    # coordinator held at the crash point — including declarations no
-    # step ever targeted and refs retired by a REVISE/RETIRE correction.
-    values: dict[str, Any] = {}
-    for decl in program.declarations:
-        values[decl.ref] = decl.value
-    for event in events:
-        if event.event_type is not EventType.SUCCEEDED:
-            continue
-        payload = event.payload
-        if not isinstance(payload, dict) or "delta" not in payload:
-            continue
-        delta = StateDelta.from_dict(payload["delta"])
-        for node in delta.add_nodes:
-            values[node["id"]] = node["value"]
-        for node in delta.revise_nodes:
-            values[node["id"]] = node["value"]
-        for ref in delta.retire_nodes:
-            values.pop(ref, None)
-
     coordinator = SequentialCoordinator(
         store,
         worker,
@@ -155,86 +142,4 @@ def resume_run(
         workspace_root=workspace_root,
         protocols_dir=protocols_dir,
     )
-    plan = coordinator._build_plan(program)
-
-    # -- find the first non-terminal step ------------------------------
-    # Invocation ids are positional (inv-1..inv-N in plan order), so a
-    # step is terminal exactly when its invocation id carries a
-    # SUCCEEDED event.  Dispatch alone never implies success.
-    succeeded = {
-        event.invocation_id
-        for event in events
-        if event.event_type is EventType.SUCCEEDED and event.invocation_id
-    }
-    start_idx = len(plan)
-    for idx in range(len(plan)):
-        if f"inv-{idx + 1}" not in succeeded:
-            start_idx = idx
-            break
-    expected_terminal = {f"inv-{i + 1}" for i in range(start_idx)}
-    if succeeded != expected_terminal:
-        raise ValueError(
-            f"run {run_id!r} has a non-prefix set of SUCCEEDED"
-            f" invocations {sorted(succeeded)}; impossible for the"
-            " sequential coordinator"
-        )
-
-    # -- ensure tasks exist (W0a: crash before the creation batch) -----
-    ledger = store.task_ledger(run_id)
-    task_ids = list(ledger.tasks)
-    if len(task_ids) > len(plan):
-        raise ValueError(
-            f"run {run_id!r} has {len(task_ids)} tasks but the program"
-            f" plans {len(plan)}; refusing to resume a mismatched program"
-        )
-    for idx, task_id in enumerate(task_ids):
-        expected_text = coordinator._task_text(plan[idx])
-        if ledger.tasks[task_id].text != expected_text:
-            raise ValueError(
-                f"task {task_id!r} ({ledger.tasks[task_id].text!r}) does"
-                f" not match plan step {idx} ({expected_text!r});"
-                " refusing to resume with a mismatched program"
-            )
-    if len(task_ids) < len(plan):
-        create_records: list[_Record] = []
-        create_ledger = store.task_ledger(run_id)
-        for idx in range(len(task_ids), len(plan)):
-            entry = plan[idx]
-            task = create_ledger.create_task(
-                text=coordinator._task_text(entry),
-                creator="coordinator",
-            )
-            create_records.append(_Record(
-                event_type=EventType.TASK_UPDATED,
-                task_id=task.id,
-                payload={
-                    "kind": "task_created", "id": task.id, "text": task.text,
-                    "priority": task.priority, "parent": task.parent,
-                    "dependencies": task.dependencies,
-                    "creator": task.creator,
-                },
-                store=store,
-            ))
-        store.append_batch(run_id, create_records)
-        task_ids = list(store.task_ledger(run_id).tasks)
-    statement_to_task = {idx: task_ids[idx] for idx in range(len(plan))}
-
-    # -- replay protocol INPUT bindings of already-committed entries ---
-    # Protocol CALL expansions bind their INPUT declarations into the
-    # shared values mapping when the expansion's first entry executes;
-    # those bindings are not part of any state delta, so entries after a
-    # mid-expansion crash point need them re-derived to resolve args.
-    for idx in range(start_idx):
-        for protocol_name, call_args, declarations in plan[idx].binds:
-            coordinator._bind_protocol_inputs(
-                protocol_name, call_args, declarations, values
-            )
-
-    return coordinator._drive_plan(
-        program,
-        run_id,
-        plan,
-        values,
-        statement_to_task,
-        start_idx=start_idx,
-    )
+    return coordinator._resume_existing_run(program, run_id)

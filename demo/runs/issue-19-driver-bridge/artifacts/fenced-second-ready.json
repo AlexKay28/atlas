@@ -1,0 +1,15 @@
+{
+  "claim": {
+    "claim_attempt": 1,
+    "claim_seq": 10,
+    "claim_token": "da0b8baf8c6e490fbd1fcc6171216279",
+    "claimant": "opencode-agent",
+    "claimed_at": "2026-09-12T16:50:02.206709+00:00",
+    "envelope_digest": "aadc2e712eb00beefb75e37ddaf8189579104314e738366637e6c93e8052ea80",
+    "invocation_id": "inv-1"
+  },
+  "invocation_id": "inv-1",
+  "ready": false,
+  "reason": "invocation 'inv-1' is claimed by another driver and the claim is fresh; nothing handed out",
+  "run_id": "issue-19-driver-bridge"
+}

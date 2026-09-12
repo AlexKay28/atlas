@@ -1,0 +1,66 @@
+{
+  "claim": {
+    "claim_attempt": 1,
+    "claim_seq": 19,
+    "claim_token": "a85efbe6163542359c5825cd37fae290",
+    "claimant": null,
+    "claimed_at": "2026-09-12T16:50:02.663756+00:00",
+    "envelope_digest": "4a67055486aeac1af8c80ecbf34495def8e455cbb4bae36ebb305efded74e9fc",
+    "invocation_id": "inv-2"
+  },
+  "envelope": {
+    "arguments": {
+      "query": {
+        "plan": "seal program; implement ClaimBridge ready/claim/submit with fencing tokens on top of the Wave 8 driver; test; verify"
+      },
+      "scope": "src/tikhon/bridge.py, src/tikhon/cli.py, src/tikhon/runtime/events.py, tests/test_bridge.py"
+    },
+    "attempt": 1,
+    "command": "search",
+    "command_version": "1.0.0",
+    "contract": {
+      "budget": {
+        "max_attempts": 3,
+        "max_cost": 0.05,
+        "max_output_bytes": 262144,
+        "max_seconds": 30.0,
+        "max_tokens": 4000
+      },
+      "capabilities": [
+        "network.search"
+      ],
+      "done_condition": "query_scope_source_and_ranking_evidence_recorded",
+      "effect_class": "read_only",
+      "execution": "immediate",
+      "inputs": [
+        "query:text",
+        "scope:descriptor"
+      ],
+      "outputs": [
+        "candidates:ranked_refs",
+        "ranking_evidence:artifact"
+      ],
+      "purpose": "Find ranked candidates matching a query within a bounded scope"
+    },
+    "deadline_seconds": 30.0,
+    "done": null,
+    "idempotency_key": "issue-19-driver-bridge:inv-2",
+    "input_digest": "7052fa767e4dfe32d07e48b4f03358735e7748a0753954b198c4b8c5d1b14358",
+    "invocation_id": "inv-2",
+    "program": {
+      "name": "issue_19_driver_bridge",
+      "version": "1.0"
+    },
+    "run_id": "issue-19-driver-bridge",
+    "schema_version": "1",
+    "seal_digest": "28d2f9c6bf5bc049239e2d45bff90de14144da0a1467aa8cc701019d0f0773da",
+    "targets": [
+      "E.patterns"
+    ],
+    "task_id": "task-2",
+    "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-19-driver-bridge"
+  },
+  "invocation_id": "inv-2",
+  "ready": true,
+  "run_id": "issue-19-driver-bridge"
+}

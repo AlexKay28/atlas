@@ -1,0 +1,74 @@
+{
+  "task": "GitHub issue #19 (epic #27): extend the Wave 8 sequential external-driver round trip into an agent-executable bridge — a ready/claim/submit lifecycle (ClaimLedger-style claim semantics on top of the event store, new EventType INVOCATION_CLAIMED) so an external agent can execute Tikhon invocations without holding the event store: ready renders the next TaskEnvelope and records a fencing claim, fresh claims fence a second driver, stale claims are re-issued with attempt+1 and the old token rejects, submit validates the claim token then commits through the unchanged Wave 8 coordinator machinery",
+  "run_id": "issue-19-driver-bridge",
+  "seal": "28d2f9c6bf5bc049239e2d45bff90de14144da0a1467aa8cc701019d0f0773da",
+  "terminal_status": "succeeded",
+  "steps_planned": 6,
+  "steps_executed": 6,
+  "acceptance": [
+    {
+      "criterion": "tikhon ready --db PATH --run-id ID prints the next ready invocation as a TaskEnvelope JSON (superset/reuse of next) and marks it CLAIMED via a new EventType INVOCATION_CLAIMED (claim token uuid4 hex, claimed_at UTC, envelope digest); a claimed-but-unsubmitted invocation is NOT handed out again by a subsequent ready while the claim is fresh",
+      "passed": true,
+      "evidence": "src/tikhon/bridge.py ClaimBridge.ready renders via ExternalDriver.next_envelope (Wave 8 reuse) then appends INVOCATION_CLAIMED (EventType added additively in src/tikhon/runtime/events.py); fresh-claim handouts return {\"ready\": false, \"claim\": ...} with nothing appended. tests/test_bridge.py::test_ready_records_claim_event_with_token_digest_and_attempt (token/digest/claimant/attempt on the event), test_fresh_claim_is_not_handed_out_twice (ready=false, same token, zero new events) and the CLI demo artifact fenced-second-ready.json prove it."
+    },
+    {
+      "criterion": "tikhon claim records the claimant name; same semantics as ready otherwise",
+      "passed": true,
+      "evidence": "cli.py claim subcommand = ready + --claimant; ClaimBridge.ready(claimant=...) writes claimant into the INVOCATION_CLAIMED payload (null for anonymous ready). tests: test_anonymous_ready_records_null_claimant, test_cli_claim_records_claimant_and_double_claim_waits (claim --claimant worker-2 lands on the event; a second claim while fresh is refused)."
+    },
+    {
+      "criterion": "tikhon submit --claim-token validates the claim token matches the open claim, then behaves like Wave 8's submit (RESULT_RECEIVED -> VALIDATION/SUCCEEDED or FAILED batch); stale/unknown token rejected with a clear error and nothing appended",
+      "passed": true,
+      "evidence": "ClaimBridge.submit checks open-claim existence, token equality and freshness BEFORE delegating to the unchanged ExternalDriver.submit_result; every rejection path raises before any append. tests: test_claim_submit_round_trip_drives_two_step_program (full coordinator commit path), test_wrong_token_rejected_and_nothing_appended, test_submit_without_open_claim_rejected, test_empty_claim_token_rejected, test_expired_claim_rejected_at_submit_with_nothing_appended, test_cli_submit_wrong_token_rejected_without_appending, plus demo artifact wrong-token-error.txt."
+    },
+    {
+      "criterion": "Stale claims: a claim older than --claim-timeout (default 900) is dead; ready re-issues it (new claim token, attempt+1) and the old token then rejects; the attempt counter persists in the envelope/claim events",
+      "passed": true,
+      "evidence": "On re-issue ClaimBridge._issue_claim appends a fresh INVOCATION_DISPATCHED (same binding) so the re-rendered envelope carries attempt+1, then INVOCATION_CLAIMED with a new token and claim_attempt+1 (persisted in both the event payload/attempt column and the handed-out envelope). tests/test_bridge.py::test_stale_claim_is_reissued_with_new_token_and_attempt proves claim_attempt=2, envelope attempt=2, two DISPATCHED events, old token rejected (claim token mismatch) AND old echoed attempt rejected (Wave 8 stale attempt check), with nothing appended by either rejection."
+    },
+    {
+      "criterion": "Terminal runs: ready/claim prints the terminal status and exits 0 with {\"terminal\": true, \"status\": ...}",
+      "passed": true,
+      "evidence": "ClaimBridge.ready checks RUN_FINISHED before any bookkeeping; CLI prints the JSON and exits 0. tests: test_terminal_run_reports_terminal_and_accepts_nothing (module) and the CLI round-trip test's final ready; the demo session's terminal.json records {\"run_id\": \"issue-19-driver-bridge\", \"status\": \"succeeded\", \"terminal\": true} from the real CLI."
+    },
+    {
+      "criterion": "All invariants kept: gapless seq, atomic batches, no false completion; the coordinator-driven path keeps working unchanged — claims are an additive overlay the coordinator ignores (claimed invocation on resume is treated as non-terminal and re-executed)",
+      "passed": true,
+      "evidence": "The bridge only appends INVOCATION_CLAIMED (plus a re-issue DISPATCHED) through EventStore.append/append_batch and commits results via ExternalDriver.submit_result unchanged; the token-less submit path is byte-identical Wave 8 behavior. tests: test_claim_submit_round_trip_drives_two_step_program and the CLI round trip assert audit_run clean + completed ledger + correct projected state; test_resume_reexecutes_claimed_invocation proves resume treats a claimed-but-unsubmitted invocation as non-terminal and re-executes it to a succeeded run — so the resume guard option was NOT needed and resume.py was not modified."
+    },
+    {
+      "criterion": "An external fake agent completes a sealed program without deterministic handlers performing its reasoning steps; a sequential round trip works before concurrency",
+      "passed": true,
+      "evidence": "tests/test_bridge.py::test_claim_submit_round_trip_drives_two_step_program drives a 2-step program to terminal succeeded through ClaimBridge with only fabricated ResultEnvelopes (no worker call in-process); the sealed 6-step demo run was driven end-to-end via the CLI only (artifacts/external_driver_session.py): claim/ready -> result file -> submit --claim-token x6, terminal succeeded, tikhon audit OK, tikhon status 100% completed 6/6."
+    },
+    {
+      "criterion": "Two competing drivers, expired claims, duplicate submits, and crashes around claim/submit boundaries are covered",
+      "passed": true,
+      "evidence": "Competing drivers: test_fresh_claim_is_not_handed_out_twice + test_cli_claim_records_claimant_and_double_claim_waits (second driver gets ready=false with the holder's token, no envelope). Expired claims: test_expired_claim_rejected_at_submit_with_nothing_appended + the re-issue test. Duplicate/conflicting submits: Wave 8's duplicate guard still fires after claims (submit path unchanged), wrong-token and stale-attempt rejections proven with event-count asserts. Crash boundary: a claim recorded but never submitted leaves the run resumable (test_resume_reexecutes_claimed_invocation) and the invocation re-issuable after timeout."
+    },
+    {
+      "criterion": "Results and event projection match the internal-driver path for equivalent inputs",
+      "passed": true,
+      "evidence": "tests/test_bridge.py::test_bridge_projection_matches_coordinator_path runs the same 2-step program through SequentialCoordinator and through ClaimBridge with identical payloads and asserts identical project_state nodes and state_version; the commit events themselves are byte-shaped by the unchanged ExternalDriver.submit_result (whose event-type sequence equality with the coordinator was already proven by tests/test_envelope.py)."
+    },
+    {
+      "criterion": "Full pytest suite passes at the end; touch ONLY the allowed paths; no commits",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: baseline 571 passed before edits; final run 589 passed (571 + 15 here + 3 from the concurrent #20 agent's landed work), zero failures. This run's diff is confined to src/tikhon/bridge.py (new), src/tikhon/cli.py, src/tikhon/runtime/events.py (one additive enum member), tests/test_bridge.py (new), demo/runs/issue-19-driver-bridge/ (new); coordinator.py/worker_adapter.py/envelope.py/audit.py/syntax//registry//protocols//docs/ and other demo runs untouched; the concurrent modifications to runtime/coordinator.py, resume.py and tests/test_coordinator.py visible in git status belong to the #20 agent, not this run. No git commits made."
+    },
+    {
+      "criterion": "Tikhon protocol honored: program.think sealed before source edits and never modified afterwards; WORKLOG.md maintained per step; solution.md + evaluation.json written",
+      "passed": true,
+      "evidence": "program.think was linted 'valid' and sealed to seal.txt (28d2f9c6bf5bc049239e2d45bff90de14144da0a1467aa8cc701019d0f0773da) before the first source edit; recomputing the seal after all edits reproduces it byte-for-byte; WORKLOG.md carries frame/locate/design/patch/check/verify with Status/Inputs/Actions/Outputs/Evidence; solution.md and evaluation.json are in demo/runs/issue-19-driver-bridge/."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The issue body's fuller surface (heartbeat/renew of a live claim, stdin input for large envelopes, dedicated documented exit codes beyond the CLI's existing 0/1 convention) was descoped to the orchestrator's required ready/claim/submit lifecycle: renewal is covered by the expiry + re-issue semantics instead (an expired claim gets a fresh token and attempt; there is no extend-in-place), and large envelopes already travel by --result-file. Existing CLI conventions (structured JSON on stdout, 'error: ...' + exit 1 on stderr) are reused rather than a new exit-code table.",
+    "Re-issue fencing is implemented by appending a fresh INVOCATION_DISPATCHED (same binding) before the new INVOCATION_CLAIMED so the envelope attempt increments and the old envelope's echoed attempt rejects through Wave 8's attempt == len(dispatched) check — rather than bumping only a claim-local counter. This keeps one attempt notion across envelope and claim events, at the cost of a second DISPATCHED event per re-issue (intentional: at-least-once dispatch).",
+    "submit with an expired-but-not-yet-re-issued token is rejected (fencing): a dead claim cannot submit even if no one else took the work; the invocation becomes available again at the next ready. A submit WITHOUT --claim-token keeps the exact Wave 8 behavior, so a claim-less/coordinator-driven run is unaffected; on a claimed run this legacy path is still guarded by the Wave 8 attempt/duplicate checks.",
+    "The external driver (hence the bridge) supports plain sequential DO steps only; IF conditionals and CALL expansions are rejected up front with a clear DriverError, inherited unchanged from the Wave 8 ExternalDriver.",
+    "The task brief said 'all 22 registered commands'; the builtin registry does expose 22 commands (via PYTHONPATH=src; a stale non-editable site-packages copy exposes only 17, the known issue-18 workaround). program.think uses six of the 22 (define, search, extract, summarize, check, verify); every command in it is registered and lint reports valid.",
+    "A first demo session attempt hit my own session-script sequencing bug (fencing demo placed after the claim was already settled); the run.db was reset and the session re-run clean from scratch — the committed artifacts are all from the single clean pass."
+  ]
+}

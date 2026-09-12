@@ -1,0 +1,40 @@
+# Tikhon run for GitHub issue #20: true isolated CALL children and parent
+# output adoption (epic #27, step 2).
+#
+# Sealed BEFORE any source edit. Uses only the grammar that exists at seal
+# time: plain DO steps, one standalone CALL protocol.framing(...) line with
+# the current (non-AS) CALL syntax. The issue's proposed `CALL ... AS
+# child(...)` form is not implemented and deliberately absent here.
+
+PROGRAM issue_20_child_runs VERSION 1.0
+
+INPUT
+    G.goal = "Upgrade CALL execution from inline expansion to true isolated child runs: each CALL creates a child run in the same EventStore with its own state namespace seeded only from explicitly passed arguments, the parent adopts child RETURN values through an explicit CHILD_ADOPTED event, failed children fail the parent atomically without partial outputs, and a parent crash during a CALL resumes by adopting a terminal child or re-driving a non-terminal one"
+    C.scope = "src/tikhon/runtime/coordinator.py, src/tikhon/runtime/events.py, src/tikhon/resume.py, tests/test_child_runs.py, demo/runs/issue-20-child-runs/"
+    C.done = "CALL executes an isolated child run with run_id parent:invocation and child_of lineage in RUN_STARTED; parent state contains only adopted CALL targets and never child-internal nodes; CHILD_ADOPTED records the adoption before the CALL's SUCCEEDED delta in the same atomic batch; a failed or blocked child fails the parent through the standard atomic failure path with no adoption; parent and child both replay identically after reopen and audit clean; resume_run adopts an already-terminal child without re-executing it and re-drives a non-terminal one; nested protocol calls stay bounded at depth 8; full pytest suite passes"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "child_run_isolation") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "isolated_child_runs") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.goal, evidence = E.findings) -> H.theses
+step.calculate: DO calculate(expression = "max_call_depth", values = {"depth": 8}) -> F.metrics
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue20.child_runs", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue20.child_runs") -> K.recalled
+step.solve: DO solve(problem = G.goal, domain = "runtime_isolation") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "child_run_semantics") -> V.review
+step.design: DO summarize(source_refs = V.review, budget = 6000) -> P.design
+step.patch: DO edit(path = "src/tikhon/runtime/coordinator.py", content = P.design) -> ART.patch
+step.test: DO test(path = "tests/test_child_runs.py") -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = V.verdict, format = "markdown") -> ART.report
+CALL protocol.framing(request = G.goal, scope = C.scope) -> E.context, V.analysis
+step.verify: DO verify(goal = G.goal, evidence = V.tests) -> V.result
+
+RETURN P.design, V.tests, V.verdict, V.result, E.context, V.analysis

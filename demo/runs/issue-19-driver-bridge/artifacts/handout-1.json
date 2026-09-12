@@ -1,0 +1,62 @@
+{
+  "claim": {
+    "claim_attempt": 1,
+    "claim_seq": 10,
+    "claim_token": "da0b8baf8c6e490fbd1fcc6171216279",
+    "claimant": "opencode-agent",
+    "claimed_at": "2026-09-12T16:50:02.206709+00:00",
+    "envelope_digest": "aadc2e712eb00beefb75e37ddaf8189579104314e738366637e6c93e8052ea80",
+    "invocation_id": "inv-1"
+  },
+  "envelope": {
+    "arguments": {
+      "request": "Build the agent-executable claim bridge so an external driver can ready, claim and submit Tikhon invocations with fencing tokens without holding the event store"
+    },
+    "attempt": 1,
+    "command": "define",
+    "command_version": "1.0.0",
+    "contract": {
+      "budget": {
+        "max_attempts": 1,
+        "max_cost": 0.0,
+        "max_output_bytes": 65536,
+        "max_seconds": 15.0,
+        "max_tokens": 2000
+      },
+      "capabilities": [
+        "typed_node_authoring"
+      ],
+      "done_condition": "all_ambiguities_recorded_as_Q_or_U_and_no_hidden_assumptions_remain",
+      "effect_class": "pure",
+      "execution": "immediate",
+      "inputs": [
+        "request:text"
+      ],
+      "outputs": [
+        "typed_nodes:G/C/P/K/OUT",
+        "ambiguities:Q/U"
+      ],
+      "purpose": "Frame a request into typed goal, context, plan, knowledge, and output nodes"
+    },
+    "deadline_seconds": 15.0,
+    "done": null,
+    "idempotency_key": "issue-19-driver-bridge:inv-1",
+    "input_digest": "b876b268e2ec4552bc766362b5649bdc843e5fc6cf79d27fdc640d97f3d66bd1",
+    "invocation_id": "inv-1",
+    "program": {
+      "name": "issue_19_driver_bridge",
+      "version": "1.0"
+    },
+    "run_id": "issue-19-driver-bridge",
+    "schema_version": "1",
+    "seal_digest": "28d2f9c6bf5bc049239e2d45bff90de14144da0a1467aa8cc701019d0f0773da",
+    "targets": [
+      "G.plan"
+    ],
+    "task_id": "task-1",
+    "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-19-driver-bridge"
+  },
+  "invocation_id": "inv-1",
+  "ready": true,
+  "run_id": "issue-19-driver-bridge"
+}

@@ -1,0 +1,100 @@
+{
+  "task": "GitHub issue #20: true isolated CALL children and parent output adoption (epic #27 step 2)",
+  "run_id": "issue-20-child-runs",
+  "seal": "1b71e0f8b79375f8fd47d99e499724b6b35e72a72b87111531da902fe945c3da",
+  "terminal_status": "succeeded",
+  "steps_planned": 23,
+  "steps_executed": 23,
+  "acceptance": [
+    {
+      "criterion": "Sealed program created before any source edit (Tikhon protocol steps 1-2)",
+      "passed": true,
+      "evidence": "demo/runs/issue-20-child-runs/program.think (all 22 registered commands plus a standalone CALL protocol.framing line in current syntax) linted valid and sealed to 1b71e0f8... at 2026-09-12T16:48Z, before the first source edit; the final code re-seals to the identical digest recorded in seal.txt"
+    },
+    {
+      "criterion": "CALL executes an isolated child run: run_id parent:invocation, child_of/call lineage, own ledger, own invocation sequence",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_child_run_started_marks_child_of_and_call (RUN_STARTED payload and run metadata), ::test_child_events_and_ledger_are_outside_the_parent_namespace (parent texts [step.ask, CALL protocol.leaf, step.wrap] vs child texts [step.frame, step.locate]); tests/test_coordinator.py::test_child_run_started_marks_lineage_and_own_invocation_sequence"
+    },
+    {
+      "criterion": "Parent values invisible to the child except through explicitly passed CALL arguments",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_child_sees_only_passed_arguments_not_parent_values: the child binds the passed value (not the protocol's declared literal, not the parent's G.probe 'parent-secret'); child projection contains exactly its own steps' targets; parent projection contains exactly its own nodes plus adopted targets"
+    },
+    {
+      "criterion": "Repeated calls with identical local names remain isolated and map returns correctly",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_repeated_calls_stay_isolated_and_map_returns_per_target and tests/test_child_runs.py::test_multiple_calls_map_returns_to_their_own_targets: two CALLs to the same protocol produce run-twice:inv-2 and run-twice:inv-3 with separate namespaces and per-target CHILD_ADOPTED payloads"
+    },
+    {
+      "criterion": "CHILD_ADOPTED event records the adoption before the CALL's SUCCEEDED delta, atomically",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_child_adopted_event_precedes_the_call_succeeded_delta: exactly one CHILD_ADOPTED with payload {child_run_id, adopted: {target: ref}, child_status}, seq < the CALL SUCCEEDED, whose delta add_nodes are exactly the adopted nodes; both are in one append_batch (coordinator.py CALL branch)"
+    },
+    {
+      "criterion": "Parent state contains only adopted CALL targets; child-internal nodes never leak",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_child_sees_only_passed_arguments_not_parent_values and tests/test_coordinator.py::test_call_creates_isolated_child_run_and_adopts_targets (E.context/ART.sources absent from parent state, present in child state)"
+    },
+    {
+      "criterion": "Failed/cancelled/blocked children cannot publish partial caller outputs; parent fails atomically at the CALL invocation",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_failing_child_fails_parent_atomically_with_no_adoption (FAILED at inv-2 instruction_id protocol.leaf, completed 1 / cancelled 2, no CHILD_ADOPTED, no CALL SUCCEEDED, child terminal-failed in its own history), ::test_blocked_child_fails_parent_and_stays_terminal_blocked (child STOP blocked propagates)"
+    },
+    {
+      "criterion": "A child executes another child; lineage, evidence and outputs survive reopen/replay",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_nested_protocol_call_executes (grandchild run-nested:inv-2:inv-4 with metadata child_of run-nested:inv-2) and tests/test_child_runs.py::test_two_level_nested_calls_chain_child_run_ids (audit clean at all three levels); replay across reopen in test_parent_and_child_replay_identically_after_reopen"
+    },
+    {
+      "criterion": "Nested protocol-call chains remain bounded at depth 8",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_nested_call_chain_beyond_depth_eight_still_rejected (9-protocol chain rejected with 'depth exceeds limit 8'); two-level nesting executes in test_two_level_nested_calls_chain_child_run_ids"
+    },
+    {
+      "criterion": "Parent and child replay identically after reopening the store",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_parent_and_child_replay_identically_after_reopen (project_state, task ledger, full event tuple identical for both runs); tests/test_coordinator.py::test_protocol_call_events_replay_identically_after_reopen"
+    },
+    {
+      "criterion": "audit_run stays clean for parent AND child runs, succeeded or failed (zero audit.py changes)",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_parent_and_child_runs_audit_clean, ::test_failed_tree_audits_clean_parent_and_child, tests/test_coordinator.py::test_protocol_call_runs_audit_clean_parent_and_child; audit.py is byte-for-byte untouched"
+    },
+    {
+      "criterion": "Crash after child completion, before adoption: resume adopts without re-executing the child",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_crash_after_child_completion_resumes_by_adoption_only (CountingWorker.calls == {summarize: 1} on resume — zero child step re-executions; exactly one CHILD_ADOPTED; both runs audit clean)"
+    },
+    {
+      "criterion": "Crash during child execution: resume re-drives the non-terminal child from its first non-terminal step",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_crash_during_child_execution_rerives_nonterminal_child (tail-rewound child re-driven: search re-executed once, terminal step.frame not re-executed; final outputs identical; audits clean)"
+    },
+    {
+      "criterion": "Crash before child creation: resume starts the child fresh; crash after adoption: no duplicate output commits",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_crash_before_child_creation_starts_the_child_fresh (child run deleted, resume recreates it with child_of lineage, each child step ran exactly once) and ::test_crash_after_adoption_does_not_duplicate_outputs (exactly one CHILD_ADOPTED and one CALL SUCCEEDED after resume)"
+    },
+    {
+      "criterion": "A parent crash whose child fails on re-drive stays failed and never adopts",
+      "passed": true,
+      "evidence": "tests/test_child_runs.py::test_failed_child_then_resume_stays_failed_and_never_adopts (resume re-reads the terminal-failed child without re-executing it; 'child boom' surfaces in the parent error; no adoption)"
+    },
+    {
+      "criterion": "Full pytest suite passes; only allowed files touched",
+      "passed": true,
+      "evidence": "python3 -m pytest -q -> 607 passed (baseline 571 before this issue); changes: src/tikhon/runtime/coordinator.py, src/tikhon/runtime/events.py (+CHILD_ADOPTED only), src/tikhon/resume.py, tests/test_coordinator.py (inline-CALL tests rewritten for the new semantics), tests/test_child_runs.py (new, 18 tests), demo/runs/issue-20-child-runs/ (new); parser.py and audit.py untouched; cli.py's working-tree modification belongs to the concurrent #19 agent and was not touched by this issue"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "CALL remains synchronous: the caller waits for the child's terminal return, and 'represent waiting parents separately from actively consuming worker slots' (issue text) is deferred to the concurrency waves — the issue itself marks concurrency as coming from parallel scopes, not from CALL.",
+    "The issue's proposed `CALL protocol.name AS child(...)` syntax was intentionally not implemented; the sealed program and runtime use the current standalone `CALL protocol.name(args) -> targets` grammar, so parser.py is untouched this wave.",
+    "CHILD_ADOPTED's adopted payload maps target -> child ref (as specified in the implementation guidance); the adopted VALUES travel only inside the CALL's SUCCEEDED delta, so the event alone is evidence, not state.",
+    "The parent's invocation-id sequence no longer continues across the CALL boundary (pre-#20 inline behavior); the child owns inv-1..inv-N in its own namespace. Task texts also change from 'protocol.name: step.x: DO cmd' to a single 'CALL protocol.name' entry in the parent plus unprefixed texts in the child. The external driver (envelope.py) is unaffected because it rejects CALL programs up front.",
+    "A protocol that RETURNs a ref it RETIREd (or a declared INPUT that no step ever targeted and that is not returned via the seeded binding) is non-adoptable: adoption reads the child's committed state (seeded INPUT bindings plus replayed deltas), so the parent fails with 'did not commit RETURN reference <ref>' instead of publishing a phantom. Declared-INPUT pass-through RETURNs ARE adoptable.",
+    "resume_run's deferred windows from #10 remain (W5 result adoption without a worker re-call; W3 external idempotency query). Child-side equivalents follow the same at-least-once contract: a non-terminal child's in-flight worker call is re-executed on resume, deduplicated by the child's own run:invocation idempotency keys.",
+    "The demo program's stub-worker end-to-end verification used deterministic handlers for the 22 registered commands executed directly through SequentialCoordinator; the model-backed worker path (worker_adapter.py, untouched this wave) is exercised by its own existing tests."
+  ]
+}

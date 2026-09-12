@@ -1,7 +1,7 @@
 """Command-line interface for tikhon (docs/spec/02-command-catalog.md).
 
 Commands: lint, seal, run, resume, status, events, audit, learn, next,
-submit.  Uses argparse and the standard library only.
+submit, ready, claim.  Uses argparse and the standard library only.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from tikhon.audit import audit_run
+from tikhon.bridge import ClaimBridge
 from tikhon.envelope import (
     EnvelopeValidationError,
     ExternalDriver,
@@ -698,19 +699,17 @@ def _load_validated_program(program_path: str, seal: str | None) -> Any:
     return program
 
 
-def _cmd_next(args: argparse.Namespace) -> int:
-    if not args.seal:
-        print("error: --seal is required for next", file=sys.stderr)
-        return 1
-    program = _load_validated_program(args.program, args.seal)
-    if program is None:
-        return 1
+def _open_external_driver(args: argparse.Namespace, program: Any) -> Any:
+    """Open the event store + KB and build the external driver (Wave 8).
 
+    Returns ``(store, memory, driver)`` or ``(None, None, None)`` after
+    printing the error.
+    """
     try:
         store = EventStore(args.db)
     except Exception as exc:
         print(f"error: cannot open event store: {exc}", file=sys.stderr)
-        return 1
+        return None, None, None
     memory = KnowledgeBase(
         os.path.join(os.path.dirname(os.path.abspath(args.db)), "kb.sqlite")
     )
@@ -728,17 +727,64 @@ def _cmd_next(args: argparse.Namespace) -> int:
         workspace_root=workspace,
         seal_digest=args.seal,
     )
+    return store, memory, driver
+
+
+def _close_driver(store: Any, memory: Any) -> None:
+    if store is not None:
+        store.close()
+    if memory is not None:
+        memory.close()
+
+
+def _cmd_next(args: argparse.Namespace) -> int:
+    if not args.seal:
+        print("error: --seal is required for next", file=sys.stderr)
+        return 1
+    program = _load_validated_program(args.program, args.seal)
+    if program is None:
+        return 1
+
+    store, memory, driver = _open_external_driver(args, program)
+    if driver is None:
+        return 1
     try:
         envelope = driver.next_envelope()
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
-        store.close()
-        memory.close()
+        _close_driver(store, memory)
         return 1
     print(envelope.to_json())
-    store.close()
-    memory.close()
+    _close_driver(store, memory)
     return 0
+
+
+def _cmd_ready(args: argparse.Namespace) -> int:
+    # `ready` claims anonymously; `claim` carries --claimant (same body).
+    if not args.seal:
+        print("error: --seal is required for ready", file=sys.stderr)
+        return 1
+    program = _load_validated_program(args.program, args.seal)
+    if program is None:
+        return 1
+
+    store, memory, driver = _open_external_driver(args, program)
+    if driver is None:
+        return 1
+    bridge = ClaimBridge(driver, claim_timeout_seconds=args.claim_timeout)
+    try:
+        outcome = bridge.ready(claimant=getattr(args, "claimant", None))
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        _close_driver(store, memory)
+        return 1
+    print(json.dumps(outcome, sort_keys=True, ensure_ascii=False))
+    _close_driver(store, memory)
+    return 0
+
+
+def _cmd_claim(args: argparse.Namespace) -> int:
+    return _cmd_ready(args)
 
 
 def _cmd_submit(args: argparse.Namespace) -> int:
@@ -770,7 +816,15 @@ def _cmd_submit(args: argparse.Namespace) -> int:
         store, program, args.run_id, registry=builtin_registry()
     )
     try:
-        outcome = driver.submit_result(result)
+        if args.claim_token is not None:
+            bridge = ClaimBridge(
+                driver, claim_timeout_seconds=args.claim_timeout
+            )
+            outcome = bridge.submit(result, claim_token=args.claim_token)
+        else:
+            # Legacy Wave 8 path: no claim bookkeeping (coordinator-driven
+            # or claim-less external runs keep working unchanged).
+            outcome = driver.submit_result(result)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -934,7 +988,99 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Sealed digest, verified when --program is given",
     )
+    p_submit.add_argument(
+        "--claim-token",
+        default=None,
+        help=(
+            "Claim token from tikhon ready/claim; validates the"
+            " invocation's open claim before committing (issue #19);"
+            " omit for the claim-less Wave 8 path"
+        ),
+    )
+    p_submit.add_argument(
+        "--claim-timeout",
+        type=float,
+        default=900.0,
+        help=(
+            "Seconds before an unsubmitted claim is considered dead"
+            " (default 900); only used with --claim-token"
+        ),
+    )
     p_submit.set_defaults(func=_cmd_submit)
+
+    p_ready = sub.add_parser(
+        "ready",
+        help=(
+            "Render and claim the next ready invocation as a"
+            " TaskEnvelope + claim token for an external driver"
+            " (issue #19)"
+        ),
+    )
+    p_ready.add_argument("--db", required=True, help="Path to event store database")
+    p_ready.add_argument("--run-id", required=True, help="Run identifier")
+    p_ready.add_argument(
+        "--program", required=True, help="Path to the sealed .think source file"
+    )
+    p_ready.add_argument(
+        "--seal", default=None, help="Sealed digest, verified exactly like run"
+    )
+    p_ready.add_argument(
+        "--workspace",
+        default=None,
+        help=(
+            "Workspace root for effectful commands like edit"
+            " (default: the --db directory)"
+        ),
+    )
+    p_ready.add_argument(
+        "--claim-timeout",
+        type=float,
+        default=900.0,
+        help=(
+            "Seconds before an unsubmitted claim is considered dead and"
+            " re-issued with a fresh token (default 900)"
+        ),
+    )
+    p_ready.set_defaults(func=_cmd_ready)
+
+    p_claim = sub.add_parser(
+        "claim",
+        help=(
+            "Like ready, but records the claimant name on the"
+            " INVOCATION_CLAIMED event (issue #19)"
+        ),
+    )
+    p_claim.add_argument("--db", required=True, help="Path to event store database")
+    p_claim.add_argument("--run-id", required=True, help="Run identifier")
+    p_claim.add_argument(
+        "--program", required=True, help="Path to the sealed .think source file"
+    )
+    p_claim.add_argument(
+        "--seal", default=None, help="Sealed digest, verified exactly like run"
+    )
+    p_claim.add_argument(
+        "--workspace",
+        default=None,
+        help=(
+            "Workspace root for effectful commands like edit"
+            " (default: the --db directory)"
+        ),
+    )
+    p_claim.add_argument(
+        "--claim-timeout",
+        type=float,
+        default=900.0,
+        help=(
+            "Seconds before an unsubmitted claim is considered dead and"
+            " re-issued with a fresh token (default 900)"
+        ),
+    )
+    p_claim.add_argument(
+        "--claimant",
+        default=None,
+        help="Name recorded for the claiming driver/agent",
+    )
+    p_claim.set_defaults(func=_cmd_claim)
 
     return parser
 

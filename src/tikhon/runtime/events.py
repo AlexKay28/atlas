@@ -40,6 +40,7 @@ class EventType(str, Enum):
     APPROVAL_DENIED = "approval.denied"
     INVOCATION_DISPATCHED = "invocation.dispatched"
     HEARTBEAT = "invocation.heartbeat"
+    INVOCATION_CLAIMED = "invocation.claimed"
     RESULT_RECEIVED = "invocation.result_received"
     VALIDATION_PASSED = "invocation.validation_passed"
     VALIDATION_FAILED = "invocation.validation_failed"
@@ -54,6 +55,11 @@ class EventType(str, Enum):
     UNBLOCKED = "invocation.unblocked"
     JOIN_COMMITTED = "join.committed"
     COMPENSATION_COMPLETED = "compensation.completed"
+    # Issue #20: a CALL's isolated child run finished succeeded and the
+    # parent adopted its RETURN refs onto the CALL targets.  Carries no
+    # state delta of its own — the adopted values commit inside the same
+    # batch's SUCCEEDED delta, keeping the parent's state changes atomic.
+    CHILD_ADOPTED = "child.adopted"
     TASK_UPDATED = "task.updated"
 
 

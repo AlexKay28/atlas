@@ -1,0 +1,70 @@
+{
+  "claim": {
+    "claim_attempt": 1,
+    "claim_seq": 55,
+    "claim_token": "1843044c31194fd5b82b3b520f484a9f",
+    "claimant": null,
+    "claimed_at": "2026-09-12T16:50:03.563563+00:00",
+    "envelope_digest": "05d5c52b152c3c2a9b7c9ee7af3e5e309e5f3f9957d11685fb8c6f97baddb11d",
+    "invocation_id": "inv-6"
+  },
+  "envelope": {
+    "arguments": {
+      "evidence": [
+        {
+          "patch": "src/tikhon/bridge.py (ClaimBridge), src/tikhon/cli.py (ready/claim subcommands + submit --claim-token), src/tikhon/runtime/events.py (INVOCATION_CLAIMED), tests/test_bridge.py"
+        },
+        "pass"
+      ],
+      "goal": "Build the agent-executable claim bridge so an external driver can ready, claim and submit Tikhon invocations with fencing tokens without holding the event store"
+    },
+    "attempt": 1,
+    "command": "verify",
+    "command_version": "1.0.0",
+    "contract": {
+      "budget": {
+        "max_attempts": 2,
+        "max_cost": 0.1,
+        "max_output_bytes": 65536,
+        "max_seconds": 60.0,
+        "max_tokens": 6000
+      },
+      "capabilities": [
+        "predicate_evaluation",
+        "language_model"
+      ],
+      "done_condition": "original_acceptance_condition_evaluated_with_recorded_result",
+      "effect_class": "read_only",
+      "execution": "immediate",
+      "inputs": [
+        "goal:G",
+        "evidence:artifacts"
+      ],
+      "outputs": [
+        "verdict:V",
+        "verdict_evidence:refs"
+      ],
+      "purpose": "Evaluate original acceptance conditions against collected evidence"
+    },
+    "deadline_seconds": 60.0,
+    "done": null,
+    "idempotency_key": "issue-19-driver-bridge:inv-6",
+    "input_digest": "190c00a3ba5fbd0f6903a466575cd6cca37224b6b7620d9ed159343d74da02f4",
+    "invocation_id": "inv-6",
+    "program": {
+      "name": "issue_19_driver_bridge",
+      "version": "1.0"
+    },
+    "run_id": "issue-19-driver-bridge",
+    "schema_version": "1",
+    "seal_digest": "28d2f9c6bf5bc049239e2d45bff90de14144da0a1467aa8cc701019d0f0773da",
+    "targets": [
+      "V.result"
+    ],
+    "task_id": "task-6",
+    "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-19-driver-bridge"
+  },
+  "invocation_id": "inv-6",
+  "ready": true,
+  "run_id": "issue-19-driver-bridge"
+}

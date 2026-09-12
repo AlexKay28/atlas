@@ -1,0 +1,70 @@
+{
+  "claim": {
+    "claim_attempt": 1,
+    "claim_seq": 28,
+    "claim_token": "007df02c51a5496f8ce0b0a1bbe9553a",
+    "claimant": null,
+    "claimed_at": "2026-09-12T16:50:02.884017+00:00",
+    "envelope_digest": "4da5579713694e79311e8c09ca017755eff02fa503883543262b60ff58a7832a",
+    "invocation_id": "inv-3"
+  },
+  "envelope": {
+    "arguments": {
+      "artifact": {
+        "patterns": [
+          "Wave 8 next/submit already renders TaskEnvelopes and commits ResultEnvelopes through coordinator machinery",
+          "a CLAIMED overlay needs only INVOCATION_CLAIMED events; coordinator/resume already treat such invocations as non-terminal",
+          "stale-claim reissue appends a fresh DISPATCHED so the envelope attempt fences the old token"
+        ]
+      },
+      "schema": "claim_lifecycle_fencing_and_reissue"
+    },
+    "attempt": 1,
+    "command": "extract",
+    "command_version": "1.0.0",
+    "contract": {
+      "budget": {
+        "max_attempts": 2,
+        "max_cost": 0.0,
+        "max_output_bytes": 1048576,
+        "max_seconds": 30.0,
+        "max_tokens": 8000
+      },
+      "capabilities": [
+        "structured_extraction"
+      ],
+      "done_condition": "every_record_links_to_a_source_location",
+      "effect_class": "pure",
+      "execution": "immediate",
+      "inputs": [
+        "artifact:immutable",
+        "schema:bounded_types"
+      ],
+      "outputs": [
+        "records:typed",
+        "source_links:refs"
+      ],
+      "purpose": "Turn an artifact into typed records bound to source locations"
+    },
+    "deadline_seconds": 30.0,
+    "done": null,
+    "idempotency_key": "issue-19-driver-bridge:inv-3",
+    "input_digest": "62c34f4697829edde10ac0e6bb6b9b397e0e246166d616a16287e6dd5bd5d87d",
+    "invocation_id": "inv-3",
+    "program": {
+      "name": "issue_19_driver_bridge",
+      "version": "1.0"
+    },
+    "run_id": "issue-19-driver-bridge",
+    "schema_version": "1",
+    "seal_digest": "28d2f9c6bf5bc049239e2d45bff90de14144da0a1467aa8cc701019d0f0773da",
+    "targets": [
+      "E.design"
+    ],
+    "task_id": "task-3",
+    "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-19-driver-bridge"
+  },
+  "invocation_id": "inv-3",
+  "ready": true,
+  "run_id": "issue-19-driver-bridge"
+}

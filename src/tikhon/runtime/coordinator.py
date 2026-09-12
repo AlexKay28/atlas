@@ -54,20 +54,31 @@ class CrashInterrupt(Exception):
 
 @dataclasses.dataclass(frozen=True)
 class _PlanEntry:
-    """One flattened execution-plan entry (issue #12 protocol calls).
+    """One flattened execution-plan entry.
 
-    ``task_prefix`` prefixes the ledger task text (``"protocol.name: "`` for
-    steps expanded from a protocol, ``""`` for the caller's own steps).
-    ``binds`` carry ``(protocol_name, call_args, declarations)`` triples
-    applied in order before the entry's own arguments resolve — the first
-    entry of a protocol expansion binds the protocol's INPUT declarations
-    from the resolved CALL arguments.  ``finalizes`` carry
-    ``(protocol_name, caller_targets)`` pairs applied in order after the
-    entry's own targets commit — the last entry of a protocol expansion
-    commits the protocol's RETURN refs to the caller's CALL targets.
+    A plain (or conditional) ``Invocation`` step carries ``invocation``;
+    a ``CALL protocol.name(...)`` statement (issue #20) carries ``call``
+    and executes as an isolated child run (``_execute_call``) instead of
+    being expanded inline.
+
+    ``task_prefix`` prefixes the ledger task text — always empty since
+    #20 (protocol steps run in their own child run with unprefixed
+    texts); ``binds``/``finalizes`` are vestiges of the pre-#20 inline
+    CALL expansion and are retained only so the external driver's plan
+    inspection (envelope.py, which this module must not change the plan
+    shape for) keeps working: they are always empty now, and the driver
+    rejects CALL programs before plan entries are inspected.
+    ``condition`` is the raw condition text for a DO invocation embedded
+    in an ``IF`` conditional (issue #3): ``None`` for unconditional
+    entries.  Conditional entries sit after every unconditional entry in
+    the plan (validation enforces the source rule) and create their
+    ledger task lazily, only when the condition actually fires — a false
+    branch performs no work.  A ``call`` entry is never conditional
+    (CALL cannot be embedded in IF).
     """
 
-    invocation: Invocation
+    invocation: Invocation | None = None
+    call: "Call | None" = None
     task_prefix: str = ""
     binds: tuple[tuple[str, tuple[Argument, ...], tuple[Declaration, ...]], ...] = ()
     finalizes: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -434,79 +445,195 @@ class SequentialCoordinator:
             ]
         return value
 
-    def _bind_protocol_inputs(
+    def _resolve_call_arguments(
         self,
-        protocol_name: str,
-        call_args: tuple[Argument, ...],
-        declarations: tuple[Declaration, ...],
-        values: dict[str, Any],
-    ) -> None:
-        """Bind a protocol's INPUT declarations from resolved CALL args.
+        call: Call,
+        values: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve a CALL's arguments against the caller's run state (issue #20).
 
-        Binding mirrors program declarations: each INPUT ref is written
-        into the shared run-state ``values`` mapping, keyed by its full
-        typed reference, using the CALL argument whose name matches the
-        declaration's leaf segment (validation guarantees an exact cover).
+        Returns a ``protocol INPUT leaf name -> resolved value`` mapping:
+        each argument is guarded by :meth:`_reject_unresolved_refs` and
+        resolved like an invocation argument (bare ref from ``values``,
+        ``KB.*`` from the knowledge base, reference lists item-wise,
+        literals pass through).  Validation guarantees the argument names
+        exactly cover the protocol's INPUT leaf names.
         """
         resolved: dict[str, Any] = {}
-        for arg in call_args:
-            # Issue #7: guard first so a retired ref in a CALL argument
-            # fails the bind instead of passing the raw ref string through.
+        for arg in call.args:
             self._reject_unresolved_refs(arg.value, values)
             resolved[arg.name] = self._resolve_arg_value(arg.value, values)
-        for declaration in declarations:
+        return resolved
+
+    def _bind_child_inputs(
+        self,
+        protocol: Program,
+        resolved: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Seed the child run's initial state from resolved CALL args (issue #20).
+
+        The child's state namespace starts from the protocol's INPUT
+        declarations — the protocol file's declared literal values first
+        (they are lint placeholders), then every declared ref overwritten
+        by the CALL argument bound to its leaf name.  The caller's own
+        ``values`` are NOT visible to the child beyond these explicit
+        bindings.
+        """
+        child_values: dict[str, Any] = {
+            declaration.ref: declaration.value
+            for declaration in protocol.declarations
+        }
+        for declaration in protocol.declarations:
             leaf = declaration.ref.split(".")[-1]
-            values[declaration.ref] = resolved[leaf]
+            if leaf in resolved:
+                child_values[declaration.ref] = resolved[leaf]
+        return child_values
 
     @staticmethod
-    def _apply_call_finalizes(
-        finalizes: tuple[tuple[str, tuple[str, ...]], ...],
-        target_values: Mapping[str, Any],
-        values: Mapping[str, Any],
-    ) -> list[dict[str, Any]]:
-        """Commit protocol RETURN refs to the caller's CALL targets.
+    def _apply_committed_deltas(values: dict[str, Any], events: Any) -> None:
+        """Replay committed SUCCEEDED deltas onto a values mapping in seq order.
 
-        Returns the extra state nodes to merge into the owning step's
-        SUCCEEDED delta.  Validation pins CALL targets to a subset of the
-        protocol's RETURN refs, so each target is committed from the value
-        the protocol produced under the same reference (this step's own
-        ``target_values`` first, then earlier run state); a missing ref
-        raises and fails the run through the standard atomic path.
+        Shared by resume (issue #10) and child adoption (issue #20):
+        add/revise write, retire pops — reproducing the values mapping the
+        coordinator held at any committed point of the run.
         """
-        nodes: list[dict[str, Any]] = []
-        seen = set(target_values)
-        for protocol_name, caller_targets in finalizes:
-            for target in caller_targets:
-                if target in target_values:
-                    value = target_values[target]
-                elif target in values:
-                    value = values[target]
-                else:
-                    raise ValueError(
-                        f"protocol {protocol_name} did not commit RETURN"
-                        f" reference {target}"
-                    )
-                if target not in seen:
-                    nodes.append({"id": target, "value": value})
-                    seen.add(target)
-        return nodes
+        for event in events:
+            if event.event_type is not EventType.SUCCEEDED:
+                continue
+            payload = event.payload
+            if not isinstance(payload, dict) or "delta" not in payload:
+                continue
+            delta = StateDelta.from_dict(payload["delta"])
+            for node in delta.add_nodes:
+                values[node["id"]] = node["value"]
+            for node in delta.revise_nodes:
+                values[node["id"]] = node["value"]
+            for ref in delta.retire_nodes:
+                values.pop(ref, None)
+
+    def _execute_call_child(
+        self,
+        call: Call,
+        resolved: Mapping[str, Any],
+        parent_run_id: str,
+        invocation_id: str,
+    ) -> dict[str, Any]:
+        """Start, resume, or read back the CALL's isolated child run (issue #20).
+
+        The child run id is ``"<parent_run_id>:<invocation_id>"`` —
+        deterministic from the plan alone, collision-free in the run tree
+        (repeated calls and nested calls get distinct ids), and identical
+        across resume attempts.
+
+        - Missing run: started fresh through :meth:`_execute_program` —
+          same store/worker/memory/protocols_dir/workspace_root, its own
+          RUN_STARTED marked ``child_of``/``call``, its own task ledger,
+          and a state namespace seeded only from the resolved CALL
+          arguments (the parent's ``values`` are not visible otherwise).
+        - Existing terminal run: returned verbatim without re-executing
+          anything (the caller adopts from the child's committed state).
+        - Existing non-terminal run (parent crashed mid-child):
+          re-driven through :meth:`_resume_existing_run` — at-least-once,
+          with the child's DISPATCHED idempotency key as the dedup
+          contract for effectful steps.
+        """
+        protocol = load_protocol(call.protocol, self.protocols_dir)
+        child_run_id = f"{parent_run_id}:{invocation_id}"
+        child_values = self._bind_child_inputs(protocol, resolved)
+        try:
+            self.store.run(child_run_id)
+        except KeyError:
+            result = self._execute_program(
+                protocol,
+                child_run_id,
+                child_of=parent_run_id,
+                call_name=call.protocol,
+                initial_values=child_values,
+            )
+            result["protocol"] = protocol
+            result["child_values"] = child_values
+            return result
+        events = self.store.events(child_run_id)
+        finished = [
+            event for event in events
+            if event.event_type is EventType.RUN_FINISHED
+        ]
+        if finished:
+            # Already terminal (crash between child completion and parent
+            # adoption, or a repeated resume): adopt without re-executing.
+            payload = (
+                finished[-1].payload
+                if isinstance(finished[-1].payload, dict)
+                else {}
+            )
+            result: dict[str, Any] = {
+                "run_id": child_run_id,
+                "status": payload.get("status", "unknown"),
+                "outputs": {},
+                "protocol": protocol,
+                "child_values": child_values,
+            }
+            if "error" in payload:
+                result["error"] = payload["error"]
+            return result
+        result = self._resume_existing_run(
+            protocol, child_run_id, initial_values=child_values
+        )
+        result["protocol"] = protocol
+        result["child_values"] = child_values
+        return result
+
+    def _adopt_child_result(
+        self,
+        call: Call,
+        child: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        """Map the child's RETURN refs onto the CALL targets (issue #20).
+
+        The mapping is exact-string, like the pre-#20 inline finalizes:
+        each CALL target (validation pins targets to a subset of the
+        protocol's RETURN refs) adopts the value the child held under the
+        same reference.  The source is the child's committed state —
+        seeded INPUT bindings plus replayed SUCCEEDED deltas — so a fresh
+        adoption and a resume-after-crash adoption are identical, and a
+        ref the child retired is (correctly) not adoptable.  Returns
+        ``(adopted_nodes, adopted_map)``: the parent-side ``{"id",
+        "value"}`` nodes for the CALL's SUCCEEDED delta and the
+        ``{target: ref}`` payload for the CHILD_ADOPTED event.  A missing
+        ref raises; the caller fails the run through the standard atomic
+        path.
+        """
+        child_run_id = child["run_id"]
+        values: dict[str, Any] = dict(child["child_values"])
+        self._apply_committed_deltas(values, self.store.events(child_run_id))
+        adopted_nodes: list[dict[str, Any]] = []
+        adopted_map: dict[str, str] = {}
+        for target in call.targets:
+            if target not in values:
+                raise ValueError(
+                    f"child run {child_run_id} for {call.protocol} did not"
+                    f" commit RETURN reference {target}"
+                )
+            adopted_nodes.append({"id": target, "value": values[target]})
+            adopted_map[target] = target
+        return adopted_nodes, adopted_map
 
     def _build_plan(self, program: Program) -> list[_PlanEntry]:
-        """Flatten the program into an execution plan (issue #12).
+        """Flatten the program into an execution plan.
 
-        Caller invocations keep their positions; each CALL expands the
-        protocol's invocations inline at the call site with the protocol
-        name prefixed onto their task texts and invocation ids continuing
-        the parent sequence.  The expansion's first entry binds the
-        protocol's INPUT declarations; the last entry commits the
-        protocol's RETURN refs to the CALL targets.
+        Caller invocations keep their positions; each CALL becomes its
+        own plan entry (issue #20).  A CALL no longer expands the
+        protocol's steps inline: executing the entry spawns an isolated
+        child run whose plan is built from the protocol's own statements
+        by the child's coordinator, and the child's RETURN refs are
+        adopted onto the CALL targets when the child finishes succeeded.
         """
         entries: list[_PlanEntry] = []
 
-        def walk(statements: tuple[object, ...], prefix: str) -> None:
+        def walk(statements: tuple[object, ...]) -> None:
             for statement in statements:
                 if isinstance(statement, Invocation):
-                    entries.append(_PlanEntry(statement, prefix))
+                    entries.append(_PlanEntry(invocation=statement))
                 elif isinstance(statement, Conditional):
                     # Issue #3: a conditional DO invocation occupies a plan
                     # entry carrying its condition; STOP/RETURN conditionals
@@ -514,33 +641,15 @@ class SequentialCoordinator:
                     # evaluated at their source anchor by _collect_anchors.
                     if isinstance(statement.statement, Invocation):
                         entries.append(
-                            _PlanEntry(statement.statement, prefix, condition=statement.condition)
+                            _PlanEntry(
+                                invocation=statement.statement,
+                                condition=statement.condition,
+                            )
                         )
                 elif isinstance(statement, Call):
-                    protocol = load_protocol(statement.protocol, self.protocols_dir)
-                    before = len(entries)
-                    walk(protocol.statements, f"{statement.protocol}: ")
-                    if len(entries) == before:
-                        # validate_program rejects empty protocols before
-                        # execution; this is a defensive guard only.
-                        raise ValueError(
-                            f"protocol {statement.protocol} contains no"
-                            " invocations to execute"
-                        )
-                    first = entries[before]
-                    entries[before] = dataclasses.replace(
-                        first,
-                        binds=first.binds
-                        + ((statement.protocol, statement.args, protocol.declarations),),
-                    )
-                    last = entries[-1]
-                    entries[-1] = dataclasses.replace(
-                        last,
-                        finalizes=last.finalizes
-                        + ((statement.protocol, statement.targets),),
-                    )
+                    entries.append(_PlanEntry(call=statement))
 
-        walk(program.statements, "")
+        walk(program.statements)
         return entries
 
     def _create_plan_tasks(
@@ -563,12 +672,8 @@ class SequentialCoordinator:
                 # ledger task exists only when the condition fires (created
                 # lazily in _drive_plan).
                 continue
-            statement = entry.invocation
             task = create_ledger.create_task(
-                text=(
-                    f"{entry.task_prefix}{statement.step_id}:"
-                    f" DO {statement.command}"
-                ),
+                text=self._task_text(entry),
                 creator="coordinator",
             )
             task_id = task.id
@@ -591,9 +696,12 @@ class SequentialCoordinator:
 
     def _task_text(self, entry: _PlanEntry) -> str:
         """The canonical ledger task text for one plan entry."""
+        if entry.call is not None:
+            return f"CALL {entry.call.protocol}"
+        statement = entry.invocation
         return (
-            f"{entry.task_prefix}{entry.invocation.step_id}:"
-            f" DO {entry.invocation.command}"
+            f"{entry.task_prefix}{statement.step_id}:"
+            f" DO {statement.command}"
         )
 
     def _collect_anchors(self, program: Program) -> dict[int, list]:
@@ -620,10 +728,10 @@ class SequentialCoordinator:
                     else:
                         anchors.setdefault(count, []).append(statement)
                 elif isinstance(statement, Call):
-                    protocol = load_protocol(
-                        statement.protocol, self.protocols_dir
-                    )
-                    count += walk(protocol.statements)
+                    # Issue #20: a CALL occupies exactly one plan entry (its
+                    # isolated child run), so anchors after it index on that
+                    # single entry.
+                    count += 1
             return count
 
         walk(program.statements)
@@ -786,6 +894,26 @@ class SequentialCoordinator:
         *,
         crash_hook: "Callable[[int], None] | None" = None,
     ) -> dict[str, Any]:
+        return self._execute_program(program, run_id, crash_hook=crash_hook)
+
+    def _execute_program(
+        self,
+        program: Program,
+        run_id: str,
+        *,
+        crash_hook: "Callable[[int], None] | None" = None,
+        child_of: str | None = None,
+        call_name: str | None = None,
+        initial_values: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Start and drive one run (issue #20 parameterized start).
+
+        ``execute`` is the top-level entry point.  A CALL's child run
+        reuses this same machinery with ``child_of``/``call_name`` set
+        (recorded in the run's metadata and RUN_STARTED payload for
+        lineage) and ``initial_values`` seeding the child's isolated
+        state namespace from the resolved CALL arguments.
+        """
         validate_program(
             program,
             known_commands=self.worker.commands,
@@ -800,32 +928,38 @@ class SequentialCoordinator:
 
         program_version = f"{program.name}@{program.version}"
         registry_digest = _builtin_registry_digest()
-        self.store.create_run(
-            run_id,
-            program_version,
-            metadata={"program": program.name, "registry_digest": registry_digest},
-        )
+        metadata: dict[str, Any] = {
+            "program": program.name,
+            "registry_digest": registry_digest,
+        }
+        started_payload: dict[str, Any] = {
+            "program": program.name,
+            "version": program.version,
+            "registry_digest": registry_digest,
+        }
+        if child_of is not None:
+            metadata["child_of"] = child_of
+            metadata["call"] = call_name
+            started_payload["child_of"] = child_of
+            started_payload["call"] = call_name
+        self.store.create_run(run_id, program_version, metadata=metadata)
 
         self.store.append(
             run_id,
             EventType.RUN_STARTED,
-            payload={
-                "program": program.name,
-                "version": program.version,
-                "registry_digest": registry_digest,
-            },
+            payload=started_payload,
         )
 
         values: dict[str, Any] = {}
         for decl in program.declarations:
             values[decl.ref] = decl.value
+        if initial_values:
+            values.update(initial_values)
 
-        # Issue #12: flatten caller invocations and protocol-call
-        # expansions into one sequential plan.  Protocol steps execute
-        # inline through the same per-invocation loop below: their tasks
-        # are created in the same up-front batch with the protocol name
-        # prefixed onto the task text, and their invocation ids continue
-        # the parent sequence.
+        # Issue #20: flatten caller invocations and CALL statements into
+        # one sequential plan.  Protocol steps execute in their own
+        # isolated child run; a CALL entry drives the child and adopts
+        # its RETURN refs (see _execute_call).
         plan: list[_PlanEntry] = self._build_plan(program)
 
         statement_to_task = self._create_plan_tasks(run_id, plan)
@@ -838,6 +972,112 @@ class SequentialCoordinator:
             statement_to_task,
             start_idx=0,
             crash_hook=crash_hook,
+        )
+
+    def _resume_existing_run(
+        self,
+        program: Program,
+        run_id: str,
+        *,
+        initial_values: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Continue a non-terminal run (issue #10 core, shared with #20).
+
+        Rebuilds run state (declarations — overridden by
+        ``initial_values`` for child runs' resolved CALL inputs — then
+        committed SUCCEEDED deltas in seq order), verifies the
+        SUCCEEDED-invocation prefix invariant, ensures the plan's tasks
+        exist with the canonical texts, and drives the remaining plan
+        through :meth:`_drive_plan`.  Used by ``tikhon.resume.resume_run``
+        for a crashed parent and by ``_execute_call`` to re-drive a
+        non-terminal child (at-least-once; the DISPATCHED idempotency key
+        is the dedup contract for effectful workers).
+        """
+        events = self.store.events(run_id)
+
+        values: dict[str, Any] = {}
+        for decl in program.declarations:
+            values[decl.ref] = decl.value
+        if initial_values:
+            values.update(initial_values)
+        # INPUT declarations seed the mapping exactly like a fresh start;
+        # committed SUCCEEDED deltas then replay in seq order (add/revise
+        # write, retire pops) so the reconstruction matches the values the
+        # coordinator held at the crash point — including declarations no
+        # step ever targeted and refs retired by a REVISE/RETIRE correction.
+        self._apply_committed_deltas(values, events)
+
+        plan = self._build_plan(program)
+
+        # -- find the first non-terminal step ------------------------------
+        # Invocation ids are positional (inv-1..inv-N in plan order), so a
+        # step is terminal exactly when its invocation id carries a
+        # SUCCEEDED event.  Dispatch alone never implies success.
+        succeeded = {
+            event.invocation_id
+            for event in events
+            if event.event_type is EventType.SUCCEEDED and event.invocation_id
+        }
+        start_idx = len(plan)
+        for idx in range(len(plan)):
+            if f"inv-{idx + 1}" not in succeeded:
+                start_idx = idx
+                break
+        expected_terminal = {f"inv-{i + 1}" for i in range(start_idx)}
+        if succeeded != expected_terminal:
+            raise ValueError(
+                f"run {run_id!r} has a non-prefix set of SUCCEEDED"
+                f" invocations {sorted(succeeded)}; impossible for the"
+                " sequential coordinator"
+            )
+
+        # -- ensure tasks exist (W0a: crash before the creation batch) -----
+        ledger = self.store.task_ledger(run_id)
+        task_ids = list(ledger.tasks)
+        if len(task_ids) > len(plan):
+            raise ValueError(
+                f"run {run_id!r} has {len(task_ids)} tasks but the program"
+                f" plans {len(plan)}; refusing to resume a mismatched program"
+            )
+        for idx, task_id in enumerate(task_ids):
+            expected_text = self._task_text(plan[idx])
+            if ledger.tasks[task_id].text != expected_text:
+                raise ValueError(
+                    f"task {task_id!r} ({ledger.tasks[task_id].text!r}) does"
+                    f" not match plan step {idx} ({expected_text!r});"
+                    " refusing to resume with a mismatched program"
+                )
+        if len(task_ids) < len(plan):
+            create_records: list[_Record] = []
+            create_ledger = self.store.task_ledger(run_id)
+            for idx in range(len(task_ids), len(plan)):
+                entry = plan[idx]
+                task = create_ledger.create_task(
+                    text=self._task_text(entry),
+                    creator="coordinator",
+                )
+                create_records.append(_Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=task.id,
+                    payload={
+                        "kind": "task_created", "id": task.id, "text": task.text,
+                        "priority": task.priority, "parent": task.parent,
+                        "dependencies": task.dependencies,
+                        "creator": task.creator,
+                    },
+                    store=self.store,
+                ))
+            self.store.append_batch(run_id, create_records)
+            task_ids = list(self.store.task_ledger(run_id).tasks)
+        statement_to_task = {idx: task_ids[idx] for idx in range(len(plan))}
+
+        return self._drive_plan(
+            program,
+            run_id,
+            plan,
+            values,
+            statement_to_task,
+            start_idx=start_idx,
         )
 
     def _drive_plan(
@@ -866,7 +1106,7 @@ class SequentialCoordinator:
 
         def finish_failed_invocation(
             idx: int,
-            statement: Invocation,
+            instruction_id: str,
             invocation_id: str,
             task_id: str,
             error: str,
@@ -877,7 +1117,7 @@ class SequentialCoordinator:
                 records.append(
                     _Record(
                         event_type=EventType.VALIDATION_FAILED,
-                        instruction_id=statement.step_id,
+                        instruction_id=instruction_id,
                         invocation_id=invocation_id,
                         task_id=task_id,
                         payload=validation,
@@ -887,7 +1127,7 @@ class SequentialCoordinator:
             records.append(
                 _Record(
                     event_type=EventType.FAILED,
-                    instruction_id=statement.step_id,
+                    instruction_id=instruction_id,
                     invocation_id=invocation_id,
                     task_id=task_id,
                     payload={"error": error},
@@ -959,6 +1199,13 @@ class SequentialCoordinator:
         for idx in range(start_idx, len(plan)):
             entry = plan[idx]
             statement = entry.invocation
+            call = entry.call
+            # Issue #20: a CALL entry's instruction id is the protocol
+            # reference (the CALL statement's AST anchor); a DO step's is
+            # its step id.  Both are nonempty, keeping the audit invariant.
+            instruction_id = (
+                call.protocol if call is not None else statement.step_id
+            )
             invocation_id = f"inv-{idx + 1}"
             if entry.condition is not None:
                 # Issue #3: a conditional DO invocation executes only when
@@ -1002,9 +1249,12 @@ class SequentialCoordinator:
                 # neither PENDING (fresh) nor IN_PROGRESS (in flight).
                 raise TaskLedgerError(
                     f"task {task_id} for non-terminal step"
-                    f" {statement.step_id} is {task.status.value};"
+                    f" {instruction_id} is {task.status.value};"
                     " cannot resume"
                 )
+            ready_command = (
+                f"CALL {call.protocol}" if call is not None else statement.command
+            )
             if EventType.INVOCATION_READY not in prior_types:
                 if task is not None and task.status is TaskStatus.IN_PROGRESS:
                     # Impossible per the atomic task_started+READY batch;
@@ -1012,10 +1262,10 @@ class SequentialCoordinator:
                     self.store.append(
                         run_id,
                         EventType.INVOCATION_READY,
-                        instruction_id=statement.step_id,
+                        instruction_id=instruction_id,
                         invocation_id=invocation_id,
                         task_id=task_id,
-                        payload={"command": statement.command},
+                        payload={"command": ready_command},
                     )
                 else:
                     ledger.start_task(task_id)
@@ -1030,32 +1280,187 @@ class SequentialCoordinator:
                         ),
                         _Record(
                             event_type=EventType.INVOCATION_READY,
-                            instruction_id=statement.step_id,
+                            instruction_id=instruction_id,
                             invocation_id=invocation_id,
                             task_id=task_id,
-                            payload={"command": statement.command},
+                            payload={"command": ready_command},
                             store=self.store,
                         ),
                     ])
 
-            # Issue #12: entering a protocol expansion binds the protocol's
-            # INPUT declarations from the resolved CALL args (like program
-            # declarations) before the first protocol step resolves its own
-            # arguments.  Binding failures take the standard atomic path.
-            for protocol_name, call_args, declarations in entry.binds:
+            if call is not None:
+                # Issue #20: a CALL executes an isolated child run instead
+                # of expanding the protocol inline (the pre-#20 behavior).
+                # The child lives in the same EventStore under the
+                # deterministic id "<parent_run_id>:<invocation_id>", owns
+                # its own ledger and state namespace (seeded only from the
+                # explicitly passed CALL arguments), and its RETURN refs
+                # are adopted onto the CALL targets on success — recorded
+                # as CHILD_ADOPTED in the same atomic batch as the CALL's
+                # SUCCEEDED delta.  Any non-succeeded child terminal fails
+                # the parent through the standard atomic path.
+                child_run_id = f"{run_id}:{invocation_id}"
                 try:
-                    self._bind_protocol_inputs(
-                        protocol_name, call_args, declarations, values
+                    resolved_call_args = self._resolve_call_arguments(
+                        call, values
                     )
                 except Exception as exc:
                     failed = True
-                    error_msg = f"protocol {protocol_name}: {exc}"
+                    error_msg = str(exc)
                     finish_failed_invocation(
-                        idx, statement, invocation_id, task_id, error_msg
+                        idx, call.protocol, invocation_id, task_id, error_msg
                     )
                     break
-            if failed:
-                break
+
+                if EventType.INVOCATION_DISPATCHED not in prior_types:
+                    self.store.append(
+                        run_id,
+                        EventType.INVOCATION_DISPATCHED,
+                        instruction_id=call.protocol,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        payload={
+                            "args": resolved_call_args,
+                            "idempotency_key": f"{run_id}:{invocation_id}",
+                            "child_run_id": child_run_id,
+                        },
+                    )
+
+                child_result = self._execute_call_child(
+                    call, resolved_call_args, run_id, invocation_id
+                )
+                child_status = child_result.get("status", "unknown")
+                if child_status != "succeeded":
+                    # Failed/blocked/cancelled children never publish
+                    # partial caller outputs: the parent fails at the
+                    # CALL's invocation and the child stays terminal in
+                    # its own history.
+                    child_error = child_result.get("error")
+                    failed = True
+                    error_msg = (
+                        f"child run {child_run_id} for {call.protocol}"
+                        f" finished with status {child_status!r}; the CALL"
+                        " cannot adopt its outputs"
+                    )
+                    if child_error:
+                        error_msg = f"{error_msg}: {child_error}"
+                    finish_failed_invocation(
+                        idx, call.protocol, invocation_id, task_id, error_msg
+                    )
+                    break
+
+                if EventType.RESULT_RECEIVED not in prior_types:
+                    self.store.append(
+                        run_id,
+                        EventType.RESULT_RECEIVED,
+                        instruction_id=call.protocol,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        payload={
+                            "child_run_id": child_run_id,
+                            "status": child_status,
+                        },
+                    )
+
+                try:
+                    adopted_nodes, adopted_map = self._adopt_child_result(
+                        call, child_result
+                    )
+                except Exception as exc:
+                    failed = True
+                    error_msg = str(exc)
+                    finish_failed_invocation(
+                        idx, call.protocol, invocation_id, task_id, error_msg
+                    )
+                    break
+
+                if crash_hook is not None:
+                    # Issue #10/#20: crash window after the child is
+                    # terminal but before the parent adopts — resume
+                    # detects the terminal child and adopts without
+                    # re-executing it.
+                    crash_hook(idx)
+
+                self.store.append(
+                    run_id,
+                    EventType.VALIDATION_PASSED,
+                    instruction_id=call.protocol,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    payload={},
+                )
+
+                for node in adopted_nodes:
+                    values[node["id"]] = node["value"]
+
+                delta = StateDelta(add_nodes=tuple(adopted_nodes))
+                expected_sv = self.store._current_state_version(run_id)
+
+                # batch: CHILD_ADOPTED + SUCCEEDED + invocation_recorded
+                # + task_completed — one atomic append so an adoption is
+                # never split from its state commit (the store's
+                # duplicate-SUCCEEDED guard then makes a re-adoption of
+                # the same invocation impossible).
+                self.store.append_batch(run_id, [
+                    _Record(
+                        event_type=EventType.CHILD_ADOPTED,
+                        instruction_id=call.protocol,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        payload={
+                            "child_run_id": child_run_id,
+                            "adopted": adopted_map,
+                            "child_status": child_status,
+                        },
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.SUCCEEDED,
+                        instruction_id=call.protocol,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        expected_state_version=expected_sv,
+                        payload={"delta": delta},
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={
+                            "kind": "invocation_recorded", "id": task_id,
+                            "tokens": 0, "cost": 0.0, "retries": 0,
+                            "elapsed_seconds": 0.0,
+                        },
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={
+                            "kind": "task_completed", "id": task_id,
+                            "evidence": (
+                                f"CALL {call.protocol} ({child_run_id})"
+                                f" -> {list(call.targets)}"
+                            ),
+                        },
+                        store=self.store,
+                    ),
+                ])
+
+                # Issue #3: conditionals anchored directly after this entry
+                # in source order are evaluated over the state it just
+                # committed (including the adopted values).
+                anchor_result = self._run_conditionals(
+                    run_id,
+                    anchors.get(idx + 1, ()),
+                    values,
+                    plan,
+                    statement_to_task,
+                    cancel_from_idx=idx + 1,
+                )
+                if anchor_result is not None:
+                    return anchor_result
+                continue
 
             try:
                 resolved_kwargs: dict[str, Any] = {}
@@ -1090,7 +1495,7 @@ class SequentialCoordinator:
                 failed = True
                 error_msg = str(exc)
                 finish_failed_invocation(
-                    idx, statement, invocation_id, task_id, error_msg
+                    idx, statement.step_id, invocation_id, task_id, error_msg
                 )
                 break
 
@@ -1121,7 +1526,7 @@ class SequentialCoordinator:
                 failed = True
                 error_msg = str(exc)
                 finish_failed_invocation(
-                    idx, statement, invocation_id, task_id, error_msg
+                    idx, statement.step_id, invocation_id, task_id, error_msg
                 )
                 break
 
@@ -1147,7 +1552,7 @@ class SequentialCoordinator:
                 failed = True
                 error_msg = validation_error
                 finish_failed_invocation(
-                    idx, statement, invocation_id, task_id, validation_error
+                    idx, statement.step_id, invocation_id, task_id, validation_error
                 )
                 break
 
@@ -1168,15 +1573,11 @@ class SequentialCoordinator:
                         f"DONE predicate failed for {statement.step_id}: {detail}"
                     )
                     finish_failed_invocation(
-                        idx, statement, invocation_id, task_id, error_msg,
+                        idx, statement.step_id, invocation_id, task_id, error_msg,
                         validation=validation_payload,
                     )
                     break
 
-            # Issue #12: leaving a protocol expansion commits the protocol's
-            # RETURN refs to the caller's CALL targets.  Applied before
-            # VALIDATION_PASSED so a commit failure keeps the truthful
-            # event order (no VALIDATION_PASSED before FAILED).
             # Issue #7: resolve the step's REVISE/RETIRE corrections here,
             # before VALIDATION_PASSED, so a malformed (unvalidated)
             # invocation fails through the standard atomic path.  REVISE
@@ -1188,9 +1589,6 @@ class SequentialCoordinator:
             revision_nodes: list[dict[str, Any]] = []
             retired_nodes: list[str] = []
             try:
-                finalize_nodes = self._apply_call_finalizes(
-                    entry.finalizes, target_values, values
-                )
                 if statement.revisions:
                     if len(statement.targets) != 1 or (
                         statement.targets[0] not in target_values
@@ -1209,7 +1607,7 @@ class SequentialCoordinator:
                 failed = True
                 error_msg = str(exc)
                 finish_failed_invocation(
-                    idx, statement, invocation_id, task_id, error_msg
+                    idx, statement.step_id, invocation_id, task_id, error_msg
                 )
                 break
 
@@ -1235,7 +1633,6 @@ class SequentialCoordinator:
             for target, val in target_values.items():
                 values[target] = val
                 add_nodes.append({"id": target, "value": val})
-            add_nodes.extend(finalize_nodes)
             # Issue #7: keep the run-state values mapping in lockstep with
             # the corrections so later steps resolve revised values and
             # fail coherently on retired refs.
