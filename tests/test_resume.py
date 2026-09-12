@@ -15,6 +15,7 @@ and W9; W0a is built by hand (RUN_STARTED only).
 """
 
 import json
+import threading
 
 import pytest
 
@@ -448,3 +449,54 @@ class TestCliResume:
     def test_sealed_program_digest_stable(self, tmp_path):
         program = parse_three_step()
         assert seal_digest(program) == seal_digest(parse_three_step())
+
+
+class TestConcurrentResumeStampede:
+    """Issue #31: two resume_run processes on one crashed run."""
+
+    def _crash(self, tmp_path, run_id="stampede"):
+        store = EventStore(str(tmp_path / "stampede.db"))
+        coordinator = SequentialCoordinator(store, make_worker())
+        with pytest.raises(CrashInterrupt):
+            coordinator.execute(
+                parse_three_step(), run_id=run_id, crash_hook=crash_at(0)
+            )
+        return store
+
+    def test_one_wins_one_gets_clean_error(self, tmp_path):
+        store = self._crash(tmp_path)
+        program = parse_three_step()
+        results = [None, None]
+        errors = [None, None]
+
+        barrier = threading.Barrier(2)
+
+        def slow_define(goal):
+            barrier.wait(timeout=5)
+            import time as _time
+            _time.sleep(0.1)
+            return {"goal": "add two inputs", "observed": goal}
+
+        def resume_thread(idx):
+            worker = make_worker(define=slow_define)
+            try:
+                results[idx] = resume_run(store, worker, "stampede", program)
+            except Exception as exc:
+                errors[idx] = exc
+
+        t0 = threading.Thread(target=resume_thread, args=(0,))
+        t1 = threading.Thread(target=resume_thread, args=(1,))
+        t0.start()
+        t1.start()
+        t0.join(timeout=15)
+        t1.join(timeout=15)
+
+        successes = [r for r in results if r and r.get("status") == "succeeded"]
+        conflicts = [r for r in results if r and r.get("status") == "conflict"]
+        unhandled = [e for e in errors if e is not None]
+
+        assert len(successes) == 1, f"expected 1 success, got {results}"
+        assert len(conflicts) == 1, f"expected 1 conflict, got {results}"
+        assert not unhandled, f"unexpected unhandled: {unhandled}"
+        assert "concurrent resume" in conflicts[0]["error"]
+        store.close()

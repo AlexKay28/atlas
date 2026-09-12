@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING, Any
 
 from tahoe.budgets import BudgetGate, ExecutionBudget
 from tahoe.runtime.coordinator import SequentialCoordinator, _uses_kb_refs
-from tahoe.runtime.events import EventStore, EventType
+from tahoe.runtime.events import EventStore, EventType, StateVersionConflict
 from tahoe.syntax import validate_program
 
 if TYPE_CHECKING:
@@ -176,9 +176,21 @@ def resume_run(
         gate = BudgetGate(budget, elapsed_offset=elapsed_offset)
 
     workers = max_workers if max_workers is not None else 1
-    return coordinator._resume_existing_run(
-        program,
-        run_id,
-        gate=gate,
-        max_workers=workers,
-    )
+    try:
+        return coordinator._resume_existing_run(
+            program,
+            run_id,
+            gate=gate,
+            max_workers=workers,
+        )
+    except StateVersionConflict as exc:
+        return {
+            "run_id": run_id,
+            "status": "conflict",
+            "error": (
+                f"concurrent resume detected for run {run_id!r}:"
+                f" another process may have already resumed it"
+                f" ({exc})"
+            ),
+            "outputs": {},
+        }

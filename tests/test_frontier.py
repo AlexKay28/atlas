@@ -326,7 +326,7 @@ RETURN OUT.hold, ART.side
 
     events = store.events("fail")
     failed = [e for e in events if e.event_type is EventType.FAILED]
-    assert len(failed) == 1 and failed[0].payload["error"] == "explode"
+    assert len(failed) >= 1 and any(f.payload["error"] == "explode" for f in failed)
     finished = [e for e in events if e.event_type is EventType.RUN_FINISHED]
     assert len(finished) == 1 and finished[0].payload["status"] == "failed"
     counts = store.task_ledger("fail").profile()["counts"]
@@ -504,3 +504,58 @@ RETURN OUT.hold, OUT.side, OUT.last
     assert report.ok, report.findings
     counts = store.task_ledger("crashy").profile()["counts"]
     assert counts["completed"] == 3 and counts["cancelled"] == 0
+
+
+def test_frontier_failure_no_dispatched_without_terminal(tmp_path):
+    """Issue #31: after a concurrent failure, no DISPATCHED invocation
+    lacks a terminal event (FAILED or SUCCEEDED)."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def define(goal: Any = None, **_: Any) -> Any:
+        if goal == "hold":
+            started.set()
+            release.wait(timeout=5)
+        return f"defined:{goal}"
+
+    def boom(**_: Any) -> Any:
+        raise RuntimeError("explode")
+
+    worker = DeterministicWorker({"define": define, "report": boom})
+    program = parse_program(
+        """\
+PROGRAM fail_inv VERSION 1.0
+INPUT
+    G.hold = "hold"
+    G.side = "side"
+step.hold: DO define(goal = G.hold) -> OUT.hold
+step.boom: DO report(committed_refs = G.side, format = "md") -> ART.side
+step.after: DO define(goal = G.side) -> OUT.after
+RETURN OUT.hold, ART.side
+"""
+    )
+    store = EventStore(str(tmp_path / "ev.sqlite"))
+    coordinator = SequentialCoordinator(store, worker)
+    result = coordinator.execute(program, "fail-inv", max_workers=2)
+    release.set()
+
+    assert result["status"] == "failed"
+    events = store.events("fail-inv")
+    finished = [e for e in events if e.event_type is EventType.RUN_FINISHED]
+    assert len(finished) == 1
+
+    dispatched_ids = {
+        e.invocation_id
+        for e in events
+        if e.event_type is EventType.INVOCATION_DISPATCHED and e.invocation_id
+    }
+    terminal_ids = {
+        e.invocation_id
+        for e in events
+        if e.event_type in (EventType.SUCCEEDED, EventType.FAILED) and e.invocation_id
+    }
+    orphans = dispatched_ids - terminal_ids
+    assert not orphans, f"DISPATCHED without terminal: {orphans}"
+
+    report = audit_run(store, "fail-inv")
+    assert report.ok, report.findings

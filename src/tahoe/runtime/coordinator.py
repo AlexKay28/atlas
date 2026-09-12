@@ -2386,6 +2386,114 @@ class SequentialCoordinator:
         )
         return {"run_id": run_id, "status": "failed", "error": error, "outputs": {}}
 
+    def _fail_run_from_exception(
+        self,
+        run_id: str,
+        plan: list["_PlanEntry"],
+        statement_to_task: dict[int, str],
+        error: str,
+    ) -> None:
+        """Centralized failure batch for an unhandled driver exception.
+
+        Issue #31: when ``_execute_program``'s drive calls raise an
+        unexpected exception (``store.append`` failure,
+        ``TaskLedgerError``, ``RuntimeError("frontier stalled")``, etc.),
+        the run is left with RUN_STARTED committed and no RUN_FINISHED.
+        This method appends one atomic batch that marks every dispatched
+        but not-yet-terminal invocation FAILED, cancels all unsettled
+        tasks, and records RUN_FINISHED(failed) — so the audit invariant
+        "no DISPATCHED without a terminal event after RUN_FINISHED"
+        holds even on a driver crash.
+
+        Best-effort: if the batch itself fails (store is wedged), nothing
+        more can be done — the exception is swallowed and the run stays
+        non-terminal, but at least the process does not crash with an
+        unhandled traceback.
+        """
+        events = self.store.events(run_id)
+        dispatched_invocations: set[str] = set()
+        terminal_invocations: set[str] = set()
+        validated_invocations: set[str] = set()
+        for event in events:
+            if event.event_type is EventType.INVOCATION_DISPATCHED and event.invocation_id:
+                dispatched_invocations.add(event.invocation_id)
+            if event.event_type is EventType.SUCCEEDED and event.invocation_id:
+                terminal_invocations.add(event.invocation_id)
+            if event.event_type is EventType.FAILED and event.invocation_id:
+                terminal_invocations.add(event.invocation_id)
+            if event.event_type is EventType.VALIDATION_PASSED and event.invocation_id:
+                validated_invocations.add(event.invocation_id)
+        inflight = dispatched_invocations - terminal_invocations
+        inflight = inflight - validated_invocations
+
+        records: list[_Record] = []
+        for invocation_id in sorted(inflight):
+            idx_match = re.fullmatch(r"inv-(\d+)", invocation_id)
+            if idx_match is None:
+                continue
+            idx = int(idx_match.group(1)) - 1
+            task_id = statement_to_task.get(idx)
+            if task_id is None:
+                continue
+            instruction_id = ""
+            if 0 <= idx < len(plan):
+                entry = plan[idx]
+                instruction_id = (
+                    entry.call.protocol
+                    if entry.call is not None
+                    else (entry.invocation.step_id if entry.invocation else "")
+                )
+            records.append(_Record(
+                event_type=EventType.FAILED,
+                instruction_id=instruction_id,
+                invocation_id=invocation_id,
+                task_id=task_id,
+                payload={"error": f"cancelled: {error}"},
+                store=self.store,
+            ))
+            records.append(_Record(
+                event_type=EventType.TASK_UPDATED,
+                task_id=task_id,
+                payload={
+                    "kind": "invocation_recorded", "id": task_id,
+                    "tokens": 0, "cost": 0.0, "retries": 0,
+                    "elapsed_seconds": 0.0,
+                },
+                store=self.store,
+            ))
+            records.append(_Record(
+                event_type=EventType.TASK_UPDATED,
+                task_id=task_id,
+                payload={"kind": "task_cancelled", "id": task_id},
+                store=self.store,
+            ))
+
+        for pending_idx in range(len(plan)):
+            if pending_idx in statement_to_task:
+                inv_id = f"inv-{pending_idx + 1}"
+                if inv_id in terminal_invocations or inv_id in inflight:
+                    continue
+                records.append(_Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=statement_to_task[pending_idx],
+                    payload={
+                        "kind": "task_cancelled",
+                        "id": statement_to_task[pending_idx],
+                    },
+                    store=self.store,
+                ))
+
+        records.append(_Record(
+            event_type=EventType.RUN_FINISHED,
+            payload={"status": "failed", "error": error},
+            store=self.store,
+        ))
+
+        try:
+            self.store.append_batch(run_id, records)
+        except Exception:
+            pass
+
     def _run_conditionals(
         self,
         run_id: str,
@@ -3900,32 +4008,49 @@ class SequentialCoordinator:
 
         statement_to_task = self._create_plan_tasks(run_id, plan)
 
-        if concurrent_run:
-            return self._drive_plan_concurrent(
+        try:
+            if concurrent_run:
+                return self._drive_plan_concurrent(
+                    program,
+                    run_id,
+                    plan,
+                    values,
+                    statement_to_task,
+                    crash_hook=crash_hook,
+                    max_workers=max_workers,
+                    gate=gate,
+                    claims=claims,
+                )
+
+            return self._drive_plan(
                 program,
                 run_id,
                 plan,
                 values,
                 statement_to_task,
+                start_idx=0,
                 crash_hook=crash_hook,
-                max_workers=max_workers,
                 gate=gate,
                 claims=claims,
+                branch_root=branch_workspace,
+                branch_claim=branch_claim,
             )
+        except (CrashInterrupt, KeyboardInterrupt):
+            raise
+        except Exception:
+            import traceback
 
-        return self._drive_plan(
-            program,
-            run_id,
-            plan,
-            values,
-            statement_to_task,
-            start_idx=0,
-            crash_hook=crash_hook,
-            gate=gate,
-            claims=claims,
-            branch_root=branch_workspace,
-            branch_claim=branch_claim,
-        )
+            tb_summary = traceback.format_exc().strip()
+            error_msg = f"RUN_FINISHED failed with traceback summary:\n{tb_summary}"
+            self._fail_run_from_exception(
+                run_id, plan, statement_to_task, error_msg
+            )
+            return {
+                "run_id": run_id,
+                "status": "failed",
+                "error": error_msg,
+                "outputs": {},
+            }
 
     def _resume_existing_run(
         self,
@@ -5411,6 +5536,7 @@ class SequentialCoordinator:
                 for pending_idx in range(len(plan))
                 if pending_idx != exclude
                 and pending_idx not in terminal
+                and pending_idx not in in_flight
                 and pending_idx in statement_to_task
             ]
 
@@ -5458,6 +5584,47 @@ class SequentialCoordinator:
                 store=self.store,
             ))
             records.extend(cancel_all_unsettled(exclude=idx))
+            # Issue #31: in-flight sibling invocations have a committed
+            # DISPATCHED but no terminal event — mark them FAILED so the
+            # audit invariant "no DISPATCHED without a terminal event
+            # after RUN_FINISHED" holds (mirrors fail_global_deadline).
+            for inflight_idx in sorted(in_flight):
+                if inflight_idx == idx:
+                    continue
+                inflight_entry = plan[inflight_idx]
+                inflight_instruction = (
+                    inflight_entry.call.protocol
+                    if inflight_entry.call is not None
+                    else inflight_entry.invocation.step_id
+                )
+                inflight_task = statement_to_task.get(inflight_idx)
+                if inflight_task is None:
+                    continue
+                inflight_invocation = f"inv-{inflight_idx + 1}"
+                records.append(_Record(
+                    event_type=EventType.FAILED,
+                    instruction_id=inflight_instruction,
+                    invocation_id=inflight_invocation,
+                    task_id=inflight_task,
+                    payload={"error": f"cancelled: {error}"},
+                    store=self.store,
+                ))
+                records.append(_Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=inflight_task,
+                    payload={
+                        "kind": "invocation_recorded", "id": inflight_task,
+                        "tokens": 0, "cost": 0.0, "retries": 0,
+                        "elapsed_seconds": 0.0,
+                    },
+                    store=self.store,
+                ))
+                records.append(_Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=inflight_task,
+                    payload={"kind": "task_cancelled", "id": inflight_task},
+                    store=self.store,
+                ))
             records.append(_Record(
                 event_type=EventType.RUN_FINISHED,
                 payload={"status": "failed", "error": error},
