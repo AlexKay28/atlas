@@ -1,0 +1,34 @@
+# Tikhon run for GitHub issue #45: KB recall — FTS5 ranking over values
+# Sealed BEFORE any source edit (Tikhon protocol step 2).
+# Uses only registered commands; arguments are single typed references or JSON literals.
+
+PROGRAM sprint1_45_kb_recall VERSION 1.0
+
+INPUT
+    G.goal = "Add FTS5 shadow table over canonical value text in memory.py maintained inside set()/delete(), expose recall(query, k=5) -> list[(key, score)] ranked by bm25, keep existing get()/keys()/KB.<name> exact-ref grammar unchanged, store shadow-table schema version defensively and recreate lazily on old DB files"
+    C.scope = "src/tikhon/memory.py, tests/test_memory.py, demo/runs/sprint1-45-kb-recall/"
+    C.done = "recall('deploy') ranks the key whose value mentions deploy first; delete() removes a key from recall results; exact get/keys behavior unchanged (existing tests pass unchanged); recall on empty KB returns []; full pytest suite green at 760+; git status --porcelain shows only owned files"
+    C.forbidden = "do not touch coordinator.py, cli.py, envelope.py, worker_adapter.py, benchmarks.py, bridge.py, budgets.py, resume.py, events.py; do not fix thread-safety (separate issue); do not add new program syntax; do not read or touch .opencode/**, .skill-work/**, .claude/**, node_modules/**, .git/**, docs/**, README.md"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "fts5_shadow_design") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "additive_recall_api") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.goal, evidence = E.findings) -> H.theses
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue45-kb-recall", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue45-kb-recall") -> K.recalled
+step.design: DO summarize(source_refs = E.findings, budget = 4000) -> P.design
+step.solve: DO solve(problem = G.goal, domain = "sqlite_fts5") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.patch: DO edit(path = "src/tikhon/memory.py", content = "FTS5 shadow table + recall()") -> ART.patch
+step.test: DO test(path = "tests/test_memory.py", timeout_seconds = 600) -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = [V.verdict, ART.patch], format = "markdown") -> ART.report
+step.verify: DO verify(goal = G.goal, evidence = [ART.patch, V.tests, V.verdict]) -> V.result
+
+RETURN P.design, V.verdict, V.result, K.recalled

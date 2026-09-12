@@ -98,3 +98,59 @@ def test_non_serializable_value_rejected(tmp_path):
         with pytest.raises(ValueError, match="JSON-serializable"):
             kb.set("kb.bad", object())
         assert "kb.bad" not in kb
+
+
+# --- Issue #45: recall() FTS5 ranking over values ---
+
+def test_recall_ranks_matching_key_first(tmp_path):
+    with KnowledgeBase(tmp_path / "kb.sqlite") as kb:
+        kb.set("kb.config", {"text": "database connection settings"})
+        kb.set("kb.deploy_steps", {"text": "how to deploy the service"})
+        kb.set("kb.notes", {"text": "random meeting notes about lunch"})
+        results = kb.recall("deploy")
+        assert len(results) > 0
+        assert results[0][0] == "kb.deploy_steps"
+
+
+def test_delete_removes_key_from_recall(tmp_path):
+    with KnowledgeBase(tmp_path / "kb.sqlite") as kb:
+        kb.set("kb.alpha", {"text": "deploy instructions here"})
+        kb.set("kb.beta", {"text": "deploy guide for production"})
+        results_before = kb.recall("deploy")
+        keys_before = [k for k, _ in results_before]
+        assert "kb.alpha" in keys_before
+        kb.delete("kb.alpha")
+        results_after = kb.recall("deploy")
+        keys_after = [k for k, _ in results_after]
+        assert "kb.alpha" not in keys_after
+
+
+def test_recall_empty_kb_returns_empty(tmp_path):
+    with KnowledgeBase(tmp_path / "kb.sqlite") as kb:
+        assert kb.recall("anything") == []
+
+
+def test_recall_lazy_creation_on_old_db(tmp_path):
+    """An old DB file created without FTS5 gets the shadow table on reopen."""
+    path = tmp_path / "kb.sqlite"
+    # Simulate an old DB: create the knowledge table and insert a row
+    # WITHOUT creating the FTS5 shadow table (as a pre-#45 version would).
+    import sqlite3
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        "CREATE TABLE knowledge ("
+        "key TEXT PRIMARY KEY, value TEXT NOT NULL,"
+        " source_run TEXT, updated_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO knowledge (key, value, source_run, updated_at)"
+        " VALUES (?, ?, ?, ?)",
+        ("kb.legacy", '{"text":"created before fts5 support"}', None, "2026-01-01"),
+    )
+    conn.commit()
+    conn.close()
+    # Now open with the new KnowledgeBase — it should create + backfill FTS5.
+    with KnowledgeBase(path) as kb:
+        results = kb.recall("created")
+        assert len(results) > 0
+        assert results[0][0] == "kb.legacy"
