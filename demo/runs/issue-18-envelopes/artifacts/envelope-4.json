@@ -1,0 +1,55 @@
+{
+  "arguments": {
+    "budget": 12000,
+    "source_refs": [
+      {
+        "design": "TaskEnvelope/ResultEnvelope schema v1 dataclasses with strict from_json; external driver reuses coordinator plan/ledger machinery; ModelWorker prompts from TaskEnvelope and parses replies into ResultEnvelope"
+      },
+      "src/tikhon/envelope.py, src/tikhon/worker_adapter.py, src/tikhon/cli.py, tests/test_envelope.py"
+    ]
+  },
+  "attempt": 1,
+  "command": "summarize",
+  "command_version": "1.0.0",
+  "contract": {
+    "budget": {
+      "max_attempts": 2,
+      "max_cost": 0.1,
+      "max_output_bytes": 131072,
+      "max_seconds": 60.0,
+      "max_tokens": 6000
+    },
+    "capabilities": [
+      "language_model"
+    ],
+    "done_condition": "claims_retain_source_refs_and_no_new_claims_are_introduced",
+    "effect_class": "read_only",
+    "execution": "immediate",
+    "inputs": [
+      "source_refs:refs",
+      "budget:token_cap"
+    ],
+    "outputs": [
+      "summary:artifact",
+      "claim_source_map:refs"
+    ],
+    "purpose": "Produce a bounded summary whose claims trace to sources"
+  },
+  "deadline_seconds": 60.0,
+  "done": null,
+  "idempotency_key": "issue-18-envelopes:inv-4",
+  "input_digest": "f379a17a19862fac9414a5d4953cf07b63bfb9494ed9cfb9422b5b34fd18d642",
+  "invocation_id": "inv-4",
+  "program": {
+    "name": "issue_18_envelopes",
+    "version": "1.0"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "seal_digest": "fa9e60b6f371b4c3313b1cbf94c5bdae587c2a7320d852126e785fcc27da304f",
+  "targets": [
+    "P.patch"
+  ],
+  "task_id": "task-4",
+  "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-18-envelopes"
+}

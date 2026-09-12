@@ -1,0 +1,7 @@
+# tikhon status
+[====================] 100% completed 6/6
+current task: step.verify: DO verify
+# tikhon audit
+OK
+# tikhon events (types)
+run.started task.updated task.updated task.updated task.updated task.updated task.updated task.updated invocation.ready invocation.dispatched invocation.result_received invocation.validation_passed invocation.succeeded task.updated task.updated task.updated invocation.ready invocation.dispatched invocation.result_received invocation.validation_passed invocation.succeeded task.updated task.updated task.updated invocation.ready invocation.dispatched invocation.result_received invocation.validation_passed invocation.succeeded task.updated task.updated task.updated invocation.ready invocation.dispatched invocation.result_received invocation.validation_passed invocation.succeeded task.updated task.updated task.updated invocation.ready invocation.dispatched invocation.result_received invocation.validation_passed invocation.succeeded task.updated task.updated task.updated invocation.ready invocation.dispatched invocation.result_received invocation.validation_passed invocation.succeeded task.updated task.updated run.finished

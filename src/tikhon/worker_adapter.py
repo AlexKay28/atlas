@@ -1,4 +1,4 @@
-"""Model worker adapter with tier-based routing (issue #8).
+"""Model worker adapter with tier-based routing (issues #8 and #18).
 
 ``ModelWorker`` duck-types ``DeterministicWorker`` (``.commands`` property,
 ``.execute(command, resolved_kwargs)``) but produces DO results by
@@ -7,6 +7,22 @@ Python handler.  All network/subprocess detail lives behind the
 ``transport`` callable — ``transport(model: str, prompt: str) -> str`` —
 so tests use stubs and the CLI wires real HTTP/exec transports from
 environment configuration (see ``tikhon.cli._build_model_worker``).
+
+Issue #18 binding: every dispatch is rendered as a
+``tikhon.envelope.TaskEnvelope`` — the resolved contract summary, pinned
+resolved arguments, targets, DONE predicate and an input-digest
+idempotency key — and the prompt is built from that envelope (the
+envelope's canonical JSON is embedded in the prompt, so the worker sees
+the same binding a harness-neutral driver would submit).  The model's
+reply is parsed strictly and wrapped into a ``tikhon.envelope.
+ResultEnvelope`` (status ``succeeded``, payload, receipt with model
+identity and usage — ``None`` usage meaning telemetry unavailable, not
+zero) before its payload is returned.  Because the coordinator's pinned
+``execute(command, resolved_kwargs)`` seam carries no run identity, the
+adapter renders a direct-dispatch envelope whose identity placeholders
+are the ``direct`` constants from ``tikhon.envelope``; runs dispatched
+through ``tikhon next`` carry real ``run/invocation/task`` identity in
+their envelopes instead.
 
 Routing picks the model per the command contract's ``RoutingPolicy``:
 ``tier_models[preferred_tier]`` first (keys may be the strings "T0".."T3"
@@ -24,6 +40,17 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Mapping, Sequence
 
+from tikhon.envelope import (
+    DIRECT_DISPATCH_INVOCATION_ID,
+    DIRECT_DISPATCH_RUN_ID,
+    DIRECT_DISPATCH_TASK_ID,
+    ENVELOPE_SCHEMA_VERSION,
+    EnvelopeValidationError,
+    ResultEnvelope,
+    TaskEnvelope,
+    build_task_envelope,
+    envelope_input_digest,
+)
 from tikhon.registry.enums import RoutingTier
 from tikhon.registry.registry import Registry
 from tikhon.runtime.coordinator import map_results_to_targets
@@ -97,6 +124,10 @@ class ModelWorker:
         # Retained for callers that build transports around this worker;
         # the transport itself owns all I/O details including its deadline.
         self.timeout_seconds = timeout_seconds
+        # Issue #18 diagnostics: the envelope the last dispatch rendered
+        # and the result envelope its reply was parsed into.
+        self.last_task_envelope: TaskEnvelope | None = None
+        self.last_result_envelope: ResultEnvelope | None = None
 
     @property
     def commands(self) -> set[str]:
@@ -119,9 +150,26 @@ class ModelWorker:
         spec = self._registry.resolve(command)
         model = self._resolve_model(spec)
         target_refs = tuple(targets) if targets is not None else ()
-        prompt = self._build_prompt(spec, resolved_kwargs, target_refs)
+        task_envelope = build_task_envelope(
+            self._registry,
+            run_id=DIRECT_DISPATCH_RUN_ID,
+            invocation_id=DIRECT_DISPATCH_INVOCATION_ID,
+            task_id=DIRECT_DISPATCH_TASK_ID,
+            attempt=1,
+            idempotency_key=(
+                f"direct:{envelope_input_digest(command, resolved_kwargs)}"
+            ),
+            command=command,
+            arguments=dict(resolved_kwargs),
+            targets=target_refs,
+        )
+        self.last_task_envelope = task_envelope
+        prompt = self._build_prompt(task_envelope)
         raw = self._transport(model, prompt)
         parsed = self._parse_response(raw, command)
+        result_envelope = self._build_result_envelope(
+            task_envelope, model, parsed, raw
+        )
         if target_refs:
             _, mapping_error = map_results_to_targets(target_refs, parsed)
             if mapping_error is not None:
@@ -130,7 +178,7 @@ class ModelWorker:
                     f" target mapping: {mapping_error}",
                     raw if isinstance(raw, str) else None,
                 )
-        return parsed
+        return result_envelope.payload
 
     def _resolve_model(self, spec: Any) -> str:
         """Preferred tier first, then ``default_model``; else ``WorkerError``."""
@@ -148,26 +196,32 @@ class ModelWorker:
             )
         return model
 
-    def _build_prompt(
-        self,
-        spec: Any,
-        resolved_kwargs: Mapping[str, Any],
-        targets: tuple[str, ...],
-    ) -> str:
-        """Contract preamble + resolved kwargs + strict JSON-only reply rule."""
+    def _build_prompt(self, envelope: TaskEnvelope) -> str:
+        """Contract preamble rendered FROM the TaskEnvelope.
+
+        The envelope's canonical JSON is embedded so the worker sees the
+        exact dispatch binding (identity, idempotency key, pinned
+        arguments, output contract); the remaining lines restate the
+        resolved contract fields carried by the envelope.
+        """
+        contract = envelope.contract
         lines = [
             "You are the model worker executing one step of a tikhon program.",
             "",
-            f"Command: {spec.name} (version {spec.version})",
-            f"Purpose: {spec.purpose}",
-            f"Inputs: {', '.join(spec.inputs)}",
-            f"Outputs: {', '.join(spec.outputs)}",
-            f"Done condition: {spec.done}",
+            "Task envelope (schema v1, canonical JSON):",
+            envelope.to_json(),
+            "",
+            f"Command: {envelope.command} (version {envelope.command_version})",
+            f"Purpose: {contract['purpose']}",
+            f"Inputs: {', '.join(contract['inputs'])}",
+            f"Outputs: {', '.join(contract['outputs'])}",
+            f"Done condition: {contract['done_condition']}",
             "",
             "Resolved arguments (JSON):",
-            json.dumps(dict(resolved_kwargs), ensure_ascii=False, sort_keys=True, default=str),
+            json.dumps(dict(envelope.arguments), ensure_ascii=False, sort_keys=True, default=str),
             "",
         ]
+        targets = envelope.targets
         if len(targets) > 1:
             lines.append(
                 "This step commits results to multiple targets:"
@@ -190,6 +244,47 @@ class ModelWorker:
                 " single target any JSON value is acceptable."
             )
         return "\n".join(lines)
+
+    def _build_result_envelope(
+        self,
+        task_envelope: TaskEnvelope,
+        model: str,
+        parsed: Any,
+        raw: Any,
+    ) -> ResultEnvelope:
+        """Wrap the parsed reply INTO a validated ResultEnvelope.
+
+        The reply payload becomes a ``succeeded`` result; the receipt
+        records the routed model identity and usage with ``None`` tokens
+        (telemetry unavailable — distinguished from a measured zero).
+        """
+        result_envelope = ResultEnvelope(
+            schema_version=ENVELOPE_SCHEMA_VERSION,
+            run_id=task_envelope.run_id,
+            invocation_id=task_envelope.invocation_id,
+            task_id=task_envelope.task_id,
+            attempt=task_envelope.attempt,
+            idempotency_key=task_envelope.idempotency_key,
+            command=task_envelope.command,
+            status="succeeded",
+            payload=parsed,
+            evidence=(),
+            error=None,
+            receipt={
+                "model": model,
+                "usage": {"tokens": None, "cost": None},
+            },
+        )
+        try:
+            result_envelope.validate()
+        except EnvelopeValidationError as exc:
+            raise WorkerError(
+                f"model response for command {task_envelope.command!r}"
+                f" produced an invalid result envelope: {exc}",
+                raw if isinstance(raw, str) else None,
+            ) from exc
+        self.last_result_envelope = result_envelope
+        return result_envelope
 
     def _parse_response(self, raw: Any, command: str) -> Any:
         """Strict JSON parse after stripping one optional ```json fence."""

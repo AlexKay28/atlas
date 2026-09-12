@@ -1,0 +1,65 @@
+{
+  "task": "GitHub issue #18 (step 1 of epic #27): define the task/result envelope protocol and backend binding — TaskEnvelope/ResultEnvelope schema v1 with strict validation, ModelWorker bound to the protocol (prompt from TaskEnvelope, reply into ResultEnvelope, transport seam and coordinator dispatch signature unchanged), and a sequential external-driver round trip (tikhon next / tikhon submit) that drives a run to completion with the worker never holding the event store open",
+  "run_id": "issue-18-envelopes",
+  "seal": "fa9e60b6f371b4c3313b1cbf94c5bdae587c2a7320d852126e785fcc27da304f",
+  "terminal_status": "succeeded",
+  "steps_planned": 6,
+  "steps_executed": 6,
+  "acceptance": [
+    {
+      "criterion": "Deliver a harness-neutral task/result envelope protocol: canonical JSON envelopes for coordinator->worker dispatch and worker->coordinator results with schema version, run/invocation/task identity, attempt, idempotency key, command, arguments, contract summary and (results) status succeeded|failed|blocked, payload, evidence, error; encoded as dataclasses with to_json/from_json and strict validation with clear errors",
+      "passed": true,
+      "evidence": "src/tikhon/envelope.py defines frozen TaskEnvelope/ResultEnvelope dataclasses (ENVELOPE_SCHEMA_VERSION '1') with to_json/from_json/to_dict/from_dict; from_json rejects unknown fields, missing fields, wrong schema version, empty identity, non-object wire text, invalid JSON with messages naming the defect; ResultEnvelope.status is constrained to ('succeeded','failed','blocked') with error required nonempty for failed/blocked and null for succeeded. tests/test_envelope.py::test_task_envelope_round_trips_through_json, test_result_envelope_round_trips_through_json (+ failed/blocked variant) prove dataclass->json->dataclass equality; eleven validation-rejection tests cover the defect matrix."
+    },
+    {
+      "criterion": "Bind the existing ModelWorker: prompt built FROM a TaskEnvelope and reply parsed INTO a ResultEnvelope, keeping the transport seam and the coordinator's execute(command, resolved_kwargs) dispatch signature unchanged; all existing tests preserved",
+      "passed": true,
+      "evidence": "worker_adapter.py renders every dispatch via build_task_envelope and embeds the envelope's canonical JSON in the prompt (tests/test_envelope.py::test_model_worker_prompt_is_built_from_task_envelope asserts envelope.to_json() appears in the captured prompt); the reply is validated into a ResultEnvelope (test_model_worker_parses_reply_into_result_envelope: status/payload/identity echo, receipt usage tokens None = unavailable). The transport seam transport(model, prompt) and the 2-argument coordinator dispatch are untouched; the full pre-existing test_worker_adapter.py suite passes unmodified, and test_external_round_trip_event_sequence_matches_coordinator proves driver-driven events match coordinator-driven events for the same program."
+    },
+    {
+      "criterion": "Sequential external-driver round trip: tikhon next renders the next ready invocation's envelope from the event store; tikhon submit accepts a result file and writes RESULT_RECEIVED and, when valid, VALIDATION/SUCCEEDED events through the same coordinator machinery; the worker process never holds the store open",
+      "passed": true,
+      "evidence": "cli.py adds next (seal-verified, prints one canonical envelope JSON line) and submit (parses/validates the result envelope, cross-checks run/invocation/idempotency/attempt/task/command, then commits via EventStore.append_batch with the coordinator's own map_results_to_targets/evaluate_done_predicate and event shapes). tests/test_envelope.py::test_next_submit_cli_round_trip_finishes_run drives a 2-step program externally to a succeeded run with audit_run OK, completed ledger and correct projected state; test_next_is_idempotent_while_awaiting_result proves re-next is side-effect-free. The demo run was driven end-to-end externally (artifacts/external_driver_session.py, CLI only): 6/6 steps, terminal succeeded, tikhon audit OK (artifacts/session-evidence.txt)."
+    },
+    {
+      "criterion": "Issue #18's semantic-result rule: process exit code alone is not success — results are validated before acceptance; duplicate, stale (idempotency key / attempt), malformed, failed, blocked and unsupported-capability behaviors are specified",
+      "passed": true,
+      "evidence": "tests: test_submit_rejects_duplicate_result (second submit rc 1, 'duplicate submission'), test_submit_rejects_stale_idempotency_key and test_submit_rejects_stale_attempt (rc 1, nothing appended), test_submit_rejects_malformed_result_without_appending (rc 1, event count unchanged), test_failed_result_fails_run_and_audit_stays_clean (FAILED + RUN_FINISHED(failed), audit OK, terminal thereafter), test_blocked_result_finishes_run_blocked (BLOCKED + RUN_FINISHED(blocked), audit OK), test_done_predicate_failure_fails_run_with_validation_event (VALIDATION_FAILED + FAILED + RUN_FINISHED(failed)). Unsupported capability surfaces as UnknownCommandError from build_task_envelope/registry.resolve at dispatch time."
+    },
+    {
+      "criterion": "Usage accounting distinguishes unavailable telemetry from measured zero and never double-counts reasoning tokens",
+      "passed": true,
+      "evidence": "ResultEnvelope.receipt['usage']['tokens'] is a measured int or None (unavailable): the ModelWorker receipt records {'tokens': None} (test_model_worker_parses_reply_into_result_envelope), the demo session receipts carry tokens None (artifacts/result-*.json), and the ledger path records measured values only, preserving the None in the durable RESULT_RECEIVED payload (envelope.py _recorded_usage docstring + test_receipt_usage_is_recorded_in_the_ledger shows tokens 25 landing in the ledger). No token summation anywhere double-counts a total."
+    },
+    {
+      "criterion": "Contract tests reusable by the #8/#11 OpenCode adapter: the protocol is a plain dataclass/JSON layer independent of the transport",
+      "passed": true,
+      "evidence": "envelope.py imports nothing transport-specific; the same TaskEnvelope/ResultEnvelope JSON is produced by the ModelWorker path (direct dispatch) and the external-driver path (durable dispatch) and validated by shared from_json/validate; tests exercise both paths through the public API only, so an OpenCode adapter can reuse them verbatim by constructing envelopes and submitting ResultEnvelopes."
+    },
+    {
+      "criterion": "Full pytest suite passes at the end; deterministic CI baseline unchanged",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: baseline 540 passed before edits; final run 571 passed (540 + 31 new) in 7.85s, zero failures. Default CLI behavior (lint/seal/run/resume/status/events/audit/learn) untouched."
+    },
+    {
+      "criterion": "Touch ONLY the allowed paths; forbidden paths untouched; no commits",
+      "passed": true,
+      "evidence": "git status --porcelain shows this run's changes confined to src/tikhon/cli.py (M), src/tikhon/worker_adapter.py (M), src/tikhon/envelope.py (new), tests/test_envelope.py (new), demo/runs/issue-18-envelopes/ (new). The docs/README.md modification and demo/runs/issue-17-reasoning-language/ and docs/design/ untracked paths are concurrent other-agent work never edited by this run. coordinator.py, events.py, tasks.py, registry/, resume.py, audit.py, syntax/, protocols/, docs/, other demo runs: untouched. No git commits made."
+    },
+    {
+      "criterion": "Tikhon protocol honored: program.think sealed before source edits and never modified afterwards; WORKLOG.md maintained per step",
+      "passed": true,
+      "evidence": "program.think was linted 'valid' and sealed to seal.txt (fa9e60b6f371b4c3313b1cbf94c5bdae587c2a7320d852126e785fcc27da304f) before the first source edit; recomputing the seal after all edits reproduces it byte-for-byte; WORKLOG.md carries frame/locate/design/patch/check/verify with Status/Inputs/Actions/Outputs/Evidence."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The issue's full contract surface (capabilities/start/poll/cancel lifecycle, per-dispatch backend binding persistence, workspace artifacts, deadline enforcement) is deliberately larger than step 1's mandate; this run delivers the shared envelope protocol, the ModelWorker binding, and the sequential external round trip. Cancellation, polling/heartbeat, attempt escalation and retry semantics remain for the #8 backend-dispatch step; blocked results currently finish the run with RUN_FINISHED(status 'blocked') rather than suspending the invocation.",
+    "submit is store-only (per the specified CLI signature: no --program): it reads the output contract from the driver's DISPATCHED envelope binding (additive payload keys command/targets/done/revisions/retirements alongside the coordinator's args/idempotency_key). A run dispatched by the in-process coordinator (tikhon run) carries no binding, so submit rejects it with a clear error; submit also accepts optional --program/--seal to verify the run's recorded program identity.",
+    "The external driver supports plain sequential DO steps only: programs containing IF conditionals or CALL statements are rejected up front with a clear DriverError instead of being partially driven (source-anchored conditionals are evaluated inside coordinator._drive_plan, which the driver must not bypass silently). REVISE/RETIRE correction clauses ARE supported end-to-end via the dispatch binding and state deltas.",
+    "The ModelWorker's direct-dispatch envelope uses documented identity placeholders (run_id 'direct', invocation_id 'dispatch', task_id 'direct', idempotency_key 'direct:<input-digest>') because the coordinator's pinned 2-argument execute seam carries no run identity; the adapter-level targets may be empty (coordinator path validates results itself), while driver-rendered envelopes always carry the grammatical targets.",
+    "RESULT_RECEIVED payloads written by the driver carry additive receipt/evidence keys alongside the coordinator's 'result' key ({'result': ..., 'receipt': {...}, 'evidence': [...]}); consumers reading payload['result'] are unaffected, and audit invariants are unchanged.",
+    "The task brief mentioned 'all 23 commands registered'; the builtin registry actually registers 22 commands (define, search, fetch, extract, summarize, report, verify, calculate, check, decompose, hypothesize, compare, rank, challenge, choose, remember, recall, edit, test, review, solve, prove). The demo program uses six of them; every command in program.think is registered and lint reports valid.",
+    "The installed tikhon console script resolves a stale non-editable site-packages copy, so all CLI invocations ran via PYTHONPATH=src python3 -m tikhon (same workaround as issues #6/#7/#8)."
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "arguments": {
+    "evidence": [
+      {
+        "patch": "src/tikhon/envelope.py (protocol + external driver), src/tikhon/worker_adapter.py (envelope binding), src/tikhon/cli.py (next/submit), tests/test_envelope.py"
+      },
+      "pass"
+    ],
+    "goal": "Define the task/result envelope protocol and drive a sequential external round trip"
+  },
+  "attempt": 1,
+  "command": "verify",
+  "command_version": "1.0.0",
+  "contract": {
+    "budget": {
+      "max_attempts": 2,
+      "max_cost": 0.1,
+      "max_output_bytes": 65536,
+      "max_seconds": 60.0,
+      "max_tokens": 6000
+    },
+    "capabilities": [
+      "predicate_evaluation",
+      "language_model"
+    ],
+    "done_condition": "original_acceptance_condition_evaluated_with_recorded_result",
+    "effect_class": "read_only",
+    "execution": "immediate",
+    "inputs": [
+      "goal:G",
+      "evidence:artifacts"
+    ],
+    "outputs": [
+      "verdict:V",
+      "verdict_evidence:refs"
+    ],
+    "purpose": "Evaluate original acceptance conditions against collected evidence"
+  },
+  "deadline_seconds": 60.0,
+  "done": null,
+  "idempotency_key": "issue-18-envelopes:inv-6",
+  "input_digest": "c024e88d6d2de1a3431e8601c33d0f6bb0c95217508f90b01a914a8e37c4fffb",
+  "invocation_id": "inv-6",
+  "program": {
+    "name": "issue_18_envelopes",
+    "version": "1.0"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "seal_digest": "fa9e60b6f371b4c3313b1cbf94c5bdae587c2a7320d852126e785fcc27da304f",
+  "targets": [
+    "V.result"
+  ],
+  "task_id": "task-6",
+  "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-18-envelopes"
+}

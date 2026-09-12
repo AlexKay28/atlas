@@ -1,0 +1,28 @@
+{
+  "attempt": 1,
+  "command": "verify",
+  "error": null,
+  "evidence": [
+    "external-driver-session:verify"
+  ],
+  "idempotency_key": "issue-18-envelopes:inv-6",
+  "invocation_id": "inv-6",
+  "payload": {
+    "audit": "OK",
+    "suite": "571 passed",
+    "verdict": "accepted"
+  },
+  "receipt": {
+    "usage": {
+      "cost": null,
+      "elapsed_seconds": 0.0,
+      "retries": 0,
+      "tokens": null
+    },
+    "worker": "issue-18-external-driver-session"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "status": "succeeded",
+  "task_id": "task-6"
+}

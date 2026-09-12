@@ -28,6 +28,7 @@ efficient than a slightly longer prompt that produces a correct, verifiable resu
 | [Personal Profile](language/06-personal-profile.md) | Convert personal thinking habits into protocol rules |
 | [Enhancement Plan](PLAN.md) | Prioritized path from ADRs to a working runtime |
 | [Related Systems](research/related-systems.md) | External inspirations and explicitly adopted ideas |
+| [Reasoning Language Foundation](design/01-reasoning-language-foundation.md) | Design thesis, source-to-mechanism mapping, falsifiable experiment register, notation policy, and non-goals |
 | [Language and State](spec/01-language-and-state.md) | Canonical syntax, expressions, artifacts, memory, and deltas |
 | [Command Catalog](spec/02-command-catalog.md) | Atomic command contracts and standard operations |
 | [Runtime and Events](spec/03-runtime-and-events.md) | Lifecycle, replay, retries, approval, and concurrency |

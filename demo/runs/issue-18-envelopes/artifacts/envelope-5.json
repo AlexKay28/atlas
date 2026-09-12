@@ -1,0 +1,56 @@
+{
+  "arguments": {
+    "artifact": {
+      "patch": "src/tikhon/envelope.py (protocol + external driver), src/tikhon/worker_adapter.py (envelope binding), src/tikhon/cli.py (next/submit), tests/test_envelope.py"
+    },
+    "criteria": "TaskEnvelope and ResultEnvelope round trip through JSON with strict validation; ModelWorker builds its prompt from a TaskEnvelope and parses replies into ResultEnvelope; tikhon next/submit drives a full run externally; full pytest suite passes"
+  },
+  "attempt": 1,
+  "command": "check",
+  "command_version": "1.0.0",
+  "contract": {
+    "budget": {
+      "max_attempts": 1,
+      "max_cost": 0.0,
+      "max_output_bytes": 8192,
+      "max_seconds": 10.0,
+      "max_tokens": 0
+    },
+    "capabilities": [
+      "predicate_evaluation"
+    ],
+    "done_condition": "predicate_result_and_inspected_version_recorded",
+    "effect_class": "pure",
+    "execution": "immediate",
+    "inputs": [
+      "artifact:immutable",
+      "predicate:deterministic"
+    ],
+    "outputs": [
+      "verdict:V",
+      "inspected_version:ref"
+    ],
+    "purpose": "Run a deterministic predicate over an artifact and record the verdict"
+  },
+  "deadline_seconds": 10.0,
+  "done": {
+    "op": "equals",
+    "ref": "V.tests",
+    "value": "pass"
+  },
+  "idempotency_key": "issue-18-envelopes:inv-5",
+  "input_digest": "e4b74beca48ef4d641e6480e5beb5483c9f868144f3667fcb2bacfeab7069bce",
+  "invocation_id": "inv-5",
+  "program": {
+    "name": "issue_18_envelopes",
+    "version": "1.0"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "seal_digest": "fa9e60b6f371b4c3313b1cbf94c5bdae587c2a7320d852126e785fcc27da304f",
+  "targets": [
+    "V.tests"
+  ],
+  "task_id": "task-5",
+  "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-18-envelopes"
+}

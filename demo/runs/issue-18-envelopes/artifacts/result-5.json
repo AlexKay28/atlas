@@ -1,0 +1,24 @@
+{
+  "attempt": 1,
+  "command": "check",
+  "error": null,
+  "evidence": [
+    "external-driver-session:check"
+  ],
+  "idempotency_key": "issue-18-envelopes:inv-5",
+  "invocation_id": "inv-5",
+  "payload": "pass",
+  "receipt": {
+    "usage": {
+      "cost": null,
+      "elapsed_seconds": 0.0,
+      "retries": 0,
+      "tokens": null
+    },
+    "worker": "issue-18-external-driver-session"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "status": "succeeded",
+  "task_id": "task-5"
+}

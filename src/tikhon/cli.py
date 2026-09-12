@@ -1,7 +1,7 @@
 """Command-line interface for tikhon (docs/spec/02-command-catalog.md).
 
-Commands: lint, seal, run, resume, status, events, audit, learn.
-Uses argparse and the standard library only.
+Commands: lint, seal, run, resume, status, events, audit, learn, next,
+submit.  Uses argparse and the standard library only.
 """
 
 from __future__ import annotations
@@ -18,6 +18,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from tikhon.audit import audit_run
+from tikhon.envelope import (
+    EnvelopeValidationError,
+    ExternalDriver,
+    ResultEnvelope,
+)
 from tikhon.learn import mine_run_directory
 from tikhon.memory import KnowledgeBase
 from tikhon.registry import builtin_registry
@@ -662,6 +667,119 @@ def _cmd_learn(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_validated_program(program_path: str, seal: str | None) -> Any:
+    """Parse, seal-verify and validate a program (run's guard style).
+
+    Returns the parsed program or ``None`` after printing the error.
+    """
+    try:
+        text = _load_source(program_path)
+        program = parse_program(text)
+    except ParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None
+    if seal is not None:
+        actual_digest = seal_digest(program)
+        if seal != actual_digest:
+            print(
+                f"error: seal digest mismatch: expected {actual_digest},"
+                f" got {seal}",
+                file=sys.stderr,
+            )
+            return None
+    try:
+        validate_program(program, known_commands=_builtin_command_names())
+    except ParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None
+    return program
+
+
+def _cmd_next(args: argparse.Namespace) -> int:
+    if not args.seal:
+        print("error: --seal is required for next", file=sys.stderr)
+        return 1
+    program = _load_validated_program(args.program, args.seal)
+    if program is None:
+        return 1
+
+    try:
+        store = EventStore(args.db)
+    except Exception as exc:
+        print(f"error: cannot open event store: {exc}", file=sys.stderr)
+        return 1
+    memory = KnowledgeBase(
+        os.path.join(os.path.dirname(os.path.abspath(args.db)), "kb.sqlite")
+    )
+    workspace = (
+        os.path.abspath(args.workspace)
+        if args.workspace
+        else os.path.dirname(os.path.abspath(args.db))
+    )
+    driver = ExternalDriver(
+        store,
+        program,
+        args.run_id,
+        registry=builtin_registry(),
+        memory=memory,
+        workspace_root=workspace,
+        seal_digest=args.seal,
+    )
+    try:
+        envelope = driver.next_envelope()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        store.close()
+        memory.close()
+        return 1
+    print(envelope.to_json())
+    store.close()
+    memory.close()
+    return 0
+
+
+def _cmd_submit(args: argparse.Namespace) -> int:
+    try:
+        with open(args.result_file, encoding="utf-8") as fh:
+            result_text = fh.read()
+    except OSError as exc:
+        print(f"error: cannot read result file: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        result = ResultEnvelope.from_json(result_text)
+    except EnvelopeValidationError as exc:
+        print(f"error: malformed result envelope: {exc}", file=sys.stderr)
+        return 1
+
+    program = None
+    if args.program:
+        program = _load_validated_program(args.program, args.seal)
+        if program is None:
+            return 1
+
+    try:
+        store = EventStore(args.db)
+    except Exception as exc:
+        print(f"error: cannot open event store: {exc}", file=sys.stderr)
+        return 1
+    driver = ExternalDriver(
+        store, program, args.run_id, registry=builtin_registry()
+    )
+    try:
+        outcome = driver.submit_result(result)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+    print(json.dumps(outcome, sort_keys=True, ensure_ascii=False))
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tikhon",
@@ -760,6 +878,63 @@ def _build_parser() -> argparse.ArgumentParser:
         "--out", default=None, help="Optional path to write the markdown report"
     )
     p_learn.set_defaults(func=_cmd_learn)
+
+    p_next = sub.add_parser(
+        "next",
+        help=(
+            "Render the task envelope for the run's next ready invocation"
+            " (external driver, issue #18)"
+        ),
+    )
+    p_next.add_argument("--db", required=True, help="Path to event store database")
+    p_next.add_argument("--run-id", required=True, help="Run identifier")
+    p_next.add_argument(
+        "--program", required=True, help="Path to the sealed .think source file"
+    )
+    p_next.add_argument(
+        "--seal", default=None, help="Sealed digest, verified exactly like run"
+    )
+    p_next.add_argument(
+        "--workspace",
+        default=None,
+        help=(
+            "Workspace root for effectful commands like edit"
+            " (default: the --db directory)"
+        ),
+    )
+    p_next.set_defaults(func=_cmd_next)
+
+    p_submit = sub.add_parser(
+        "submit",
+        help=(
+            "Submit a result envelope for a dispatched invocation"
+            " (external driver, issue #18)"
+        ),
+    )
+    p_submit.add_argument("--db", required=True, help="Path to event store database")
+    p_submit.add_argument("--run-id", required=True, help="Run identifier")
+    p_submit.add_argument(
+        "--invocation-id", required=True, help="Invocation identifier (inv-N)"
+    )
+    p_submit.add_argument(
+        "--result-file",
+        required=True,
+        help="Path to the JSON file carrying the result envelope",
+    )
+    p_submit.add_argument(
+        "--program",
+        default=None,
+        help=(
+            "Optional path to the sealed .think source file; when given,"
+            " the run's recorded program identity is verified"
+        ),
+    )
+    p_submit.add_argument(
+        "--seal",
+        default=None,
+        help="Sealed digest, verified when --program is given",
+    )
+    p_submit.set_defaults(func=_cmd_submit)
 
     return parser
 

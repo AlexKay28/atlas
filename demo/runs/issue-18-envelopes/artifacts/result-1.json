@@ -1,0 +1,26 @@
+{
+  "attempt": 1,
+  "command": "define",
+  "error": null,
+  "evidence": [
+    "external-driver-session:define"
+  ],
+  "idempotency_key": "issue-18-envelopes:inv-1",
+  "invocation_id": "inv-1",
+  "payload": {
+    "plan": "seal program; implement envelope protocol + worker binding + CLI next/submit; test; verify"
+  },
+  "receipt": {
+    "usage": {
+      "cost": null,
+      "elapsed_seconds": 0.0,
+      "retries": 0,
+      "tokens": null
+    },
+    "worker": "issue-18-external-driver-session"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "status": "succeeded",
+  "task_id": "task-1"
+}

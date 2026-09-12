@@ -1,0 +1,26 @@
+{
+  "attempt": 1,
+  "command": "extract",
+  "error": null,
+  "evidence": [
+    "external-driver-session:extract"
+  ],
+  "idempotency_key": "issue-18-envelopes:inv-3",
+  "invocation_id": "inv-3",
+  "payload": {
+    "design": "TaskEnvelope/ResultEnvelope schema v1 dataclasses with strict from_json; external driver reuses coordinator plan/ledger machinery; ModelWorker prompts from TaskEnvelope and parses replies into ResultEnvelope"
+  },
+  "receipt": {
+    "usage": {
+      "cost": null,
+      "elapsed_seconds": 0.0,
+      "retries": 0,
+      "tokens": null
+    },
+    "worker": "issue-18-external-driver-session"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "status": "succeeded",
+  "task_id": "task-3"
+}

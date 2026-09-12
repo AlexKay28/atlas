@@ -1,0 +1,26 @@
+{
+  "attempt": 1,
+  "command": "summarize",
+  "error": null,
+  "evidence": [
+    "external-driver-session:summarize"
+  ],
+  "idempotency_key": "issue-18-envelopes:inv-4",
+  "invocation_id": "inv-4",
+  "payload": {
+    "patch": "src/tikhon/envelope.py (protocol + external driver), src/tikhon/worker_adapter.py (envelope binding), src/tikhon/cli.py (next/submit), tests/test_envelope.py"
+  },
+  "receipt": {
+    "usage": {
+      "cost": null,
+      "elapsed_seconds": 0.0,
+      "retries": 0,
+      "tokens": null
+    },
+    "worker": "issue-18-external-driver-session"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "status": "succeeded",
+  "task_id": "task-4"
+}

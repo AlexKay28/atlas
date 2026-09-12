@@ -1,0 +1,30 @@
+{
+  "attempt": 1,
+  "command": "search",
+  "error": null,
+  "evidence": [
+    "external-driver-session:search"
+  ],
+  "idempotency_key": "issue-18-envelopes:inv-2",
+  "invocation_id": "inv-2",
+  "payload": {
+    "patterns": [
+      "coordinator dispatch seam is exactly (command, resolved_kwargs)",
+      "map_results_to_targets maps full refs or unique leaf names",
+      "atomic SUCCEEDED batch: succeeded + invocation_recorded + task_completed"
+    ]
+  },
+  "receipt": {
+    "usage": {
+      "cost": null,
+      "elapsed_seconds": 0.0,
+      "retries": 0,
+      "tokens": null
+    },
+    "worker": "issue-18-external-driver-session"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "status": "succeeded",
+  "task_id": "task-2"
+}

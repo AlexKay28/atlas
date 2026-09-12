@@ -1,0 +1,48 @@
+{
+  "arguments": {
+    "request": "Define the task/result envelope protocol and drive a sequential external round trip"
+  },
+  "attempt": 1,
+  "command": "define",
+  "command_version": "1.0.0",
+  "contract": {
+    "budget": {
+      "max_attempts": 1,
+      "max_cost": 0.0,
+      "max_output_bytes": 65536,
+      "max_seconds": 15.0,
+      "max_tokens": 2000
+    },
+    "capabilities": [
+      "typed_node_authoring"
+    ],
+    "done_condition": "all_ambiguities_recorded_as_Q_or_U_and_no_hidden_assumptions_remain",
+    "effect_class": "pure",
+    "execution": "immediate",
+    "inputs": [
+      "request:text"
+    ],
+    "outputs": [
+      "typed_nodes:G/C/P/K/OUT",
+      "ambiguities:Q/U"
+    ],
+    "purpose": "Frame a request into typed goal, context, plan, knowledge, and output nodes"
+  },
+  "deadline_seconds": 15.0,
+  "done": null,
+  "idempotency_key": "issue-18-envelopes:inv-1",
+  "input_digest": "d075507d222031c7561984686b85f41b5b3f1af536deb001904f358a9dad8153",
+  "invocation_id": "inv-1",
+  "program": {
+    "name": "issue_18_envelopes",
+    "version": "1.0"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "seal_digest": "fa9e60b6f371b4c3313b1cbf94c5bdae587c2a7320d852126e785fcc27da304f",
+  "targets": [
+    "G.plan"
+  ],
+  "task_id": "task-1",
+  "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-18-envelopes"
+}

@@ -1,0 +1,56 @@
+{
+  "arguments": {
+    "artifact": {
+      "patterns": [
+        "coordinator dispatch seam is exactly (command, resolved_kwargs)",
+        "map_results_to_targets maps full refs or unique leaf names",
+        "atomic SUCCEEDED batch: succeeded + invocation_recorded + task_completed"
+      ]
+    },
+    "schema": "envelope_protocol_and_external_driver"
+  },
+  "attempt": 1,
+  "command": "extract",
+  "command_version": "1.0.0",
+  "contract": {
+    "budget": {
+      "max_attempts": 2,
+      "max_cost": 0.0,
+      "max_output_bytes": 1048576,
+      "max_seconds": 30.0,
+      "max_tokens": 8000
+    },
+    "capabilities": [
+      "structured_extraction"
+    ],
+    "done_condition": "every_record_links_to_a_source_location",
+    "effect_class": "pure",
+    "execution": "immediate",
+    "inputs": [
+      "artifact:immutable",
+      "schema:bounded_types"
+    ],
+    "outputs": [
+      "records:typed",
+      "source_links:refs"
+    ],
+    "purpose": "Turn an artifact into typed records bound to source locations"
+  },
+  "deadline_seconds": 30.0,
+  "done": null,
+  "idempotency_key": "issue-18-envelopes:inv-3",
+  "input_digest": "176eaa568821140ec64a8ef24b508a9db168e22fbedbd5211206f87d7b699e3d",
+  "invocation_id": "inv-3",
+  "program": {
+    "name": "issue_18_envelopes",
+    "version": "1.0"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "seal_digest": "fa9e60b6f371b4c3313b1cbf94c5bdae587c2a7320d852126e785fcc27da304f",
+  "targets": [
+    "E.design"
+  ],
+  "task_id": "task-3",
+  "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-18-envelopes"
+}

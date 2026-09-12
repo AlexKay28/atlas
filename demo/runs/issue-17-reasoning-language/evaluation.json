@@ -1,0 +1,65 @@
+{
+  "task": "GitHub issue #17: Tikhon as a formal, compact, LLM-driven reasoning language — design thesis, mechanism table, falsifiable experiment register, notation policy, non-goals (docs-only)",
+  "run_id": "issue-17-reasoning-language",
+  "seal": "4cb5afc1ad0b58ca287b49fee358213edc90defd7f0e3ebf0a9e6433fdca16d5",
+  "terminal_status": "succeeded",
+  "steps_planned": 6,
+  "steps_executed": 6,
+  "acceptance": [
+    {
+      "criterion": "Design thesis states useful-reasoning-per-token objective with the three commitments (preserve distinctions, expand on demand, inspiration-as-hypothesis)",
+      "passed": true,
+      "evidence": "docs/design/01-reasoning-language-foundation.md section 1, anchored to the typed-ref prefix list in src/tikhon/syntax/parser.py:19 and to CALL/DONE/replay as expansion forms"
+    },
+    {
+      "criterion": "Mechanism table has one row per issue #17 source (16 rows) with citation, borrowed mechanism, and mapping to existing constructs with syntax sketches",
+      "passed": true,
+      "evidence": "section 2: Iverson, Leibniz, Pospelov, Turchin, Vygotsky, McCarthy, Kowalski, Peirce/Doyle/de Kleer, Russell & Wefald, Newell, DreamCoder, Rissanen, Xu, Pfau, Yao, Geng; every exists claim carries file:line citations verified against src/ (parser.py, builtins.py, enums.py, memory.py, coordinator.py, audit.py, learn.py, protocols/framing.think)"
+    },
+    {
+      "criterion": "Falsifiable experiment register contains 15 numbered experiments (within the 10-15 target, one per mechanism minimum), each with hypothesis, IV, DV, measurement, baseline, and pass/fail threshold",
+      "passed": true,
+      "evidence": "section 3, E1-E15 compact tables; shared measurement ground paragraph; Russell&Wefald+Pfau merged into E9 to stay in target; baselines are equal-task natural-language prompts or the strongest specified cheap baseline (Chain of Draft in E13)"
+    },
+    {
+      "criterion": "Notation policy gives a tokenizer-grounded decision framework (per-model tokenizer test, cross-model check, recoverable expansion) and an interim rule",
+      "passed": true,
+      "evidence": "section 4: 4-step adoption framework wired to E1; interim rule matches the implemented grammar (lowercase commands, uppercase control keywords, structural punctuation exempt), citing src/tikhon/syntax/parser.py"
+    },
+    {
+      "criterion": "Non-goals section rejects self-modifying grammar and unverifiable heuristics with the auditability rationale",
+      "passed": true,
+      "evidence": "section 5 table of 6 non-goals; rationale cites registry_digest at RUN_STARTED (src/tikhon/runtime/coordinator.py), tikhon audit invariants (src/tikhon/audit.py:7-17), and review-only promotion (src/tikhon/learn.py)"
+    },
+    {
+      "criterion": "docs/README.md document map gains exactly one new row linking the design doc; nothing else in docs/ changes",
+      "passed": true,
+      "evidence": "single row after Related Systems: docs/design/01-reasoning-language-foundation.md; all other docs/ files untouched"
+    },
+    {
+      "criterion": "Every claim about current behavior is true of the code, including syntax sketches being parseable under the implemented grammar",
+      "passed": true,
+      "evidence": "claims verified in step.locate against src/; two sketches initially used unimplemented forms (THEN keyword, < on bare refs in IF) and were corrected to the grammar of parser.py:263-330; SCATTER/GATHER and envelopes labeled planned (#4, #18), not current"
+    },
+    {
+      "criterion": "Tikhon protocol followed: program.think sealed before deliverable write and never modified after; WORKLOG.md and evaluation.json present",
+      "passed": true,
+      "evidence": "program.think mtime 19:35:50+03:00, seal.txt 19:35:52+03:00; docs written after; re-running tikhon seal reproduces digest 4cb5afc1ad0b58ca287b49fee358213edc90defd7f0e3ebf0a9e6433fdca16d5"
+    },
+    {
+      "criterion": "File scope respected: only docs/design/01 (new), docs/README.md (one row), and demo/runs/issue-17-reasoning-language/ touched; no src/, tests/, .opencode/, other docs or demo/runs changes; not committed",
+      "passed": true,
+      "evidence": "git status shows only the allowed paths as new/modified; no git commit performed"
+    },
+    {
+      "criterion": "Full pytest suite unchanged at 540 passed (no production code written)",
+      "passed": true,
+      "evidence": "python3 -m pytest -q -> 540 passed (baseline 540 before work)"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The runtime was not executed (tikhon run) because this is a docs-only design task: the program's steps are model-interpreted operations performed by the authoring agent in this session, with lint/seal/audit machinery applied to the program text itself; the WORKLOG records per-step evidence in place of a run event log.",
+    "Sealing used PYTHONPATH=src python3 -m tikhon (src-layout repo); the installed ~/.local/bin/tikhon console script may resolve a stale site-packages copy, as previously recorded in demo/runs/issue-15-registry-digest."
+  ]
+}

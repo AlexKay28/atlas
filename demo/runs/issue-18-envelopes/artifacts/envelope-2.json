@@ -1,0 +1,52 @@
+{
+  "arguments": {
+    "query": {
+      "plan": "seal program; implement envelope protocol + worker binding + CLI next/submit; test; verify"
+    },
+    "scope": "src/tikhon/envelope.py, src/tikhon/worker_adapter.py, src/tikhon/cli.py, tests/test_envelope.py"
+  },
+  "attempt": 1,
+  "command": "search",
+  "command_version": "1.0.0",
+  "contract": {
+    "budget": {
+      "max_attempts": 3,
+      "max_cost": 0.05,
+      "max_output_bytes": 262144,
+      "max_seconds": 30.0,
+      "max_tokens": 4000
+    },
+    "capabilities": [
+      "network.search"
+    ],
+    "done_condition": "query_scope_source_and_ranking_evidence_recorded",
+    "effect_class": "read_only",
+    "execution": "immediate",
+    "inputs": [
+      "query:text",
+      "scope:descriptor"
+    ],
+    "outputs": [
+      "candidates:ranked_refs",
+      "ranking_evidence:artifact"
+    ],
+    "purpose": "Find ranked candidates matching a query within a bounded scope"
+  },
+  "deadline_seconds": 30.0,
+  "done": null,
+  "idempotency_key": "issue-18-envelopes:inv-2",
+  "input_digest": "743881e7b2591b127c380f64ede0282e5e7a6cfef713c8463ee3637136901ecd",
+  "invocation_id": "inv-2",
+  "program": {
+    "name": "issue_18_envelopes",
+    "version": "1.0"
+  },
+  "run_id": "issue-18-envelopes",
+  "schema_version": "1",
+  "seal_digest": "fa9e60b6f371b4c3313b1cbf94c5bdae587c2a7320d852126e785fcc27da304f",
+  "targets": [
+    "E.patterns"
+  ],
+  "task_id": "task-2",
+  "workspace_root": "/home/alexkay28/projects/pseudolanguage/demo/runs/issue-18-envelopes"
+}
