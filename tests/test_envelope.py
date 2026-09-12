@@ -748,3 +748,56 @@ RETURN G.plan
             driver.next_envelope()
     finally:
         store.close()
+
+
+# --------------------------------------------------- additive versioning (#44)
+
+
+def test_task_envelope_from_json_tolerates_unknown_field():
+    """v1 envelope with an unknown field parses under the v1.x additive
+    compat policy; unknown fields are dropped on read."""
+    envelope = _make_task_envelope()
+    data = json.loads(envelope.to_json())
+    data["future_field"] = {"renewed_at": "2026-09-12T12:00:00Z"}
+    restored = TaskEnvelope.from_json(json.dumps(data))
+    assert restored == envelope
+
+
+def test_result_envelope_from_json_tolerates_unknown_field():
+    """v1 result envelope with an unknown field parses under the additive
+    compat policy; unknown fields are dropped on read."""
+    envelope = _make_result_envelope()
+    data = json.loads(envelope.to_json())
+    data["future_usage_detail"] = {"gpu_seconds": 42.0}
+    restored = ResultEnvelope.from_json(json.dumps(data))
+    assert restored == envelope
+
+
+def test_schema_version_2_fails_with_versioned_error():
+    """schema_version != '1' fails, naming the supported version."""
+    data = json.loads(_make_task_envelope().to_json())
+    data["schema_version"] = "2"
+    with pytest.raises(
+        EnvelopeValidationError, match="supported version"
+    ) as exc_info:
+        TaskEnvelope.from_json(json.dumps(data))
+    assert "'1'" in str(exc_info.value)
+
+
+def test_strict_writer_roundtrip_unchanged():
+    """Strict writer output parses identically before and after the
+    additive policy change."""
+    for envelope in (
+        _make_task_envelope(),
+        _make_result_envelope(),
+        _make_result_envelope(
+            status="failed", payload=None, error="backend down"
+        ),
+    ):
+        wire = envelope.to_json()
+        if isinstance(envelope, TaskEnvelope):
+            restored = TaskEnvelope.from_json(wire)
+        else:
+            restored = ResultEnvelope.from_json(wire)
+        assert restored == envelope
+        assert json.loads(restored.to_json()) == json.loads(wire)

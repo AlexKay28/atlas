@@ -1,0 +1,42 @@
+{
+  "task": "issue #44 — Envelope additive versioning policy",
+  "run_id": "sprint1-44-envelope-versioning",
+  "seal": "7549d39061ecbf472bf9663a950f0daec510b6c1cf9ac743198d62ec3577bf10",
+  "terminal_status": "succeeded",
+  "steps_planned": 10,
+  "steps_executed": 10,
+  "acceptance": [
+    {
+      "criterion": "v1 envelope + one unknown field parses under the compat policy",
+      "passed": true,
+      "evidence": "test_task_envelope_from_json_tolerates_unknown_field passes; from_json drops unknown fields"
+    },
+    {
+      "criterion": "schema_version '2' fails with a versioned error naming the supported version",
+      "passed": true,
+      "evidence": "test_schema_version_2_fails_with_versioned_error passes; error message contains 'supported version: 1'"
+    },
+    {
+      "criterion": "all existing envelope tests pass unchanged",
+      "passed": true,
+      "evidence": "test_task_envelope_rejects_unknown_and_missing_fields unchanged and passing; 760 baseline tests all pass"
+    },
+    {
+      "criterion": "roundtrip: strict writer output parses identically before/after the change",
+      "passed": true,
+      "evidence": "test_strict_writer_roundtrip_unchanged passes for task + succeeded/failed result envelopes"
+    },
+    {
+      "criterion": "full pytest suite green",
+      "passed": true,
+      "evidence": "764 passed in 21.14s (760 baseline + 4 new)"
+    },
+    {
+      "criterion": "git status shows ONLY owned files",
+      "passed": true,
+      "evidence": "git status --porcelain: M src/tikhon/envelope.py, M tests/test_envelope.py, ?? demo/runs/sprint1-44-envelope-versioning/"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": []
+}

@@ -9,6 +9,19 @@ TaskEnvelope and parses replies INTO a ResultEnvelope, and the sequential
 external driver (``tikhon next`` / ``tikhon submit``) moves them through
 the event store so the worker process never needs to hold the store open.
 
+Additive versioning policy (v1.x, issue #44)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Within schema_version ``"1"`` the read side (``from_json``) tolerates
+unknown fields: a v1.x writer may add new optional fields to a v1
+envelope without breaking deployed readers that only know the original
+v1 field set.  Unknown fields are **dropped** on parse (not preserved)
+— the reader sees exactly the fields it knows.  Writers stay strict:
+``to_json`` / ``to_dict`` never emit unknown fields.  Breaking changes
+(removing or renaming a v1 field, changing its type) require a
+schema_version bump to ``"2"``; any ``schema_version != "1"`` fails
+with an error naming the single supported version.
+
 Envelope schema (v1) — TaskEnvelope::
 
     schema_version  "1"
@@ -84,7 +97,9 @@ __all__ = [
     "envelope_input_digest",
 ]
 
-#: Wire-format version.  ``from_json`` rejects any other value.
+#: Wire-format version.  ``from_json`` rejects any other value, naming the
+#: supported version.  Within v1, unknown fields are tolerated on parse
+#: (additive v1.x policy, issue #44).
 ENVELOPE_SCHEMA_VERSION = "1"
 
 #: Result statuses accepted by the protocol (issue #18).
@@ -289,7 +304,7 @@ class TaskEnvelope:
         _check(
             self.schema_version == ENVELOPE_SCHEMA_VERSION,
             f"unsupported envelope schema_version {self.schema_version!r};"
-            f" expected {ENVELOPE_SCHEMA_VERSION!r}",
+            f" supported version: {ENVELOPE_SCHEMA_VERSION!r}",
         )
         for field in ("run_id", "invocation_id", "task_id", "idempotency_key",
                       "command", "command_version", "input_digest"):
@@ -396,7 +411,10 @@ class TaskEnvelope:
 
     @classmethod
     def from_json(cls, text: str) -> "TaskEnvelope":
-        """Parse and strictly validate a wire envelope."""
+        """Parse and strictly validate a wire envelope.
+
+        Within v1, unknown fields are dropped (additive v1.x policy, #44).
+        """
         return cls.from_dict(_load_envelope_object(
             text, "task", _TASK_ENVELOPE_FIELDS
         ))
@@ -457,7 +475,7 @@ class ResultEnvelope:
         _check(
             self.schema_version == ENVELOPE_SCHEMA_VERSION,
             f"unsupported envelope schema_version {self.schema_version!r};"
-            f" expected {ENVELOPE_SCHEMA_VERSION!r}",
+            f" supported version: {ENVELOPE_SCHEMA_VERSION!r}",
         )
         for field in ("run_id", "invocation_id", "task_id", "idempotency_key",
                       "command"):
@@ -517,7 +535,10 @@ class ResultEnvelope:
 
     @classmethod
     def from_json(cls, text: str) -> "ResultEnvelope":
-        """Parse and strictly validate a wire envelope."""
+        """Parse and strictly validate a wire envelope.
+
+        Within v1, unknown fields are dropped (additive v1.x policy, #44).
+        """
         return cls.from_dict(_load_envelope_object(
             text, "result", _RESULT_ENVELOPE_FIELDS
         ))
@@ -557,6 +578,10 @@ def _load_envelope_object(
         isinstance(data, dict),
         f"{kind} envelope must be a JSON object, got {type(data).__name__}",
     )
+    known = set(fields)
+    unknown = sorted(set(data) - known)
+    if unknown:
+        data = {key: data[key] for key in data if key in known}
     return data
 
 
