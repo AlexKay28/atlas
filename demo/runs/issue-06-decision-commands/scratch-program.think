@@ -1,0 +1,16 @@
+PROGRAM decision_commands_scratch VERSION 1.0
+
+INPUT
+    G.goal = "Select a storage backend for the runtime coordinator"
+    C.criteria = "latency, durability, operational cost"
+    E.evidence = "benchmark digests for sqlite, lmdb, and postgres candidates"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.split: DO decompose(goal = G.goal, protocol = "bounded_children") -> P.subgoals
+step.hypoth: DO hypothesize(question = G.plan, evidence = E.evidence) -> H.alternatives
+step.compare: DO compare(options = H.alternatives, criteria = C.criteria) -> ART.comparison
+step.rank: DO rank(options = H.alternatives, criteria = C.criteria) -> E.ordering
+step.stress: DO challenge(claim = ART.comparison, evidence = E.evidence) -> ART.risks
+step.decide: DO choose(valid_options = E.ordering, evidence = ART.risks) -> D.backend
+
+RETURN D.backend, P.subgoals, ART.risks

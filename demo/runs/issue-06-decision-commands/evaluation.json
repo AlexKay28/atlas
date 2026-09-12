@@ -1,0 +1,50 @@
+{
+  "task": "GitHub issue #6: add complete CommandSpec contracts for decompose, hypothesize, compare, rank, challenge, choose to the builtin registry",
+  "run_id": "issue-06-decision-commands",
+  "seal": "bfbefbcf0964134aa3987eaae8c380694b89283e84315f6cf91e5790537b56e9",
+  "terminal_status": "succeeded",
+  "steps_planned": 8,
+  "steps_executed": 8,
+  "acceptance": [
+    {
+      "criterion": "Each new command resolves via the registry with a complete contract (name, version, nonempty purpose/inputs/outputs/effects/done, valid enums)",
+      "passed": true,
+      "evidence": "test_decision_command_resolves_with_complete_contract passes for all six names (200-test suite green)."
+    },
+    {
+      "criterion": "Every new command appears in builtin_registry().names()",
+      "passed": true,
+      "evidence": "test_decision_command_is_registered_under_its_name and test_decision_commands_extend_the_nine_originals pass; BUILTIN_FACTORIES registers all six."
+    },
+    {
+      "criterion": "Registry-wide invariant tests still pass (no duplicate names, all specs valid per CommandSpec.__post_init__)",
+      "passed": true,
+      "evidence": "Parametrized contract, routing, and JSON-roundtrip tests now run over all 15 names; construction happens inside CommandSpec.__post_init__ validation, so duplicate or malformed specs would raise at load."
+    },
+    {
+      "criterion": "Existing tests are not broken by the registry change",
+      "passed": true,
+      "evidence": "Full suite: 200 passed (163 baseline + 37 new/extended), zero failures."
+    },
+    {
+      "criterion": "Scratch program using the six new commands resolves after the registry change",
+      "passed": true,
+      "evidence": "demo/runs/issue-06-decision-commands/scratch-program.think lints 'valid' with PYTHONPATH=src."
+    },
+    {
+      "criterion": "Tikhon protocol honored: program.think sealed before source edits and never modified afterwards",
+      "passed": true,
+      "evidence": "seal.txt (bfbefbcf0964134aa3987eaae8c380694b89283e84315f6cf91e5790537b56e9) written before edits; recomputed digest after all edits matches."
+    },
+    {
+      "criterion": "Only allowed files touched (builtins.py, test_registry.py, this run dir)",
+      "passed": true,
+      "evidence": "git status shows changes confined to src/tikhon/registry/builtins.py, tests/test_registry.py, and demo/runs/issue-06-decision-commands/."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The installed 'tikhon' console script resolves a non-editable site-packages copy, so lint/seal against local source changes had to run via PYTHONPATH=src; the CLI itself is off-limits for this issue so the missing __main__ guard on tikhon/cli.py was not fixed.",
+    "The scratch program is a second .think file inside the run dir, not part of the sealed program; the sealed program.think uses only the nine pre-existing commands as the protocol requires."
+  ]
+}

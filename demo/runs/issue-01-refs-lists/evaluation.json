@@ -1,0 +1,55 @@
+{
+  "task": "GitHub issue #1: support lists of typed references in arguments ([E.a, E.b])",
+  "run_id": "issue-01-refs-lists",
+  "seal": "a27d8f0757967d37fb7be7fc7d5429587e5c7c8aa05fc3619dea6bfb3a7005af",
+  "terminal_status": "succeeded",
+  "steps_planned": 8,
+  "steps_executed": 8,
+  "acceptance": [
+    {
+      "criterion": "Valid program with [E.a, E.b] argument parses and validates",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_reference_list_argument_parses_and_validates; parser.py _parse_bracket_value returns a Python list of ref strings; input refs and step-produced refs both covered."
+    },
+    {
+      "criterion": "Unknown ref inside a list rejected by validation with a location",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_unknown_ref_inside_reference_list_rejected_with_location asserts the error names E.ghost and carries the step's line (parser.py:275-283 uses Argument.line)."
+    },
+    {
+      "criterion": "Coordinator resolves a ref list to a real Python list of values",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_reference_list_argument_resolves_to_values (sum handler receives the list, outputs 12 and 17) and test_reference_list_dispatch_payload_carries_resolved_list ([5, 7] and [12, 5] in dispatch payloads)."
+    },
+    {
+      "criterion": "Seal digest of a program with ref lists is deterministic; canonical JSON unchanged for old programs",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_reference_list_seal_digest_deterministic; all seven demo/runs/*/seal.txt digests re-verified byte-identical after the change; _statement_dict excludes Argument.line from canonical JSON."
+    },
+    {
+      "criterion": "Empty, nested, and mixed ref-list brackets rejected clearly",
+      "passed": true,
+      "evidence": "tests/test_syntax.py parametrized tests: 'reference list requires at least one typed reference', 'nested lists are not supported inside a reference list', 'reference list mixes typed references and literals'."
+    },
+    {
+      "criterion": "Existing behavior unchanged: single refs, JSON literals, -> t1, t2 targets",
+      "passed": true,
+      "evidence": "Full suite green including pre-existing tests (200 passed before my 16 were added); test_json_list_literals_without_refs_unchanged and test_json_list_literal_argument_passes_through_unchanged pin literal behavior; all demo seals stable."
+    },
+    {
+      "criterion": "Tikhon protocol followed: program sealed before source edits, worklog maintained",
+      "passed": true,
+      "evidence": "seal.txt written from `tikhon lint` (valid) + `tikhon seal` before any edit; digest re-verified identical after all edits; WORKLOG.md has one section per step with evidence."
+    },
+    {
+      "criterion": "Full test suite passes",
+      "passed": true,
+      "evidence": "python3 -m pytest -q -> 216 passed (baseline 163 at task start; grew to 200 from concurrent registry work before my 16 new tests)."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The installed `tikhon` CLI binary resolves to a stale non-editable site-packages copy while pytest uses the repo src (pyproject pythonpath). Lint/seal were run with the installed CLI as mandated; the resulting seal digest was re-verified byte-identical with the repo parser (program.think contains no ref lists, and digest compatibility is preserved), and CLI run checks were executed via PYTHONPATH=src python3 -m tikhon. The stale install was left untouched per the file-constraint rules.",
+    "The registered command catalog has no edit or test command, so report and check stand in for artifact production and verification while ordinary repository tools perform the implementation."
+  ]
+}

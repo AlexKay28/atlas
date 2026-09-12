@@ -26,14 +26,29 @@ from tikhon.registry import (
 
 BUILTIN_NAMES = (
     "calculate",
+    "challenge",
     "check",
+    "choose",
+    "compare",
+    "decompose",
     "define",
     "extract",
     "fetch",
+    "hypothesize",
+    "rank",
     "report",
     "search",
     "summarize",
     "verify",
+)
+
+DECISION_COMMANDS = (
+    "decompose",
+    "hypothesize",
+    "compare",
+    "rank",
+    "challenge",
+    "choose",
 )
 
 CONTRACT_FIELDS = (
@@ -124,7 +139,7 @@ def registry():
 # --- builtin catalog completeness -------------------------------------------
 
 
-def test_builtin_registry_holds_exactly_nine_commands(registry):
+def test_builtin_registry_holds_exactly_the_catalog_commands(registry):
     assert registry.names() == BUILTIN_NAMES
 
 
@@ -155,6 +170,50 @@ def test_builtin_routing_tiers_are_consistent(registry, name):
     assert routing.minimum_tier in routing.permitted_tiers
     assert routing.preferred_tier in routing.permitted_tiers
     assert routing.validator_tier in routing.permitted_tiers
+
+
+# --- decision commands (issue #6) ---------------------------------------------
+
+
+@pytest.mark.parametrize("name", DECISION_COMMANDS)
+def test_decision_command_resolves_with_complete_contract(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    assert spec.name == name
+    assert spec.version == "1.0.0"
+    for value in (spec.purpose, spec.done, spec.compensation):
+        assert isinstance(value, str) and value.strip()
+    for field in (spec.inputs, spec.outputs, spec.effects):
+        assert field and all(isinstance(entry, str) and entry.strip() for entry in field)
+    assert spec.effect_class in EffectClass
+    assert spec.execution in ExecutionMode
+    assert spec.idempotency in IdempotencyMode
+    assert spec.failures
+    for failure in spec.failures:
+        assert failure.kind in FailureKind
+        assert isinstance(failure.retryable, bool)
+        assert failure.recovery.strip()
+
+
+@pytest.mark.parametrize("name", DECISION_COMMANDS)
+def test_decision_command_is_registered_under_its_name(registry, name):
+    assert name in builtin_registry().names()
+    assert name in registry.names()
+
+
+@pytest.mark.parametrize("name", DECISION_COMMANDS)
+def test_decision_command_effect_class_matches_contract_intent(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    if name in {"decompose", "choose"}:
+        assert spec.effect_class is EffectClass.PURE
+    else:
+        assert spec.effect_class in {EffectClass.PURE, EffectClass.READ_ONLY}
+
+
+def test_decision_commands_extend_the_nine_originals():
+    original = {"calculate", "check", "define", "extract", "fetch", "report", "search", "summarize", "verify"}
+    names = set(builtin_registry().names())
+    assert original < names
+    assert names - original == set(DECISION_COMMANDS)
 
 
 # --- resolve and version pinning --------------------------------------------

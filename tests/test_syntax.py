@@ -211,3 +211,92 @@ step.two: DO ping() -> E.pong
 """
     with pytest.raises(ParseError, match="terminal"):
         parse_program(source)
+
+
+REF_LIST_PROGRAM = """\
+PROGRAM lists VERSION 1.0
+
+INPUT
+  G.left = 5
+  G.right = 7
+
+step.first: DO define(value = G.left) -> G.goal
+step.combine: DO merge(items = [G.left, G.right]) -> E.combined
+step.wrap: DO merge(items = [G.goal, E.combined]) -> E.wrapped
+
+RETURN E.wrapped
+"""
+
+
+def test_reference_list_argument_parses_and_validates():
+    program = parse_program(REF_LIST_PROGRAM)
+    combine = program.statements[1]
+    wrap = program.statements[2]
+    assert combine.args[0].value == ["G.left", "G.right"]
+    assert wrap.args[0].value == ["G.goal", "E.combined"]
+    assert (
+        validate_program(program, known_commands={"define", "merge"}) is True
+    )
+
+
+def test_unknown_ref_inside_reference_list_rejected_with_location():
+    source = REF_LIST_PROGRAM.replace(
+        "items = [G.left, G.right]", "items = [G.left, E.ghost]"
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match=r"E\.ghost") as excinfo:
+        validate_program(program, known_commands={"define", "merge"})
+    expected_line = source.splitlines().index(
+        "step.combine: DO merge(items = [G.left, E.ghost]) -> E.combined"
+    ) + 1
+    assert excinfo.value.line == expected_line
+
+
+@pytest.mark.parametrize("bracket", ["[]", "[ ]", "[   ]"])
+def test_empty_reference_list_rejected(bracket):
+    source = REF_LIST_PROGRAM.replace("items = [G.left, G.right]", f"items = {bracket}")
+    with pytest.raises(ParseError, match="at least one typed reference"):
+        parse_program(source)
+
+
+@pytest.mark.parametrize(
+    "bracket",
+    ["[G.left, 5]", "[G.left, \"G.right\"]", "[5, G.left]"],
+)
+def test_mixed_reference_list_rejected(bracket):
+    source = REF_LIST_PROGRAM.replace("items = [G.left, G.right]", f"items = {bracket}")
+    with pytest.raises(ParseError, match="mixes typed references and literals"):
+        parse_program(source)
+
+
+@pytest.mark.parametrize(
+    "bracket",
+    ["[[G.left], G.right]", "[G.left, [G.right]]", "[[G.left]]"],
+)
+def test_nested_reference_list_rejected(bracket):
+    source = REF_LIST_PROGRAM.replace("items = [G.left, G.right]", f"items = {bracket}")
+    with pytest.raises(ParseError, match="nested lists are not supported"):
+        parse_program(source)
+
+
+def test_json_list_literals_without_refs_unchanged():
+    source = REF_LIST_PROGRAM.replace(
+        "items = [G.left, G.right]",
+        'items = [1, "two", {"k": [3]}, "G.left"]',
+    )
+    program = parse_program(source)
+    value = program.statements[1].args[0].value
+    assert value == [1, "two", {"k": [3]}, "G.left"]
+
+
+def test_reference_list_seal_digest_deterministic():
+    base = seal_digest(parse_program(REF_LIST_PROGRAM))
+    assert seal_digest(parse_program(REF_LIST_PROGRAM)) == base
+    decorated = "# comment\n\n" + REF_LIST_PROGRAM.replace(
+        "RETURN E.wrapped", "\n# trailing comment\nRETURN E.wrapped\n"
+    )
+    assert seal_digest(parse_program(decorated)) == base
+    swapped = REF_LIST_PROGRAM.replace(
+        "items = [G.left, G.right]", "items = [G.right, G.left]"
+    )
+    assert seal_digest(parse_program(swapped)) != base

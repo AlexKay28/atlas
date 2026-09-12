@@ -481,6 +481,324 @@ def _check() -> CommandSpec:
     )
 
 
+def _decompose() -> CommandSpec:
+    return CommandSpec(
+        name="decompose",
+        version=_VERSION,
+        purpose="Split a pinned goal into bounded subgoals whose children cover the parent",
+        inputs=("goal:G", "protocol:descriptor"),
+        parameters=("max_children:int>0", "stop_check_policy:enum"),
+        preconditions=("goal_pinned", "protocol_bounded", "budget_within_parent"),
+        outputs=("subgoals:bounded_children", "stop_checks:predicates"),
+        effects=("none",),
+        done="children_cover_parent_and_each_child_declares_a_stop_check",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report the unpinned goal or unbounded protocol",
+            ),
+            FailureSpec(
+                kind=FailureKind.INSUFFICIENT_EVIDENCE,
+                retryable=True,
+                recovery="retry only after the goal is revised or clarified",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.PURE,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("goal_decomposition",),
+        evidence=("child_coverage_map", "stop_check_manifest"),
+        budget=Budget(
+            max_seconds=30.0,
+            max_tokens=4000,
+            max_cost=0.0,
+            max_attempts=2,
+            max_output_bytes=131072,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="calibrated_decomposition",
+            escalation_on=(FailureKind.INSUFFICIENT_EVIDENCE,),
+            fallback_chain=(),
+        ),
+    )
+
+
+def _hypothesize() -> CommandSpec:
+    return CommandSpec(
+        name="hypothesize",
+        version=_VERSION,
+        purpose="Generate distinct falsifiable alternatives that answer a question against evidence",
+        inputs=("question:text", "evidence:artifacts"),
+        parameters=("hypothesis_limit:int>0", "distinctness:enum"),
+        preconditions=("question_nonempty", "evidence_digests_known"),
+        outputs=("hypotheses:H", "falsifiers:predicates"),
+        effects=("none",),
+        done="alternatives_are_distinct_and_each_carries_a_falsifiable_prediction",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report the empty question or unknown evidence",
+            ),
+            FailureSpec(
+                kind=FailureKind.INSUFFICIENT_EVIDENCE,
+                retryable=True,
+                recovery="retry only after new evidence is collected",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.READ_ONLY,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("language_model",),
+        evidence=("hypothesis_manifest", "falsifier_set"),
+        budget=Budget(
+            max_seconds=60.0,
+            max_tokens=6000,
+            max_cost=0.10,
+            max_attempts=2,
+            max_output_bytes=131072,
+        ),
+        idempotency=IdempotencyMode.NONE,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="calibrated_hypotheses",
+            escalation_on=(FailureKind.INSUFFICIENT_EVIDENCE,),
+            fallback_chain=(),
+        ),
+    )
+
+
+def _compare() -> CommandSpec:
+    return CommandSpec(
+        name="compare",
+        version=_VERSION,
+        purpose="Score options against declared criteria with constraints applied before preferences",
+        inputs=("options:refs", "criteria:predicates"),
+        parameters=("weights:map", "unknown_cell_policy:enum"),
+        preconditions=("options_addressable", "criteria_bounded"),
+        outputs=("comparison:artifact", "unknown_cells:manifest"),
+        effects=("none",),
+        done="constraints_applied_before_preferences_and_unknown_cells_recorded_explicitly",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report unaddressable options or unbounded criteria",
+            ),
+            FailureSpec(
+                kind=FailureKind.INSUFFICIENT_EVIDENCE,
+                retryable=True,
+                recovery="retry only with new evidence or a narrower option set",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.READ_ONLY,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("language_model",),
+        evidence=("comparison_matrix", "unknown_cell_manifest"),
+        budget=Budget(
+            max_seconds=60.0,
+            max_tokens=6000,
+            max_cost=0.05,
+            max_attempts=2,
+            max_output_bytes=131072,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="none",
+            escalation_on=(),
+            fallback_chain=(),
+        ),
+    )
+
+
+def _rank() -> CommandSpec:
+    return CommandSpec(
+        name="rank",
+        version=_VERSION,
+        purpose="Order options by declared criteria under explicit tie and missing-evidence policies",
+        inputs=("options:refs", "criteria:predicates"),
+        parameters=("tie_policy:enum", "missing_evidence_policy:enum"),
+        preconditions=("options_addressable", "criteria_bounded"),
+        outputs=("ordering:ranked_refs", "tie_report:artifact"),
+        effects=("none",),
+        done="tie_and_missing_evidence_policies_applied_to_every_option",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report unaddressable options or unbounded criteria",
+            ),
+            FailureSpec(
+                kind=FailureKind.INSUFFICIENT_EVIDENCE,
+                retryable=True,
+                recovery="retry only with new evidence or a narrower option set",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.PURE,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("language_model",),
+        evidence=("ordering_with_scores", "tie_report"),
+        budget=Budget(
+            max_seconds=30.0,
+            max_tokens=4000,
+            max_cost=0.0,
+            max_attempts=2,
+            max_output_bytes=65536,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T1,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="none",
+            escalation_on=(),
+            fallback_chain=(),
+        ),
+    )
+
+
+def _challenge() -> CommandSpec:
+    return CommandSpec(
+        name="challenge",
+        version=_VERSION,
+        purpose="Stress a claim or decision by checking the strongest plausible failure cases",
+        inputs=("claim:artifact", "evidence:artifacts"),
+        parameters=("adversary_strength:enum", "risk_limit:int>0"),
+        preconditions=("claim_digest_known", "evidence_digests_known"),
+        outputs=("counterevidence:artifacts", "risks:ranked_manifest"),
+        effects=("none",),
+        done="strongest_plausible_failure_cases_checked_with_recorded_outcomes",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report the unknown claim or evidence",
+            ),
+            FailureSpec(
+                kind=FailureKind.INSUFFICIENT_EVIDENCE,
+                retryable=True,
+                recovery="retry only after new counterevidence is collected",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.READ_ONLY,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("language_model",),
+        evidence=("counterevidence_manifest", "risk_ranking"),
+        budget=Budget(
+            max_seconds=60.0,
+            max_tokens=6000,
+            max_cost=0.10,
+            max_attempts=2,
+            max_output_bytes=131072,
+        ),
+        idempotency=IdempotencyMode.NONE,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="calibrated_challenge",
+            escalation_on=(FailureKind.INSUFFICIENT_EVIDENCE,),
+            fallback_chain=(),
+        ),
+    )
+
+
+def _choose() -> CommandSpec:
+    return CommandSpec(
+        name="choose",
+        version=_VERSION,
+        purpose="Commit a decision that accepts one valid option or blocks with a typed reason",
+        inputs=("valid_options:ranked_refs", "evidence:artifacts"),
+        parameters=("decision_policy:enum", "tie_breaker:descriptor"),
+        preconditions=("options_validated", "evidence_digests_known", "budget_within_parent"),
+        outputs=("decision:D", "blocked_reason:artifact"),
+        effects=("none",),
+        done="decision_accepts_one_option_or_blocks_with_a_typed_reason",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report unvalidated options or unknown evidence",
+            ),
+            FailureSpec(
+                kind=FailureKind.INSUFFICIENT_EVIDENCE,
+                retryable=True,
+                recovery="retry only after new evidence or ranked options arrive",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.PURE,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("language_model",),
+        evidence=("decision_with_reasoning", "blocked_reason_when_blocked"),
+        budget=Budget(
+            max_seconds=60.0,
+            max_tokens=4000,
+            max_cost=0.05,
+            max_attempts=2,
+            max_output_bytes=8192,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="calibrated_decision",
+            escalation_on=(FailureKind.INSUFFICIENT_EVIDENCE,),
+            fallback_chain=("rank@1.0.0",),
+        ),
+    )
+
+
 BUILTIN_FACTORIES = (
     _define,
     _search,
@@ -491,6 +809,12 @@ BUILTIN_FACTORIES = (
     _verify,
     _calculate,
     _check,
+    _decompose,
+    _hypothesize,
+    _compare,
+    _rank,
+    _challenge,
+    _choose,
 )
 
 

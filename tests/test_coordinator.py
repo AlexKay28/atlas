@@ -14,6 +14,8 @@ ledger after SQLite reopen.
 specified by these tests before implementation.
 """
 
+from typing import Any
+
 import pytest
 
 from tikhon.runtime import EventStore, EventType
@@ -586,3 +588,85 @@ def test_missing_key_fails():
     assert vals is None
     assert "missing result keys" in err
     assert "OUT.detail" in err
+
+
+REF_LIST_PROGRAM = """\
+PROGRAM lister VERSION 1.0
+INPUT
+    G.left = 5
+    G.right = 7
+step.first: DO define(goal = G.left) -> G.goal
+step.total: DO calculate(items = [G.left, G.right]) -> OUT.total
+step.wrap: DO calculate(items = [OUT.total, G.left]) -> OUT.wrapped
+RETURN OUT.total, OUT.wrapped
+"""
+
+
+def sum_items_handler(items):
+    if not isinstance(items, list):
+        raise ValueError("items must be a list")
+    return sum(items)
+
+
+def make_list_worker():
+    return DeterministicWorker(
+        handlers={"define": define_handler, "calculate": sum_items_handler}
+    )
+
+
+def test_reference_list_argument_resolves_to_values(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        program = parse_program(REF_LIST_PROGRAM)
+        coordinator = SequentialCoordinator(store=store, worker=make_list_worker())
+        result = coordinator.execute(program, run_id="run-lists")
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"OUT.total": 12, "OUT.wrapped": 17}
+
+        state = store.project_state("run-lists")
+        assert state["nodes"]["OUT.total"]["value"] == 12
+        assert state["nodes"]["OUT.wrapped"]["value"] == 17
+
+
+def test_reference_list_dispatch_payload_carries_resolved_list(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        program = parse_program(REF_LIST_PROGRAM)
+        coordinator = SequentialCoordinator(store=store, worker=make_list_worker())
+        coordinator.execute(program, run_id="run-lists")
+
+        dispatched = {
+            event.instruction_id: event.payload["args"]
+            for event in store.events("run-lists")
+            if event.event_type is EventType.INVOCATION_DISPATCHED
+        }
+        assert dispatched["step.total"]["items"] == [5, 7]
+        assert dispatched["step.wrap"]["items"] == [12, 5]
+
+
+def test_json_list_literal_argument_passes_through_unchanged(tmp_path):
+    captured: dict[str, Any] = {}
+
+    def echo_handler(**kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    program = parse_program(
+        """\
+PROGRAM literal VERSION 1.0
+INPUT
+    G.left = 5
+step.echo: DO echo(tags = ["alpha", "beta"], nums = [1, 2], ref = G.left) -> OUT.echo
+RETURN OUT.echo
+"""
+    )
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"define": define_handler, "echo": echo_handler}
+        )
+        result = SequentialCoordinator(store=store, worker=worker).execute(
+            program, run_id="run-literal"
+        )
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"OUT.echo": "ok"}
+        assert captured == {"tags": ["alpha", "beta"], "nums": [1, 2], "ref": 5}

@@ -141,12 +141,72 @@ def _parse_argument(text: str, line_no: int) -> Argument:
         raise ParseError("malformed named argument", line_no, 1)
     if _REF_RE.fullmatch(raw_value):
         value: Any = raw_value
+    elif raw_value.startswith("[") and raw_value.endswith("]"):
+        value = _parse_bracket_value(raw_value, line_no)
     else:
         try:
             value = json.loads(raw_value)
         except json.JSONDecodeError as exc:
             raise ParseError(f"invalid argument value: {exc.msg}", line_no, exc.colno) from exc
-    return Argument(name, value)
+    return Argument(name, value, line_no)
+
+
+def _parse_bracket_value(raw_value: str, line_no: int) -> Any:
+    """Parse a bracketed argument value.
+
+    A bracket containing at least one typed reference anywhere inside must
+    be a flat, pure reference list: ``[E.a, E.b]``.  Empty brackets,
+    nested lists, and mixed refs-and-literals are rejected.  A non-empty
+    bracket without any typed reference stays an ordinary JSON literal
+    (e.g. ``[1, 2]``).
+    """
+    inner = raw_value[1:-1].strip()
+    if not inner:
+        raise ParseError(
+            "reference list requires at least one typed reference", line_no, 1
+        )
+    if not _contains_ref(raw_value):
+        try:
+            return json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise ParseError(f"invalid argument value: {exc.msg}", line_no, exc.colno) from exc
+    refs: list[str] = []
+    for item in _split_top_level(inner):
+        if _REF_RE.fullmatch(item):
+            refs.append(item)
+        elif "[" in item or "]" in item:
+            raise ParseError(
+                f"nested lists are not supported inside a reference list: {item}",
+                line_no,
+                1,
+            )
+        else:
+            raise ParseError(
+                f"reference list mixes typed references and literals: {item}",
+                line_no,
+                1,
+            )
+    return refs
+
+
+def _contains_ref(text: str) -> bool:
+    """Whether ``text`` mentions a typed reference outside quoted strings."""
+    quoted_stripped: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for char in text:
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in {'"', "'"}:
+            quote = char
+        else:
+            quoted_stripped.append(char)
+    return re.search(rf"(?<![A-Za-z0-9_]){ _REF_PATTERN }(?![A-Za-z0-9_])", "".join(quoted_stripped)) is not None
 
 
 def _parse_refs(text: str, line_no: int, context: str) -> tuple[str, ...]:
@@ -216,7 +276,11 @@ def validate_program(program: Program, known_commands: Iterable[str] | None = No
             for argument in statement.args:
                 for ref in _references_in(argument.value):
                     if ref not in available:
-                        raise ParseError(f"reference {ref} used before definition")
+                        raise ParseError(
+                            f"reference {ref} used before definition",
+                            argument.line,
+                            1,
+                        )
             for target in statement.targets:
                 if target in available:
                     raise ParseError(f"duplicate target {target}")
@@ -263,7 +327,21 @@ def canonical_json(program: Program) -> str:
 
 def _statement_dict(statement: object) -> dict[str, Any]:
     if isinstance(statement, Invocation):
-        return {"kind": "invocation", **dataclasses.asdict(statement)}
+        # Built field-by-field (not via dataclasses.asdict) so the sealed
+        # canonical JSON stays identical to pre-ref-list programs: the
+        # Argument.line source location is deliberately not part of the
+        # canonical form, exactly like comments and blank lines.
+        return {
+            "kind": "invocation",
+            "step_id": statement.step_id,
+            "command": statement.command,
+            "args": [
+                {"name": argument.name, "value": argument.value}
+                for argument in statement.args
+            ],
+            "targets": list(statement.targets),
+            "done": statement.done,
+        }
     if isinstance(statement, Return):
         return {"kind": "return", **dataclasses.asdict(statement)}
     if isinstance(statement, Stop):

@@ -223,6 +223,15 @@ class SequentialCoordinator:
             for arg in statement.args:
                 if isinstance(arg.value, str) and arg.value in values:
                     resolved_kwargs[arg.name] = values[arg.value]
+                elif isinstance(arg.value, list):
+                    # Reference-list argument ([E.a, E.b]): each listed ref
+                    # resolves through the same values mapping as single
+                    # refs; literal items (validation guarantees ref-shaped
+                    # strings always resolve) pass through untouched.
+                    resolved_kwargs[arg.name] = [
+                        values[item] if isinstance(item, str) and item in values else item
+                        for item in arg.value
+                    ]
                 else:
                     resolved_kwargs[arg.name] = arg.value
 

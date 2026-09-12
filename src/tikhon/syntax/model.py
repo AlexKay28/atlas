@@ -13,6 +13,7 @@ class Declaration:
 class Argument:
     name: str
     value: object
+    line: int = 0
 
 
 @dataclass(frozen=True)
