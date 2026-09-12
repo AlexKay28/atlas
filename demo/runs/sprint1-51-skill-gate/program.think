@@ -1,0 +1,33 @@
+# Tikhon run for GitHub issue #51: skill/MCP discovery gate before implementation,
+# ahood registry as remote fallback.
+#
+# Sealed BEFORE any source edit (tikhon protocol step 2). Uses only the
+# canonical grammar and registered commands. Every argument is a single
+# typed reference or a JSON literal.
+
+PROGRAM sprint1_51_skill_gate VERSION 1.0
+
+INPUT
+    G.goal = "Implement issue #51: add a mandatory Step 0 skill/MCP inventory gate to the tikhon-demo SKILL.md protocol with the one-line decision rule (local match -> load; local miss -> ahood skill search -> read SKILL.md -> ahood skill add owner/skill@version -> verify pin in .claude/skills.lock.json -> load; no match anywhere -> proceed and say so in the plan), including ahood traps; add the inventory-check instruction to worker_adapter.py T3 delegate authoring prompt; document declaration convention for program.think and WORKLOG; extend tests/test_docs.py with gate-coverage assertions"
+    C.scope = ".opencode/skills/tikhon-demo/SKILL.md, src/tikhon/worker_adapter.py (T3 delegate block only), tests/test_docs.py, demo/runs/sprint1-51-skill-gate/"
+    C.done = "SKILL.md contains Step 0 with the decision rule and ahood commands; worker_adapter.py T3 delegate prompt mentions the inventory check; tests/test_docs.py has assertions for both; full pytest suite green; git status shows only owned files"
+    C.skill = "tikhon-demo"
+
+step.define: DO define(request = G.goal) -> G.plan
+step.search_skill: DO search(query = "skill MCP discovery gate ahood inventory", scope = C.scope) -> E.skill_info
+step.read_skill: DO fetch(resource_refs = E.skill_info) -> ART.skill_doc
+step.read_issue: DO fetch(resource_refs = "gh issue view 51") -> ART.issue_spec
+step.extract_spec: DO extract(artifact = ART.issue_spec, schema = "acceptance_criteria") -> E.criteria
+step.read_adapter: DO fetch(resource_refs = "src/tikhon/worker_adapter.py") -> ART.adapter
+step.locate_t3: DO search(query = "T3 delegate authoring prompt", scope = "src/tikhon/worker_adapter.py") -> E.t3_block
+step.read_tests: DO fetch(resource_refs = "tests/test_docs.py") -> ART.tests
+step.edit_skill: DO edit(path = ".opencode/skills/tikhon-demo/SKILL.md", content = "add Step 0 skill/MCP inventory gate with decision rule and ahood commands and declaration convention") -> ART.skill_edit
+step.edit_adapter: DO edit(path = "src/tikhon/worker_adapter.py", content = "add inventory-check instruction to T3 delegate authoring prompt block") -> ART.adapter_edit
+step.edit_tests: DO test(path = "tests/test_docs.py", timeout_seconds = 600) -> ART.tests_edit
+step.run_tests: DO test(path = "tests/", timeout_seconds = 600) -> V.tests
+step.check_tests: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.check_git: DO check(artifact = "git status --porcelain", predicate = "only_owned_files") -> V.git
+step.report: DO report(committed_refs = [ART.skill_edit, ART.adapter_edit, ART.tests_edit], format = "markdown") -> OUT.solution
+step.verify: DO verify(goal = G.goal, evidence = [V.verdict, V.git, OUT.solution]) -> V.result
+
+RETURN OUT.solution, V.result, V.verdict, V.git

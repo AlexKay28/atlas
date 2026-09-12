@@ -27,11 +27,65 @@ dispatch real model workers.
   one observed attempt changed `alexkay28` to `alexkay` and hit an external
   directory denial while sealing.
 
+## Step 0 — Skill/MCP Inventory (MANDATORY, before plan authoring)
+
+Before authoring `program.think`, the implementing agent runs a bounded
+skill and tool inventory. This gate ensures skill selection is deliberate,
+not accidental.
+
+### Decision rule
+
+> *Local match → load it; local miss → `ahood skill search` → read the
+> candidate's SKILL.md → `ahood skill add owner/skill@version` → verify the
+> pin in `.claude/skills.lock.json` → load; no match anywhere → proceed and
+> say so in the plan.*
+
+### Procedure
+
+1. **Local skills** — scan the session's available skills
+   (`.opencode/skills/`, `.claude/skills/`, built-ins) by task match against
+   their descriptions. Match → load via the `skill` tool and follow it;
+   record the choice.
+2. **Local MCP/tools** — identify what servers are connected for this task
+   (tracker, search, browser, etc.). A task needing one must declare it in
+   the plan.
+3. **Remote fallback — ahood** (`ahood` CLI / https://ahood.vercel.app):
+   if no local skill matches, run `ahood skill search "<task keywords>"`;
+   read the candidate's SKILL.md *before* installing; install a pinned
+   snapshot with `ahood skill add owner/skill@version`; verify the pin
+   landed in `.claude/skills.lock.json`; then use it. Local skills are the
+   fast path; ahood is discovery + versioned distribution when the skill is
+   not present locally.
+4. **No match anywhere** — proceed without a skill and state that explicitly
+   in the plan.
+
+### ahood traps
+
+- `ahood skill add` installs to `.claude/skills/{owner}@{skill}` — check the
+  lockfile after add; a failed install must not be mistaken for an available
+  skill.
+- Publishing ≠ public: new registry skills are private until `--visibility
+  public`.
+- Versioned pins, not live-sync: update explicitly via `ahood skill update`;
+  CI uses a scoped `AHOOD_TOKEN`.
+- Worktree workers don't see untracked `.opencode/` — for them the inventory
+  relies on globally installed skills + ahood fetch; the discovery gate must
+  work in that reduced environment.
+
+### Declaration convention
+
+The sealed `program.think` records relied-on skills/MCPs via
+`INPUT ctx_skill = "name"` entries (or any suitable `C.` binding), so a run's
+audit trail names its tooling, not just its data. WORKLOG Inputs cite the
+loaded skills per step.
+
 ## Required Workflow
 
 1. Read the assigned file in `demo/tasks/` and no other task descriptions.
 2. Create only the assigned `demo/runs/{run-id}/` directory.
-3. Immediately write `program.think` using the canonical sequential grammar
+3. **Run Step 0 (skill/MCP inventory)** — see above; record findings before
+   authoring the plan.
+4. Immediately write `program.think` using the canonical sequential grammar
    and only registered commands. Do not inspect task-related source, run a
    calculation, or delegate exploration before the program is written.
 4. Run `tikhon lint program.think`, then `tikhon seal program.think`. Write the

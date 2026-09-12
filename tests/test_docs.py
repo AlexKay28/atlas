@@ -122,3 +122,43 @@ def test_readme_links_changelog():
     """README links to CHANGELOG.md."""
     readme = _read("README.md")
     assert "CHANGELOG" in readme, "README does not link to CHANGELOG.md"
+
+
+def test_skill_md_has_step0_inventory_gate():
+    """tikhon-demo SKILL.md contains Step 0 skill/MCP inventory gate."""
+    skill = _read(".opencode/skills/tikhon-demo/SKILL.md")
+    assert "Step 0" in skill, "SKILL.md missing 'Step 0' heading"
+    assert "skill/mcp" in skill.lower(), (
+        "SKILL.md missing 'skill/MCP' in Step 0"
+    )
+    # Decision rule must be present
+    assert "local match" in skill.lower(), (
+        "SKILL.md missing the decision rule ('local match')"
+    )
+    assert "ahood skill search" in skill, (
+        "SKILL.md missing 'ahood skill search' command"
+    )
+    assert "ahood skill add" in skill, (
+        "SKILL.md missing 'ahood skill add' command"
+    )
+    assert "skills.lock.json" in skill, (
+        "SKILL.md missing lockfile verification reference"
+    )
+
+
+def test_worker_adapter_t3_prompt_has_inventory_check():
+    """worker_adapter.py T3 delegate prompt includes the inventory check."""
+    adapter = _read("src/tikhon/worker_adapter.py")
+    # The T3 delegate authoring block must mention the inventory check
+    assert "Step 0" in adapter, (
+        "worker_adapter.py T3 prompt missing 'Step 0' reference"
+    )
+    assert "ahood skill search" in adapter, (
+        "worker_adapter.py T3 prompt missing 'ahood skill search'"
+    )
+    assert "ahood skill add" in adapter, (
+        "worker_adapter.py T3 prompt missing 'ahood skill add'"
+    )
+    assert "skills.lock.json" in adapter, (
+        "worker_adapter.py T3 prompt missing lockfile reference"
+    )
