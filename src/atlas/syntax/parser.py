@@ -1,4 +1,4 @@
-"""Parser and sealing helpers for the sequential Tikhon subset."""
+"""Parser and sealing helpers for the sequential ATLAS subset."""
 
 from __future__ import annotations
 

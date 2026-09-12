@@ -5,7 +5,7 @@ and the custom battery manifest, with no live-model dependency.  The
 full pilot runs through ONE entry point (run_pilot) and proves:
 
 - TrialRecord roundtrips (JSON serializable + deserializable)
-- Authoring attempts are charged on the tikhon arm
+- Authoring attempts are charged on the atlas arm
 - Report to_json roundtrips
 - DBStateGrader works as the documented example grader
 - Full pilot on fake workers/graders runs green
@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from tikhon.eval import (
+from atlas.eval import (
     ArmSpec,
     DBStateGrader,
     PilotReport,
@@ -75,10 +75,10 @@ _TASK_003 = TaskManifest(
 )
 
 _REACT_ARM = ArmSpec(name="react-baseline", kind="react")
-_TIKHON_ARM = ArmSpec(name="tikhon-core", kind="tikhon")
+_ATLAS_ARM = ArmSpec(name="atlas-core", kind="atlas")
 
 _BATTERY = [_TASK_001, _TASK_002, _TASK_003]
-_ARMS = [_REACT_ARM, _TIKHON_ARM]
+_ARMS = [_REACT_ARM, _ATLAS_ARM]
 
 
 # -- TrialRecord roundtrip ---------------------------------------------
@@ -112,7 +112,7 @@ def test_trial_record_roundtrip():
 def test_trial_record_roundtrip_failed_trial():
     record = TrialRecord(
         task_id="test-task-fail",
-        arm="tikhon-core",
+        arm="atlas-core",
         result=TrialResult(
             passed=False, detail="wrong state", failure_class="wrong_state"
         ),
@@ -239,22 +239,22 @@ def test_run_pilot_all_trials_succeed_without_grader():
         assert t.result.failure_class == "succeeded"
 
 
-def test_run_pilot_authoring_attempts_charged_on_tikhon_arm():
-    """Authoring attempts are charged on the tikhon arm per #50."""
+def test_run_pilot_authoring_attempts_charged_on_atlas_arm():
+    """Authoring attempts are charged on the atlas arm per #50."""
     report = run_pilot(_BATTERY, _ARMS)
-    tikhon_trials = [t for t in report.trials if t.arm == "tikhon-core"]
+    atlas_trials = [t for t in report.trials if t.arm == "atlas-core"]
     react_trials = [t for t in report.trials if t.arm == "react-baseline"]
 
-    # Tikhon arm: task 3 has authoring_attempts_expected=1
-    tikhon_task3 = [t for t in tikhon_trials if t.task_id == "custom-003"]
-    assert len(tikhon_task3) == 1
-    assert tikhon_task3[0].authoring_attempts == 1
+    # atlas arm: task 3 has authoring_attempts_expected=1
+    atlas_task3 = [t for t in atlas_trials if t.task_id == "custom-003"]
+    assert len(atlas_task3) == 1
+    assert atlas_task3[0].authoring_attempts == 1
 
-    # Other tikhon tasks have 0 authoring attempts
-    tikhon_other = [
-        t for t in tikhon_trials if t.task_id != "custom-003"
+    # Other atlas tasks have 0 authoring attempts
+    atlas_other = [
+        t for t in atlas_trials if t.task_id != "custom-003"
     ]
-    for t in tikhon_other:
+    for t in atlas_other:
         assert t.authoring_attempts == 0
 
     # React arm: always 0 authoring attempts (no sealed-program scaffolding)
@@ -294,15 +294,15 @@ def test_run_pilot_report_to_json_roundtrips():
     # Check summary has per-arm stats
     assert "per_arm" in data["summary"]
     assert "react-baseline" in data["summary"]["per_arm"]
-    assert "tikhon-core" in data["summary"]["per_arm"]
+    assert "atlas-core" in data["summary"]["per_arm"]
 
 
 def test_run_pilot_report_to_markdown():
     report = run_pilot(_BATTERY, _ARMS)
     md = report.to_markdown()
-    assert "# Tikhon Eval Pilot Report" in md
+    assert "# ATLAS Eval Pilot Report" in md
     assert "react-baseline" in md
-    assert "tikhon-core" in md
+    assert "atlas-core" in md
     assert "Authoring parity" in md
     assert "Honest caveats" in md
     assert "PASS" in md or "FAIL" in md
@@ -350,7 +350,7 @@ def test_run_pilot_crash_produces_failure_record():
     """A crashing program produces a TrialRecord with failure_class='crash'.
 
     The react arm constructs its own program from the task description,
-    so to test the crash path we use the tikhon arm with a bad program.
+    so to test the crash path we use the atlas arm with a bad program.
     """
     bad_task = TaskManifest(
         task_id="crash-task",
@@ -364,7 +364,7 @@ def test_run_pilot_crash_produces_failure_record():
             "RETURN P.out\n"
         ),
     )
-    report = run_pilot([bad_task], [_TIKHON_ARM])
+    report = run_pilot([bad_task], [_ATLAS_ARM])
     assert len(report.trials) == 1
     t = report.trials[0]
     assert not t.result.passed
@@ -390,13 +390,13 @@ def test_pilot_report_summary_pass_rate():
     report = run_pilot(_BATTERY, _ARMS)
     s = report._summary_dict()
     react_stats = s["per_arm"]["react-baseline"]
-    tikhon_stats = s["per_arm"]["tikhon-core"]
+    atlas_stats = s["per_arm"]["atlas-core"]
     assert react_stats["total"] == 3
-    assert tikhon_stats["total"] == 3
+    assert atlas_stats["total"] == 3
     assert react_stats["passed"] == 3
-    assert tikhon_stats["passed"] == 3
+    assert atlas_stats["passed"] == 3
     assert react_stats["pass_rate"] == 1.0
-    assert tikhon_stats["pass_rate"] == 1.0
-    # Authoring attempts: react=0, tikhon=1 (only task 003)
+    assert atlas_stats["pass_rate"] == 1.0
+    # Authoring attempts: react=0, atlas=1 (only task 003)
     assert react_stats["authoring_attempts"] == 0
-    assert tikhon_stats["authoring_attempts"] == 1
+    assert atlas_stats["authoring_attempts"] == 1

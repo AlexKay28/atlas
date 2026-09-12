@@ -1,4 +1,4 @@
-"""tikhon.syntax — models, parser and sealing helpers for the minimal tikhon pseudo-language."""
+"""atlas.syntax — models, parser and sealing helpers for the minimal ATLAS pseudo-language."""
 
 from .model import (
     Argument,

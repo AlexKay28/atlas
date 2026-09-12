@@ -15,14 +15,14 @@ import sys
 
 import pytest
 
-from tikhon.cli import _deterministic_handlers, main
-from tikhon.runtime import (
+from atlas.cli import _deterministic_handlers, main
+from atlas.runtime import (
     DeterministicWorker,
     EventStore,
     EventType,
     SequentialCoordinator,
 )
-from tikhon.syntax import parse_program
+from atlas.syntax import parse_program
 
 CANONICAL = """\
 PROGRAM demo VERSION 0.1

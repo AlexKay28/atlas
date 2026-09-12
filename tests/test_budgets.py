@@ -17,12 +17,12 @@ from typing import Any
 
 import pytest
 
-from tikhon.audit import audit_run
-from tikhon.budgets import BudgetDeadlineExceeded, BudgetGate, ExecutionBudget
-from tikhon.runtime import EventStore, EventType
-from tikhon.runtime.coordinator import DeterministicWorker, SequentialCoordinator
-from tikhon.syntax import parse_program
-from tikhon.worker_adapter import ModelWorker, WorkerError
+from atlas.audit import audit_run
+from atlas.budgets import BudgetDeadlineExceeded, BudgetGate, ExecutionBudget
+from atlas.runtime import EventStore, EventType
+from atlas.runtime.coordinator import DeterministicWorker, SequentialCoordinator
+from atlas.syntax import parse_program
+from atlas.worker_adapter import ModelWorker, WorkerError
 
 
 class ConcurrencyTracker:
@@ -551,7 +551,7 @@ def test_budget_none_keeps_behavior_identical(tmp_path):
 
 def test_model_worker_envelope_carries_budget_deadline():
     """The execution budget's deadline binds into rendered TaskEnvelopes."""
-    from tikhon.registry.registry import builtin_registry
+    from atlas.registry.registry import builtin_registry
 
     def transport(model: str, prompt: str) -> str:
         return '{"goal": "x"}'

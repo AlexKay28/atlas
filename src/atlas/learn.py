@@ -1,4 +1,4 @@
-"""tikhon learn — mine run directories into protocol candidates and failure clusters.
+"""atlas learn — mine run directories into protocol candidates and failure clusters.
 
 Wake-sleep companion (issue #13): "wake" is agents running programs in
 ``demo/runs/*``; "sleep" is this module compressing that experience into
@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tikhon.runtime.events import EventStore, EventType
-from tikhon.syntax import ParseError, parse_program
+from atlas.runtime.events import EventStore, EventType
+from atlas.syntax import ParseError, parse_program
 
 __all__ = [
     "FailureCluster",
@@ -166,7 +166,7 @@ class LearnReport:
     def to_markdown(self) -> str:
         """Render a human-readable, deterministic review report."""
         lines: list[str] = []
-        lines.append("# tikhon learn — mined run report")
+        lines.append("# atlas learn — mined run report")
         lines.append("")
         lines.append(f"Source: {self.runs_dir}")
         lines.append(f"Runs scanned: {len(self.run_ids)}")

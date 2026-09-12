@@ -1,4 +1,4 @@
-# Tikhon Documentation
+# ATLAS Documentation
 
 This documentation defines a compact language and a set of operating protocols for
 high-quality human-AI thinking with less repeated context and lower token consumption.
@@ -43,11 +43,11 @@ Install the package and run the sealed example:
 
 ```bash
 python3 -m pip install .
-tikhon lint examples/demo.think
-seal=$(tikhon seal examples/demo.think)
-tikhon run examples/demo.think --db demo.db --run-id demo-1 --seal "$seal"
-tikhon status --db demo.db --run-id demo-1
-tikhon events --db demo.db --run-id demo-1
+atlas lint examples/demo.think
+seal=$(atlas seal examples/demo.think)
+atlas run examples/demo.think --db demo.db --run-id demo-1 --seal "$seal"
+atlas status --db demo.db --run-id demo-1
+atlas events --db demo.db --run-id demo-1
 ```
 
 `run` rejects a missing or stale seal before creating a run. The SQLite event

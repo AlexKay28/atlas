@@ -1,4 +1,4 @@
-"""Durable event storage for tikhon runs.
+"""Durable event storage for ATLAS runs.
 
 Implements the event envelope, gapless per-run sequencing inside
 transactions, optimistic (CAS) state-version commits for SUCCEEDED
@@ -17,13 +17,13 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional, Sequence
 
-from tikhon.state import StateDelta
+from atlas.state import StateDelta
 
 __all__ = ["Event", "EventStore", "EventType", "canonical_json"]
 
 _TASK_LEDGER_AVAILABLE = False
 try:
-    from tikhon.runtime.tasks import TaskLedger, TaskLedgerError
+    from atlas.runtime.tasks import TaskLedger, TaskLedgerError
 
     _TASK_LEDGER_AVAILABLE = True
 except Exception:

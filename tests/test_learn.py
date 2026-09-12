@@ -1,4 +1,4 @@
-"""Tests for tikhon learn (issue #13): mining runs into protocol candidates
+"""Tests for atlas learn (issue #13): mining runs into protocol candidates
 and failure clusters, with a review-only deterministic markdown report."""
 
 from __future__ import annotations
@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from tikhon.cli import main
-from tikhon.learn import mine_run_directory
+from atlas.cli import main
+from atlas.learn import mine_run_directory
 
 REAL_RUNS = Path(__file__).resolve().parents[1] / "demo" / "runs"
 
@@ -193,7 +193,7 @@ def test_unreadable_runs_dir_raises(tmp_path: Path) -> None:
 
 
 def test_event_store_failed_payloads_mined(tmp_path: Path) -> None:
-    from tikhon.runtime.events import EventStore, EventType
+    from atlas.runtime.events import EventStore, EventType
 
     runs = tmp_path / "runs"
     run_dir = runs / "run-db"
@@ -228,7 +228,7 @@ def test_cli_learn_prints_report(synthetic_runs: Path, capsys: pytest.CaptureFix
     rc = main(["learn", "--runs", str(synthetic_runs)])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "tikhon learn — mined run report" in out
+    assert "atlas learn — mined run report" in out
     assert "Protocol candidates" in out
 
 
@@ -239,7 +239,7 @@ def test_cli_learn_out_writes_file(synthetic_runs: Path, capsys: pytest.CaptureF
     captured = capsys.readouterr()
     assert str(out_path) in captured.err
     written = out_path.read_text(encoding="utf-8")
-    assert "tikhon learn — mined run report" in written
+    assert "atlas learn — mined run report" in written
     assert written == mine_run_directory(synthetic_runs).to_markdown()
 
 

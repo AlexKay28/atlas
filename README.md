@@ -1,6 +1,8 @@
-# Tikhon
+# ATLAS — Agent Task Language & Audit System
 
-Tikhon is an executable text harness for durable AI-agent work. It turns a
+*A language for durable agent work.*
+
+ATLAS is an executable text harness for durable AI-agent work. It turns a
 human-readable program into a sealed sequence of atomic tasks, validates worker
 results, and persists state, evidence, progress, and failures as an event log.
 
@@ -17,7 +19,7 @@ RETURN G.goal, OUT.total
 ## Why
 
 Natural-language agent prompts often hide control flow, completion conditions,
-and state mutation. Tikhon makes those decisions inspectable and replayable:
+and state mutation. ATLAS makes those decisions inspectable and replayable:
 
 - programs are linted and sealed before execution;
 - each `DO` instruction is one bounded task;
@@ -28,15 +30,15 @@ and state mutation. Tikhon makes those decisions inspectable and replayable:
 
 ## Quick Start
 
-Tikhon requires Python 3.10 or newer and has no runtime dependencies.
+ATLAS requires Python 3.10 or newer and has no runtime dependencies.
 
 ```bash
 python3 -m pip install .
-tikhon lint examples/demo.think
-SEAL=$(tikhon seal examples/demo.think)
-tikhon run examples/demo.think --db demo.db --run-id demo-1 --seal "$SEAL"
-tikhon status --db demo.db --run-id demo-1
-tikhon events --db demo.db --run-id demo-1
+atlas lint examples/demo.think
+SEAL=$(atlas seal examples/demo.think)
+atlas run examples/demo.think --db demo.db --run-id demo-1 --seal "$SEAL"
+atlas status --db demo.db --run-id demo-1
+atlas events --db demo.db --run-id demo-1
 ```
 
 The bundled CLI currently uses deterministic demonstration handlers. Real model
@@ -72,8 +74,8 @@ for the full command contract specification.
 ## Agent Demo
 
 `demo/tasks/` contains hard evaluation tasks. The project-local skill at
-`.opencode/skills/tikhon-demo/SKILL.md` instructs OpenCode agents to author and
-seal a Tikhon plan before solving a task, then record step-level evidence under
+`.opencode/skills/atlas-demo/SKILL.md` instructs OpenCode agents to author and
+seal an ATLAS plan before solving a task, then record step-level evidence under
 `demo/runs/`.
 
 ## Development

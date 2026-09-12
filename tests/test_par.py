@@ -24,13 +24,13 @@ from typing import Any
 
 import pytest
 
-from tikhon.audit import audit_run
-from tikhon.budgets import ExecutionBudget
-from tikhon.registry.registry import builtin_registry
-from tikhon.runtime import EventStore, EventType
-from tikhon.runtime.coordinator import DeterministicWorker, SequentialCoordinator
-from tikhon.runtime.tasks import TaskStatus
-from tikhon.syntax import (
+from atlas.audit import audit_run
+from atlas.budgets import ExecutionBudget
+from atlas.registry.registry import builtin_registry
+from atlas.runtime import EventStore, EventType
+from atlas.runtime.coordinator import DeterministicWorker, SequentialCoordinator
+from atlas.runtime.tasks import TaskStatus
+from atlas.syntax import (
     ParseError,
     canonical_json,
     parse_program,

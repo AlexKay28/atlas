@@ -10,17 +10,17 @@ reference resolution.
 
 import pytest
 
-from tikhon.memory import KnowledgeBase
+from atlas.memory import KnowledgeBase
 
 
 def test_set_get_roundtrip(tmp_path):
     with KnowledgeBase(tmp_path / "kb.sqlite") as kb:
-        record = kb.set("kb.user_name", "tikhon", source_run="run-1")
+        record = kb.set("kb.user_name", "atlas", source_run="run-1")
         assert record["key"] == "kb.user_name"
-        assert record["value"] == "tikhon"
+        assert record["value"] == "atlas"
         assert record["source_run"] == "run-1"
         assert record["updated_at"]
-        assert kb.get("kb.user_name") == "tikhon"
+        assert kb.get("kb.user_name") == "atlas"
 
 
 def test_values_may_be_any_json_shape(tmp_path):
@@ -71,8 +71,8 @@ def test_values_persist_across_reopen(tmp_path):
 
 def test_keys_prefix_filter(tmp_path):
     with KnowledgeBase(tmp_path / "kb.sqlite") as kb:
-        kb.set("kb.user_name", "tikhon")
-        kb.set("kb.user_home", "/home/tikhon")
+        kb.set("kb.user_name", "atlas")
+        kb.set("kb.user_home", "/home/atlas")
         kb.set("kb.plan_digest", "abc123")
         assert kb.keys() == ("kb.plan_digest", "kb.user_home", "kb.user_name")
         assert kb.keys(prefix="kb.user") == ("kb.user_home", "kb.user_name")

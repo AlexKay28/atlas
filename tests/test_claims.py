@@ -24,11 +24,11 @@ from typing import Any
 
 import pytest
 
-from tikhon.audit import audit_run
-from tikhon.claims import ResourceLedger
-from tikhon.runtime import EventStore, EventType
-from tikhon.runtime.coordinator import DeterministicWorker, SequentialCoordinator
-from tikhon.syntax import parse_program
+from atlas.audit import audit_run
+from atlas.claims import ResourceLedger
+from atlas.runtime import EventStore, EventType
+from atlas.runtime.coordinator import DeterministicWorker, SequentialCoordinator
+from atlas.syntax import parse_program
 
 
 def edit_handler(workspace_root: str):

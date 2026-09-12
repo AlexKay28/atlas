@@ -1,22 +1,22 @@
 ---
-name: tikhon-demo
-description: Execute hard tasks from demo/tasks through a sealed Tikhon work protocol and write isolated evidence-bearing attempts under demo/runs. Load BEFORE solving a Tikhon demo task, launching a demo agent, or handling prompts containing "demo/tasks", "Tikhon demo", "language experiment", or "solve with Tikhon". Do NOT use for developing the Tikhon runtime itself; use the repository specifications and normal engineering workflow instead.
+name: atlas-demo
+description: Execute hard tasks from demo/tasks through a sealed ATLAS work protocol and write isolated evidence-bearing attempts under demo/runs. Load BEFORE solving an ATLAS demo task, launching a demo agent, or handling prompts containing "demo/tasks", "ATLAS demo", "language experiment", or "solve with ATLAS". Do NOT use for developing the ATLAS runtime itself; use the repository specifications and normal engineering workflow instead.
 ---
 
-# Tikhon Demo Runner
+# ATLAS Demo Runner
 
 > **Author:** alexkay28
 > **Source of truth:** this project-local file
-> `skill-origin: project/tikhon-demo`
+> `skill-origin: project/atlas-demo`
 
-Use Tikhon to constrain and expose the reasoning workflow. The task result is
+Use ATLAS to constrain and expose the reasoning workflow. The task result is
 still produced by your normal tools; the current deterministic runtime does not
 dispatch real model workers.
 
 ## Traps
 
-- Do not use `tikhon run` as the task solver. Its handlers in
-  `src/tikhon/cli.py` return deterministic placeholder transformations, so a
+- Do not use `atlas run` as the task solver. Its handlers in
+  `src/atlas/cli.py` return deterministic placeholder transformations, so a
   successful run does not mean the hard task was solved.
 - Do not write into `demo/tasks/`, `src/`, or `tests/`. Parallel attempts share
   those paths. Write only inside the run directory named in the prompt.
@@ -88,7 +88,7 @@ loaded skills per step.
 4. Immediately write `program.think` using the canonical sequential grammar
    and only registered commands. Do not inspect task-related source, run a
    calculation, or delegate exploration before the program is written.
-4. Run `tikhon lint program.think`, then `tikhon seal program.think`. Write the
+4. Run `atlas lint program.think`, then `atlas seal program.think`. Write the
    exact digest to `seal.txt`.
 5. Execute the sealed invocations in source order with your ordinary read-only
    tools and calculations. Treat each `DO` line as one bounded task.

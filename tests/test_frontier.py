@@ -17,11 +17,11 @@ from typing import Any
 
 import pytest
 
-from tikhon.audit import audit_run
-from tikhon.runtime import EventStore, EventType
-from tikhon.runtime.coordinator import DeterministicWorker, SequentialCoordinator
-from tikhon.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
-from tikhon.syntax import parse_program
+from atlas.audit import audit_run
+from atlas.runtime import EventStore, EventType
+from atlas.runtime.coordinator import DeterministicWorker, SequentialCoordinator
+from atlas.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
+from atlas.syntax import parse_program
 
 # a: consumes G.left (INPUT), produces G.plan.
 # b: consumes G.plan -> depends on a.

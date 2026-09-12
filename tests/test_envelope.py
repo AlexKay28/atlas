@@ -1,6 +1,6 @@
 """Tests for the task/result envelope protocol and external driver (issue #18).
 
-Contract under test (tikhon.envelope + its bindings):
+Contract under test (atlas.envelope + its bindings):
 
 - TaskEnvelope / ResultEnvelope dataclasses round trip through canonical
   JSON with strict validation and clear errors (unknown fields, missing
@@ -10,8 +10,8 @@ Contract under test (tikhon.envelope + its bindings):
   canonical JSON is embedded; the transport seam is unchanged) and parses
   the reply INTO a validated ResultEnvelope whose receipt distinguishes
   unavailable telemetry (``None``) from a measured zero.
-- ``tikhon next`` renders the next ready invocation's envelope from the
-  event store; ``tikhon submit`` accepts a result file and commits
+- ``atlas next`` renders the next ready invocation's envelope from the
+  event store; ``atlas submit`` accepts a result file and commits
   RESULT_RECEIVED / VALIDATION / SUCCEEDED through the same coordinator
   machinery.  A 2-step program drives to a succeeded run externally, the
   event-type sequence matches a coordinator-driven run of the same
@@ -26,9 +26,9 @@ import json
 
 import pytest
 
-from tikhon.audit import audit_run
-from tikhon.cli import main
-from tikhon.envelope import (
+from atlas.audit import audit_run
+from atlas.cli import main
+from atlas.envelope import (
     DIRECT_DISPATCH_RUN_ID,
     ENVELOPE_SCHEMA_VERSION,
     DriverError,
@@ -38,10 +38,10 @@ from tikhon.envelope import (
     TaskEnvelope,
     build_task_envelope,
 )
-from tikhon.registry import builtin_registry
-from tikhon.runtime import EventStore, EventType, SequentialCoordinator
-from tikhon.syntax import parse_program, seal_digest
-from tikhon.worker_adapter import ModelWorker
+from atlas.registry import builtin_registry
+from atlas.runtime import EventStore, EventType, SequentialCoordinator
+from atlas.syntax import parse_program, seal_digest
+from atlas.worker_adapter import ModelWorker
 
 
 TWO_STEP_PROGRAM = """\
@@ -463,7 +463,7 @@ def test_external_round_trip_event_sequence_matches_coordinator(tmp_path):
 
     store1 = EventStore(str(tmp_path / "coordinator.db"))
     try:
-        from tikhon.runtime import DeterministicWorker
+        from atlas.runtime import DeterministicWorker
 
         worker = DeterministicWorker({
             "define": lambda **kwargs: {"plan": "frame and locate"},

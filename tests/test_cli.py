@@ -1,6 +1,6 @@
-"""Tests for the tikhon CLI surface (docs/spec/02-command-catalog.md).
+"""Tests for the atlas CLI surface (docs/spec/02-command-catalog.md).
 
-Contract under test (tikhon.cli):
+Contract under test (atlas.cli):
 
     main(argv=None) -> int
 
@@ -22,8 +22,8 @@ import re
 
 import pytest
 
-from tikhon.cli import main
-from tikhon.runtime import EventStore
+from atlas.cli import main
+from atlas.runtime import EventStore
 
 CANONICAL = """\
 PROGRAM demo VERSION 0.1
