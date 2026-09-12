@@ -14,7 +14,7 @@ tooling. All subcommands use argparse and the standard library only.
 | Subcommand | Required flags | Optional flags | Purpose |
 | --- | --- | --- | --- |
 | `lint` | `program` | — | Parse and validate a `.think` program file against the builtin registry |
-| `seal` | `program` | — | Print the sealed SHA-256 digest of a program |
+| `seal` | `program` | — | Print the sealed SHA-256 digest (`--v2` selects the canonical v2 digest: parsed condition AST + sorted barrier union; default v1 is byte-compatible with all historical seals) of a program |
 | `run` | `program`, `--db`, `--run-id`, `--seal` | `--workspace`, `--worker` | Execute a sealed program with deterministic or model worker |
 | `resume` | `--db`, `--run-id`, `--program`, `--seal` | `--workspace`, `--worker` | Resume an interrupted run after a crash |
 | `status` | `--db`, `--run-id` | — | Print run status with progress bar and current task |
@@ -30,6 +30,8 @@ tooling. All subcommands use argparse and the standard library only.
 ## Command Groups
 
 ### Program lifecycle
+
+Run verification accepts both digest versions: v1 (default; raw condition text, written-order barrier — all historical seals) and v2 (`--v2`; whitespace- and barrier-spelling-invariant). A seal recorded under one version verifies under the same version only.
 
 - `lint` — parse and validate before sealing; rejects unknown commands and
   structural errors.
