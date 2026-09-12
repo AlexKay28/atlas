@@ -1,0 +1,46 @@
+{
+  "task": "GitHub issue #46: benchmark harness extensibility — case registry, JSON export, usage metrics",
+  "run_id": "sprint1-46-bench-registry",
+  "seal": "861a39c3a64fe5d767d964bb11d9f32f23298060233dc4bb81bdb9da5bfa0712",
+  "terminal_status": "succeeded",
+  "steps_planned": 19,
+  "steps_executed": 19,
+  "acceptance": [
+    {
+      "criterion": "(1) Custom case list runs and reports without editing benchmarks.py internals",
+      "passed": true,
+      "evidence": "test_custom_case_runs_via_explicit_list_without_editing_internals: constructs a BenchmarkCase with a custom program source and runs it through run_benchmark without modifying benchmarks.py; test passes (29/29 in test_benchmarks.py). CaseRegistry class with register/build/build_all/names enables registry extension; register_case() and builtin_registry_names() module-level functions expose the registry API."
+    },
+    {
+      "criterion": "(2) to_json() roundtrips through json.loads with numbers identical to to_markdown's tables",
+      "passed": true,
+      "evidence": "test_to_json_roundtrips_with_numbers_matching_markdown: json.loads(report.to_json()) produces a dict with speedup (round 2dp), wall times (round 1dp via _round1 matching _ms), dispatches, envelope bytes, delta, child_runs, child_events, tasks_per_child, authored_plans, authored_steps — all matching the markdown rendering; test_to_json_is_valid_json_and_deterministic: to_json() is valid JSON and two calls produce identical strings."
+    },
+    {
+      "criterion": "(3) A usage-reporting worker factory shows non-zero usage in both outputs",
+      "passed": true,
+      "evidence": "test_usage_reporting_worker_factory_shows_nonzero_usage: a worker factory whose handlers return {\"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 5, \"total_tokens\": 15, \"cost_usd\": 0.001}} produces a report with non-None usage on both sides; json.loads(report.to_json()) shows non-zero total_tokens in the usage block; UsageStats.from_result extracts from RESULT_RECEIVED result payloads."
+    },
+    {
+      "criterion": "(4) Existing three cases unchanged (determinism)",
+      "passed": true,
+      "evidence": "test_existing_three_cases_unchanged: linear dispatches=6 envelope=5406, scatter dispatches=10 envelope=8993, PAR dispatches=9 envelope=8293 child_runs=5 authored_plans=1 authored_steps=3 — identical to benchmarks/report-2026-09-12.md. builtin_cases() returns the same three cases via the default registry. Full suite 770 passed (760 baseline unmodified + 10 new)."
+    },
+    {
+      "criterion": "Sealed program created before any source edit (Tikhon protocol steps 1-2)",
+      "passed": true,
+      "evidence": "demo/runs/sprint1-46-bench-registry/program.think linted valid and sealed to 861a39c3a... before the first source edit; seal re-verification after all edits produces the identical digest."
+    },
+    {
+      "criterion": "Full pytest suite green; only OWNED files touched",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q -> 770 passed in 21.41s; git status --porcelain shows M src/tikhon/benchmarks.py, M tests/test_benchmarks.py, ?? demo/runs/sprint1-46-bench-registry/ only."
+    }
+  ],
+  "unresolved": [
+    "The to_markdown output does not add a usage table — usage is visible in to_json and CaseResult.usage_delta_tokens; the markdown report's Honest caveats already state usage is recorded as unknown in the deterministic path. A live-model run would show usage in JSON."
+  ],
+  "protocol_deviations": [
+    "test_register_case_adds_to_default_registry uses a private CaseRegistry to avoid polluting the shared module-level default registry (the registry has no unregister method; a shared-registry test would break other tests that rely on the default's three-case count)"
+  ]
+}

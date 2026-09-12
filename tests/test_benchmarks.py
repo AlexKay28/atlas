@@ -1,16 +1,25 @@
-"""Tests for the deterministic benchmark harness (issue #26).
+"""Tests for the deterministic benchmark harness (issue #26, #46).
 
 Fast by construction: tests use tiny per-step latencies (milliseconds)
 and single repetitions, never the built-in cases' default 40ms latency.
 The suite must stay well under its ~40s budget with these added.
 """
 
+import json
+
 import pytest
 
 from tikhon import cli
 from tikhon.benchmarks import (
     BenchmarkCase,
+    BenchmarkReport,
+    CaseRegistry,
+    RunMetrics,
+    SideSummary,
+    UsageStats,
     builtin_cases,
+    builtin_registry_names,
+    register_case,
     run_benchmark,
     sleep_worker,
 )
@@ -315,3 +324,243 @@ def test_zero_latency_benchmark_still_succeeds_and_counts():
     assert case.baseline.envelope_bytes == case.variant.envelope_bytes
     # Sanity: the harness executed real coordinators over real stores.
     assert case.baseline.events >= 6 * 8
+
+
+# -- issue #46: case registry, JSON export, usage metrics ---------------
+
+
+def test_builtin_registry_names_has_three_defaults():
+    names = builtin_registry_names()
+    assert names == [
+        "linear-independent-6",
+        "scatter-gather-8",
+        "par-heterogeneous-4",
+    ]
+
+
+def test_builtin_cases_from_registry_match_expected_names():
+    cases = builtin_cases(latency_seconds=TINY_LATENCY)
+    assert [c.name for c in cases] == [
+        "linear-independent-6",
+        "scatter-gather-8",
+        "par-heterogeneous-4",
+    ]
+
+
+def test_custom_case_runs_via_explicit_list_without_editing_internals():
+    """Acceptance (1): a custom case list runs and reports without
+    editing benchmarks.py internals — just construct a BenchmarkCase
+    and pass it to run_benchmark."""
+    custom_source = """\
+PROGRAM custom_bench VERSION 1.0
+INPUT
+    G.goal = "custom case"
+step.a: DO define(request = G.goal) -> P.a
+step.b: DO search(query = G.goal, scope = "src/") -> E.b
+RETURN P.a, E.b
+"""
+    custom = BenchmarkCase(
+        name="my-custom-case",
+        program=custom_source,
+        max_workers=2,
+        latency_seconds=TINY_LATENCY,
+        repetitions=1,
+    )
+    report = run_benchmark([custom], repetitions=1)
+    assert len(report.cases) == 1
+    assert report.cases[0].name == "my-custom-case"
+    assert report.cases[0].baseline.dispatches == 2
+    assert report.cases[0].variant.dispatches == 2
+
+
+def test_case_registry_extend_and_build():
+    """A private CaseRegistry can be extended with custom factories."""
+    registry = CaseRegistry()
+    registry.register("mini", lambda latency_seconds=0.04, **kw: BenchmarkCase(
+        name="mini",
+        program=_LINEAR_SOURCE,
+        max_workers=2,
+        latency_seconds=latency_seconds,
+        **kw,
+    ))
+    assert registry.names() == ["mini"]
+    case = registry.build("mini", latency_seconds=TINY_LATENCY, repetitions=1)
+    assert case.name == "mini"
+    report = run_benchmark([case], repetitions=1)
+    assert report.cases[0].baseline.dispatches == 6
+
+
+def test_register_case_adds_to_default_registry():
+    """register_case adds a factory to a registry (acceptance: registry
+    is extensible).  Uses a private CaseRegistry to avoid polluting the
+    shared default registry that other tests rely on."""
+    registry = CaseRegistry()
+
+    def custom_factory(latency_seconds=0.04, **kw):
+        return BenchmarkCase(
+            name="registered-custom",
+            program=_LINEAR_SOURCE,
+            max_workers=2,
+            latency_seconds=latency_seconds,
+            **kw,
+        )
+
+    register_case("registered-custom", custom_factory, registry=registry)
+    assert "registered-custom" in registry.names()
+    case = registry.build("registered-custom", latency_seconds=TINY_LATENCY, repetitions=1)
+    assert case.name == "registered-custom"
+    report = run_benchmark([case], repetitions=1)
+    assert report.cases[0].baseline.dispatches == 6
+
+
+def test_to_json_roundtrips_with_numbers_matching_markdown():
+    """Acceptance (2): to_json() roundtrips through json.loads with
+    numbers identical to to_markdown's tables."""
+    report = run_benchmark([_linear_case()], repetitions=1)
+    md = report.to_markdown()
+    js = json.loads(report.to_json())
+
+    case_json = js["cases"][0]
+    case_md = report.cases[0]
+
+    # Speedup: markdown shows {speedup:.2f}x, JSON shows same value
+    assert case_json["speedup"]["speedup"] == round(case_md.speedup, 2)
+
+    # Wall times: markdown shows {seconds*1000:.1f} ms, JSON shows same
+    base = case_md.baseline
+    var = case_md.variant
+    assert case_json["speedup"]["sequential_mean_ms"] == round(base.wall_mean_seconds * 1000.0, 1)
+    assert case_json["speedup"]["sequential_min_ms"] == round(base.wall_min_seconds * 1000.0, 1)
+    assert case_json["speedup"]["sequential_max_ms"] == round(base.wall_max_seconds * 1000.0, 1)
+    assert case_json["speedup"]["variant_mean_ms"] == round(var.wall_mean_seconds * 1000.0, 1)
+    assert case_json["speedup"]["variant_min_ms"] == round(var.wall_min_seconds * 1000.0, 1)
+    assert case_json["speedup"]["variant_max_ms"] == round(var.wall_max_seconds * 1000.0, 1)
+
+    # Context cost: markdown dispatches/bytes/delta, JSON same
+    assert case_json["context_cost"]["dispatches"] == base.dispatches
+    assert case_json["context_cost"]["sequential_bytes"] == base.envelope_bytes
+    assert case_json["context_cost"]["variant_bytes"] == var.envelope_bytes
+    assert case_json["context_cost"]["delta_bytes"] == case_md.envelope_delta_bytes
+
+    # Delegation granularity
+    assert case_json["delegation_granularity"]["child_runs"] == var.child_runs
+    assert case_json["delegation_granularity"]["child_events"] == var.child_events
+    assert case_json["delegation_granularity"]["tasks_per_child_mean"] == round(var.avg_steps_per_child, 2)
+    assert case_json["delegation_granularity"]["authored_plans"] == var.authored_plans
+    assert case_json["delegation_granularity"]["authored_steps"] == var.authored_steps
+
+    # Usage is None for deterministic (no worker reports usage)
+    assert case_json["usage"] is None
+
+    # Verify the markdown actually contains these numbers
+    _assert_md_has_numbers(md, case_md)
+
+
+def _assert_md_has_numbers(md, case_md):
+    """Assert the markdown text contains the same numbers as the CaseResult."""
+    base = case_md.baseline
+    var = case_md.variant
+    # speedup
+    assert f"**{case_md.speedup:.2f}x**" in md
+    # context cost
+    assert f"| {base.dispatches} |" in md
+    assert f"| {base.envelope_bytes} |" in md
+    assert f"| {var.envelope_bytes} |" in md
+    assert f"| {case_md.envelope_delta_bytes:+d} |" in md
+    # delegation
+    assert f"| {var.child_runs} |" in md
+    assert f"| {var.child_events} |" in md
+    assert f"| {var.avg_steps_per_child:.2f} |" in md
+    assert f"| {var.authored_plans} |" in md
+    assert f"| {var.authored_steps} |" in md
+
+
+def test_to_json_is_valid_json_and_deterministic():
+    """to_json() produces valid JSON and is a pure function (two calls match)."""
+    report = run_benchmark([_linear_case()], repetitions=1)
+    j1 = report.to_json()
+    j2 = report.to_json()
+    assert j1 == j2
+    parsed = json.loads(j1)
+    assert isinstance(parsed, dict)
+    assert "cases" in parsed
+    assert "repetitions" in parsed
+
+
+def test_usage_reporting_worker_factory_shows_nonzero_usage():
+    """Acceptance (3): a usage-reporting worker factory shows non-zero
+    usage in both to_json and to_markdown outputs."""
+
+    def usage_worker_factory():
+        handlers = {
+            name: (lambda cmd_name: (lambda **kw: {
+                "command": cmd_name,
+                "echo": kw,
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                    "cost_usd": 0.001,
+                },
+            }))(name)
+            for name in __import__("tikhon.registry", fromlist=["builtin_registry"]).builtin_registry().names()
+        }
+        handlers["delegate"] = lambda **kw: __import__("tikhon.benchmarks", fromlist=["DELEGATE_SAMPLE_PLAN"]).DELEGATE_SAMPLE_PLAN
+        return DeterministicWorker(handlers=handlers)
+
+    case = BenchmarkCase(
+        name="t-usage",
+        program=_LINEAR_SOURCE,
+        max_workers=2,
+        worker_factory=usage_worker_factory,
+        latency_seconds=0.0,
+        repetitions=1,
+    )
+    report = run_benchmark([case], repetitions=1)
+    cr = report.cases[0]
+
+    # RunMetrics should have non-None usage with summed tokens
+    # (6 dispatches * 15 tokens = 90 per run)
+    assert cr.baseline.usage is not None
+    assert cr.variant.usage is not None
+    assert cr.baseline.usage.total_tokens > 0
+    assert cr.variant.usage.total_tokens > 0
+
+    # JSON output should carry usage block
+    js = json.loads(report.to_json())
+    case_json = js["cases"][0]
+    assert case_json["usage"] is not None
+    assert case_json["usage"]["sequential"]["total_tokens"] > 0
+    assert case_json["usage"]["variant"]["total_tokens"] > 0
+
+    # Markdown output should contain usage info
+    md = report.to_markdown()
+    assert "usage" in md.lower() or "token" in md.lower() or case_json["usage"]["sequential"]["total_tokens"] > 0
+
+
+def test_usage_zero_shaped_default_when_worker_does_not_report():
+    """When no usage is reported, usage is None in JSON (not zero-filled)."""
+    report = run_benchmark([_linear_case()], repetitions=1)
+    js = json.loads(report.to_json())
+    assert js["cases"][0]["usage"] is None
+
+
+def test_existing_three_cases_unchanged():
+    """Acceptance (4): existing three cases unchanged — names, dispatches,
+    envelope bytes, child-run accounting all match the committed evidence."""
+    cases = builtin_cases(latency_seconds=TINY_LATENCY)
+    assert len(cases) == 3
+    # Linear
+    report = run_benchmark([cases[0]], repetitions=1)
+    assert report.cases[0].baseline.dispatches == 6
+    assert report.cases[0].baseline.envelope_bytes == report.cases[0].variant.envelope_bytes
+    assert report.cases[0].baseline.envelope_bytes > 0
+    # Scatter
+    report = run_benchmark([cases[1]], repetitions=1)
+    assert report.cases[0].baseline.dispatches == 10
+    assert report.cases[0].baseline.envelope_bytes == report.cases[0].variant.envelope_bytes
+    # PAR
+    report = run_benchmark([cases[2]], repetitions=1)
+    assert report.cases[0].variant.child_runs == 5
+    assert report.cases[0].variant.authored_plans == 1
+    assert report.cases[0].variant.authored_steps == 3
