@@ -287,6 +287,14 @@ class ModelWorker:
             # dispatching step's targets positionally.
             lines.append(
                 "This step AUTHORS a bounded child plan at runtime."
+                " Before authoring, run the Step 0 skill/MCP inventory:"
+                " scan locally available skills (.opencode/skills/,"
+                " .claude/skills/, built-ins) by task match; if no local"
+                " match, search ahood (`ahood skill search \"<keywords>\"`),"
+                " read the candidate SKILL.md, install a pinned snapshot"
+                ' (`ahood skill add owner/skill@version`), verify the pin in'
+                " .claude/skills.lock.json, then load. Record relied-on"
+                " skills in the plan's INPUT declarations."
                 ' Reply with ONLY a JSON object {"plan_text": "..."}'
                 " whose plan_text value is one complete tikhon program in"
                 " the canonical grammar: a PROGRAM header, INPUT"

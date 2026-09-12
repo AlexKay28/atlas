@@ -1,0 +1,42 @@
+{
+  "task": "issue #51: skill/MCP discovery gate before implementation, ahood as remote fallback",
+  "run_id": "sprint1-51-skill-gate",
+  "seal": "9eff9ca1bada019e5fa7981ec34b7227cdc82f1d7f792e1d6fe5c9c83909b450",
+  "terminal_status": "succeeded",
+  "steps_planned": 17,
+  "steps_executed": 17,
+  "acceptance": [
+    {
+      "criterion": "tikhon-demo SKILL.md contains the discovery gate (decision rule + ahood fallback commands) as a mandatory pre-plan step",
+      "passed": true,
+      "evidence": "SKILL.md has 'Step 0 — Skill/MCP Inventory (MANDATORY, before plan authoring)' with decision rule, ahood commands (skill search, skill add, skills.lock.json), and all 4 ahood traps"
+    },
+    {
+      "criterion": "Sprint/issue sealed runs declare relied-on skills/MCPs in program.think and cite them in WORKLOG Inputs",
+      "passed": true,
+      "evidence": "program.think has C.skill = \"tikhon-demo\" in INPUT; WORKLOG step.search_skill/step.read_skill cite C.skill"
+    },
+    {
+      "criterion": "worker_adapter T3 authoring prompt includes the inventory instruction",
+      "passed": true,
+      "evidence": "worker_adapter.py delegate branch now includes 'Step 0', 'ahood skill search', 'ahood skill add', 'skills.lock.json' instructions"
+    },
+    {
+      "criterion": "Docs note the ahood fallback including lockfile/versioning traps",
+      "passed": true,
+      "evidence": "SKILL.md Step 0 section documents all 4 traps: installed layout, publish ≠ public, versioned pins, AHOOD_TOKEN, worktree workers"
+    },
+    {
+      "criterion": "Full pytest suite green",
+      "passed": true,
+      "evidence": "856 passed in 21.18s (baseline 854 + 2 new tests)"
+    },
+    {
+      "criterion": "git status shows only owned files",
+      "passed": true,
+      "evidence": "M .opencode/skills/tikhon-demo/SKILL.md, M src/tikhon/worker_adapter.py, M tests/test_docs.py, ?? demo/runs/sprint1-51-skill-gate/"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": []
+}
