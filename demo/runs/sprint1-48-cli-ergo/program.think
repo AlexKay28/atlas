@@ -1,0 +1,28 @@
+PROGRAM sprint1_48_cli_ergo VERSION 1.0
+
+INPUT
+    G.task = "Implement CLI ergonomics for issue #48: --json modes on status/audit/learn/bench/run, distinct exit codes (0 ok, 1 usage, 2 run failed, 3 audit violations, 4 seal mismatch), consistent program/--seal args with required=True at argparse, and seal --check from #49"
+    C.scope = "src/tikhon/cli.py, src/tikhon/audit.py, src/tikhon/learn.py, tests/test_cli_ergo.py"
+    C.done = "All five commands emit valid JSON with --json; exit codes 0-4 enforced and tested; run/resume/next/ready/claim/renew have --seal required=True at argparse with runtime guards removed; seal --check exits 0 on match and 4 on mismatch; full 809+ test suite green; git status shows only owned files"
+
+step.frame: DO define(request = G.task) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.candidates
+step.read: DO fetch(resource_refs = E.candidates) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "cli_ergonomics") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "cli_ergo") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.task, evidence = E.findings) -> H.theses
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue48-cli-ergo", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue48-cli-ergo") -> K.recalled
+step.solve: DO solve(problem = G.task, domain = "cli_ergonomics") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "exit_codes_and_json") -> V.review
+step.test: DO test(path = "tests/test_cli_ergo.py", timeout_seconds = 120) -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = V.verdict, format = "markdown") -> ART.report
+step.verify: DO verify(goal = G.task, evidence = V.verdict) -> V.result
+
+RETURN U.solution, V.verdict, V.result, A.proof

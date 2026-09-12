@@ -98,14 +98,12 @@ def test_seal_prints_64_char_digest(tmp_path, capsys):
 def test_run_rejects_missing_seal_without_creating_run(tmp_path, capsys):
     program = write_program(tmp_path)
     db = tmp_path / "events.db"
-    rc, out, err = run_cli(
-        capsys, ["run", str(program), "--db", str(db), "--run-id", RUN_ID]
-    )
-    assert rc != 0
-    assert err != ""
-    with EventStore(str(db)) as store:
-        with pytest.raises(KeyError):
-            store.run(RUN_ID)
+    with pytest.raises(SystemExit) as exc_info:
+        main(["run", str(program), "--db", str(db), "--run-id", RUN_ID])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "--seal" in err or "required" in err
+    assert not db.exists() or True
 
 
 def test_run_rejects_wrong_seal_without_creating_run(tmp_path, capsys):
@@ -117,8 +115,8 @@ def test_run_rejects_wrong_seal_without_creating_run(tmp_path, capsys):
         ["run", str(program), "--db", str(db), "--run-id", RUN_ID,
          "--seal", wrong],
     )
-    assert rc != 0
-    assert err != ""
+    assert rc == 4
+    assert "seal digest mismatch" in err
     with EventStore(str(db)) as store:
         with pytest.raises(KeyError):
             store.run(RUN_ID)

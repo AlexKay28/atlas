@@ -131,6 +131,38 @@ class LearnReport:
     worklogs_present: int
     event_stores_found: int
 
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable dict form of the report (issue #48)."""
+        return {
+            "runs_dir": self.runs_dir,
+            "run_ids": list(self.run_ids),
+            "candidates": [
+                {
+                    "commands": list(c.commands),
+                    "support": c.support,
+                    "example_run_ids": list(c.example_run_ids),
+                    "suggested_name": c.suggested_name,
+                }
+                for c in self.candidates
+            ],
+            "clusters": [
+                {
+                    "bucket": c.bucket,
+                    "count": c.count,
+                    "quotes": list(c.quotes),
+                    "run_ids": list(c.run_ids),
+                }
+                for c in self.clusters
+            ],
+            "terminal_status_counts": dict(self.terminal_status_counts),
+            "steps_planned_total": self.steps_planned_total,
+            "steps_executed_total": self.steps_executed_total,
+            "parse_error_runs": list(self.parse_error_runs),
+            "call_skipped_runs": list(self.call_skipped_runs),
+            "worklogs_present": self.worklogs_present,
+            "event_stores_found": self.event_stores_found,
+        }
+
     def to_markdown(self) -> str:
         """Render a human-readable, deterministic review report."""
         lines: list[str] = []
