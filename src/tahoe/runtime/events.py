@@ -19,7 +19,18 @@ from typing import Any, Optional, Sequence
 
 from tahoe.state import StateDelta
 
-__all__ = ["Event", "EventStore", "EventType", "canonical_json"]
+__all__ = ["Event", "EventStore", "EventType", "StateVersionConflict", "canonical_json"]
+
+
+class StateVersionConflict(ValueError):
+    """CAS guard fired: another writer committed to the run first.
+
+    Raised by :meth:`EventStore.append_batch` when a record's
+    ``expected_state_version`` does not match the run's current version
+    at transaction start.  In a concurrent-resume stampede this is the
+    signal that another process already resumed the run; the loser
+    should get a clean error, not an unhandled traceback.
+    """
 
 _TASK_LEDGER_AVAILABLE = False
 try:
@@ -383,7 +394,7 @@ class EventStore:
 
                 # expected_state_version CAS check
                 if record.expected_state_version is not None and record.expected_state_version != current_state_version:
-                    raise ValueError(
+                    raise StateVersionConflict(
                         f"state version conflict for run {run_id!r}:"
                         f" expected {record.expected_state_version}, current {current_state_version}"
                     )
