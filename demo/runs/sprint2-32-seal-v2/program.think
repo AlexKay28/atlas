@@ -1,0 +1,29 @@
+# ATLAS resolution plan for GitHub issue #32: seal canonicalization
+# Documentation seal: the digest of this program is posted with it; anyone can
+# verify with: tahoe seal <file>.  Unexecuted plans live in the issue, NOT in
+# demo/runs/ (that directory is reserved for executed, evidence-bearing runs).
+# Execution-ready as the implementing worker's skeleton per the #51 gate.
+
+PROGRAM issue_32_seal_canonicalization VERSION 1.0
+
+INPUT
+    G.goal = "Canonicalize seals: store the parsed condition AST instead of raw text and normalize barrier spelling so semantically identical programs seal identically"
+    C.scope = "src/tahoe/syntax/parser.py, tests/test_syntax.py"
+    C.done = "seals equal for programs differing only in condition spacing and barrier spelling with no raw condition string in canonical json"
+    C.advanced = "untouched by sprint 1"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.search: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "defect_context") -> E.findings
+step.plan: DO decompose(goal = G.plan, protocol = "issue_32_resolution") -> G.subgoals
+step.patch: DO edit(path = C.scope, content = G.subgoals) -> ART.patch
+step.test: DO test(path = "tests/", timeout_seconds = 900) -> V.tests
+DONE matched(V.tests, "passed")
+step.review: DO review(artifact_refs = [ART.patch, V.tests], focus = C.done) -> V.review
+step.check: DO check(artifact = V.review, predicate = C.done) -> V.verdict
+step.verify: DO verify(goal = G.goal, evidence = [V.verdict, V.tests, E.findings]) -> V.result
+DONE V.result == "resolved"
+step.report: DO report(committed_refs = [V.result, V.verdict], format = "markdown") -> ART.report
+
+RETURN V.result, V.verdict, ART.report, G.subgoals

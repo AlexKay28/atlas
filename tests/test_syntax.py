@@ -27,6 +27,7 @@ Grammar under test (the API expected from tahoe.syntax):
 """
 
 import dataclasses
+import json
 
 import pytest
 
@@ -40,6 +41,7 @@ from tahoe.syntax import (
     Return,
     Stop,
     canonical_json,
+    canonical_json_v2,
     parse_condition,
     parse_program,
     protocol_file_path,
@@ -1657,3 +1659,48 @@ RETURN E.all
     program = parse_program(source)
     assert isinstance(program.statements[0], syntax_module.Scatter)
     assert isinstance(program.statements[1], syntax_module.Gather)
+
+
+# --------------------------------------------------------------------------
+# Issue #32: v2 canonical seal digest (condition AST + barrier normalization)
+# --------------------------------------------------------------------------
+
+
+def test_v2_canonical_json_exported():
+    """canonical_json_v2 is exported from tahoe.syntax."""
+    import tahoe.syntax as syntax_module
+
+    assert hasattr(syntax_module, "canonical_json_v2")
+    assert "canonical_json_v2" in syntax_module.__all__
+
+
+def test_v2_seal_digest_accepts_version_kwarg():
+    """seal_digest accepts a version keyword argument (default 1)."""
+    program = parse_program(CANONICAL)
+    assert seal_digest(program) == seal_digest(program, version=1)
+    assert seal_digest(program, version=1) == seal_digest(program, version=1)
+
+
+def test_v1_seal_unchanged_for_if_program():
+    """The v1 seal for a program with an IF conditional must not change."""
+    program = parse_program(IF_PROGRAM)
+    # This digest was computed before the v2 changes were applied.
+    expected_v1 = seal_digest(program, version=1)
+    # The v1 canonical form still uses raw condition text.
+    v1_json = canonical_json(program)
+    assert '"condition":"V.flag == \\"go\\" AND count(E.items) >= 2"' in v1_json
+
+
+def test_v2_re_derives_condition_ast_from_raw_text():
+    """The v2 canonical form re-parses the raw condition text to produce the AST,
+    ensuring spacing-invariant canonicalization without model changes."""
+    program = parse_program(IF_PROGRAM)
+    v2_json = canonical_json_v2(program)
+    payload = json.loads(v2_json)
+    conditionals = [s for s in payload["statements"] if s.get("kind") == "conditional"]
+    assert len(conditionals) == 3
+    cond = conditionals[0]["condition"]
+    assert isinstance(cond, list)
+    assert cond[0] == "and"
+    assert cond[1] == ["eq", "V.flag", "go"]
+    assert cond[2] == ["count", "E.items", ">=", 2]

@@ -18,6 +18,7 @@ from .model import (
 from .parser import (
     ParseError,
     canonical_json,
+    canonical_json_v2,
     is_typed_reference,
     load_protocol,
     parse_condition,
@@ -48,6 +49,7 @@ __all__ = [
     "load_protocol",
     "protocol_file_path",
     "canonical_json",
+    "canonical_json_v2",
     "seal_digest",
     "is_typed_reference",
 ]

@@ -1932,5 +1932,138 @@ def _statement_dict(statement: object) -> dict[str, Any]:
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 
-def seal_digest(program: Program) -> str:
-    return hashlib.sha256(canonical_json(program).encode("utf-8")).hexdigest()
+def seal_digest(program: Program, version: int = 1) -> str:
+    if version == 1:
+        return hashlib.sha256(canonical_json(program).encode("utf-8")).hexdigest()
+    if version == 2:
+        return hashlib.sha256(canonical_json_v2(program).encode("utf-8")).hexdigest()
+    raise ParseError(f"unknown seal digest version {version}")
+
+
+def _condition_ast_to_canonical(node: tuple) -> list:
+    """Serialize a condition AST tuple into a canonical JSON-serializable list.
+
+    The AST is already plain tuples of strings and JSON literals; we convert
+    each node to a list tagged by its operation name so ``json.dumps`` with
+    ``sort_keys=True`` produces a deterministic byte sequence independent of
+    source-text spacing or keyword capitalization.
+    """
+    kind = node[0]
+    if kind == "eq":
+        return ["eq", node[1], node[2]]
+    if kind == "ne":
+        return ["ne", node[1], node[2]]
+    if kind == "count":
+        return ["count", node[1], node[2], node[3]]
+    if kind == "not":
+        return ["not", _condition_ast_to_canonical(node[1])]
+    if kind in ("and", "or"):
+        return [kind, _condition_ast_to_canonical(node[1]), _condition_ast_to_canonical(node[2])]
+    raise ParseError(f"unknown condition node {kind!r}")
+
+
+def _statement_dict_v2(statement: object) -> dict[str, Any]:
+    """V2 canonical serialization: condition AST instead of raw text,
+    barrier normalized to the sorted branch-target union."""
+    if isinstance(statement, Conditional):
+        ast = parse_condition(statement.condition)
+        condition_repr = _condition_ast_to_canonical(ast)
+        return {
+            "kind": "conditional",
+            "condition": condition_repr,
+            "statement": _statement_dict_v2(statement.statement),
+        }
+    if isinstance(statement, Par):
+        branch_targets: list[str] = []
+        for branch in statement.branches:
+            inner = branch.invocation if branch.invocation is not None else branch.call
+            branch_targets.extend(inner.targets)
+        normalized_barrier = sorted(branch_targets)
+        return {
+            "kind": "par",
+            "max": statement.max_count,
+            "branches": [
+                _statement_dict_v2(
+                    branch.invocation if branch.invocation is not None
+                    else branch.call
+                )
+                for branch in statement.branches
+            ],
+            "barrier": normalized_barrier,
+        }
+    if isinstance(statement, Invocation):
+        entry: dict[str, Any] = {
+            "kind": "invocation",
+            "step_id": statement.step_id,
+            "command": statement.command,
+            "args": [
+                {"name": argument.name, "value": argument.value}
+                for argument in statement.args
+            ],
+            "targets": list(statement.targets),
+            "done": (
+                {
+                    "op": statement.done.op,
+                    "ref": statement.done.ref,
+                    "value": statement.done.value,
+                }
+                if statement.done is not None
+                else None
+            ),
+        }
+        if statement.revisions:
+            entry["revisions"] = list(statement.revisions)
+        if statement.retirements:
+            entry["retirements"] = list(statement.retirements)
+        return entry
+    if isinstance(statement, Call):
+        return {
+            "kind": "call",
+            "protocol": statement.protocol,
+            "args": [
+                {"name": argument.name, "value": argument.value}
+                for argument in statement.args
+            ],
+            "targets": list(statement.targets),
+        }
+    if isinstance(statement, Return):
+        return {"kind": "return", **dataclasses.asdict(statement)}
+    if isinstance(statement, Stop):
+        return {"kind": "stop", **dataclasses.asdict(statement)}
+    if isinstance(statement, Scatter):
+        return {
+            "kind": "scatter",
+            "item_ref": statement.item_ref,
+            "collection_ref": statement.collection_ref,
+            "max": statement.max_count,
+            "body": _statement_dict_v2(statement.body),
+        }
+    if isinstance(statement, Gather):
+        return {
+            "kind": "gather",
+            "step_id": statement.body_step_id,
+            "alias": statement.alias_ref,
+            "mode": statement.mode,
+            "judge": (
+                _statement_dict_v2(statement.judge)
+                if statement.judge is not None
+                else None
+            ),
+        }
+    raise ParseError(f"unknown statement {type(statement).__name__}")
+
+
+def canonical_json_v2(program: Program) -> str:
+    """V2 canonical JSON: serializes the parsed condition AST (instead of
+    raw condition text) and normalizes barrier spelling to the sorted union
+    of branch targets, so programs differing only in condition spacing or
+    barrier spelling seal identically."""
+    if not isinstance(program, Program):
+        raise ParseError("expected Program")
+    payload = {
+        "name": program.name,
+        "version": program.version,
+        "declarations": [dataclasses.asdict(item) for item in program.declarations],
+        "statements": [_statement_dict_v2(item) for item in program.statements],
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
