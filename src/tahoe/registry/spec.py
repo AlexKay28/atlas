@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Any, Iterable
 
 from .enums import EffectClass, ExecutionMode, FailureKind, IdempotencyMode, RoutingTier
-from .errors import ContractError, ReservedNameError
+from .errors import ContractError, ReservedNameError, SchemaError
 
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -32,6 +32,75 @@ VERSION_PATTERN = re.compile(
 RESERVED_CONTROL_NAMES = frozenset(
     {"await", "approve", "seal", "run", "pause", "resume", "cancel", "fork"}
 )
+
+
+_TIER_ORDER = {RoutingTier.T0: 0, RoutingTier.T1: 1, RoutingTier.T2: 2, RoutingTier.T3: 3}
+
+
+def _tier_rank(tier: RoutingTier) -> int:
+    return _TIER_ORDER[tier]
+
+
+#: Closed type grammar for ``inputs`` and ``parameters`` entries.
+#: Each entry is ``name:type`` where ``type`` must be one of:
+#: - a primitive atom from ``_TYPE_ATOMS``
+#: - a node-type prefix from ``_NODE_TYPE_PREFIXES`` (single uppercase letter
+#:   or ``OUT``)
+#: - a slash compound where every segment is a valid type atom
+#: - ``int`` with a bound (``int<=N``, ``int>N``, ``int>=N``, ``int<N``)
+_TYPE_ATOMS = frozenset({
+    "text", "json", "bool", "map", "tuple", "numeric", "enum", "descriptor",
+    "artifact", "artifacts", "immutable", "refs", "ranked_refs",
+    "kb_key", "kb_key_or_prefix",
+    "workspace_relative", "deterministic", "predicates",
+    "media_types", "token_cap", "bounded_types", "pinned_ref",
+    "pddl", "smt", "lean4", "isabelle",
+})
+
+_NODE_TYPE_PREFIXES = frozenset({
+    "G", "Q", "C", "K", "OUT", "V", "D", "H", "U", "E", "R", "F", "P", "ART",
+})
+
+_ENTRY_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+_INT_BOUND_PATTERN = re.compile(r"^int(<=|>=|>|<)(\d+)$")
+
+
+def _validate_type_entry(entry: str, field_name: str) -> None:
+    """Validate one ``name:type`` entry against the closed type grammar."""
+    if ":" not in entry:
+        raise SchemaError(
+            f"{field_name} entry {entry!r} must be 'name:type'"
+        )
+    name, type_part = entry.split(":", 1)
+    if not _ENTRY_NAME_PATTERN.fullmatch(name):
+        raise SchemaError(
+            f"{field_name} entry {entry!r} has an invalid name {name!r}"
+        )
+    if not type_part:
+        raise SchemaError(
+            f"{field_name} entry {entry!r} has an empty type"
+        )
+    if type_part.startswith("int"):
+        if _INT_BOUND_PATTERN.fullmatch(type_part):
+            return
+        raise SchemaError(
+            f"{field_name} entry {entry!r}: int parameter requires a bound"
+            " (e.g. int<=100, int>0, int>=1, int<1000)"
+        )
+    if "/" in type_part:
+        segments = type_part.split("/")
+        for seg in segments:
+            if seg not in _TYPE_ATOMS and seg not in _NODE_TYPE_PREFIXES:
+                raise SchemaError(
+                    f"{field_name} entry {entry!r}: unknown type segment {seg!r}"
+                    f" in compound type {type_part!r}"
+                )
+        return
+    if type_part in _TYPE_ATOMS or type_part in _NODE_TYPE_PREFIXES:
+        return
+    raise SchemaError(
+        f"{field_name} entry {entry!r}: unknown type {type_part!r}"
+    )
 
 
 def _nonempty_str(value: Any, field_name: str) -> str:
@@ -198,6 +267,12 @@ class RoutingPolicy:
             raise ContractError("routing.permitted_tiers must include routing.preferred_tier")
         if self.validator_tier not in permitted:
             raise ContractError("routing.permitted_tiers must include routing.validator_tier")
+        for tier in permitted:
+            if _tier_rank(tier) < _tier_rank(self.minimum_tier):
+                raise ContractError(
+                    f"routing.permitted_tiers contains {tier.value}"
+                    f" which is below routing.minimum_tier {self.minimum_tier.value}"
+                )
 
     def to_dict(self) -> dict:
         return {
@@ -268,6 +343,10 @@ class CommandSpec:
         _nonempty_str(self.purpose, "purpose")
         object.__setattr__(self, "inputs", _str_tuple(self.inputs, "inputs"))
         object.__setattr__(self, "parameters", _str_tuple(self.parameters, "parameters"))
+        for entry in self.inputs:
+            _validate_type_entry(entry, "inputs")
+        for entry in self.parameters:
+            _validate_type_entry(entry, "parameters")
         object.__setattr__(self, "preconditions", _str_tuple(self.preconditions, "preconditions"))
         object.__setattr__(self, "outputs", _str_tuple(self.outputs, "outputs"))
         object.__setattr__(self, "effects", _str_tuple(self.effects, "effects"))

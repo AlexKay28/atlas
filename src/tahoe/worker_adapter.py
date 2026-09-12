@@ -68,6 +68,7 @@ from tahoe.envelope import (
 )
 from tahoe.registry.enums import RoutingTier
 from tahoe.registry.registry import Registry
+from tahoe.registry.spec import _tier_rank
 from tahoe.runtime.coordinator import map_results_to_targets
 
 __all__ = [
@@ -237,7 +238,12 @@ class ModelWorker:
         return result_envelope.payload
 
     def _resolve_model(self, spec: Any) -> str:
-        """Preferred tier first, then ``default_model``; else ``WorkerError``."""
+        """Preferred tier first, then ``default_model``; else ``WorkerError``.
+
+        Issue #34: the resolved model's tier must be at or above the
+        command contract's ``minimum_tier`` — a below-minimum model is
+        refused even if it is the preferred tier or the default.
+        """
         tier: RoutingTier = spec.routing.preferred_tier
         model = self._tier_models.get(tier.value)
         if model is None:
@@ -249,6 +255,12 @@ class ModelWorker:
                 f"no model configured for routing tier {tier.value!r}"
                 f" (preferred tier of command {spec.name!r}) and no"
                 " default_model was provided"
+            )
+        if _tier_rank(tier) < _tier_rank(spec.routing.minimum_tier):
+            raise WorkerError(
+                f"preferred tier {tier.value!r} for command {spec.name!r}"
+                f" is below the command's minimum_tier"
+                f" {spec.routing.minimum_tier.value!r}"
             )
         return model
 

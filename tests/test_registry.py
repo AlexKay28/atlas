@@ -339,7 +339,7 @@ def test_solve_contract_matches_issue_11_spec(registry):
     assert ("solution:artifact", "formalization:artifact") == spec.outputs
     assert spec.routing.minimum_tier is RoutingTier.T1
     assert spec.routing.preferred_tier is RoutingTier.T2
-    assert spec.routing.validator_tier is RoutingTier.T0
+    assert spec.routing.validator_tier is RoutingTier.T1
     assert spec.routing.fallback_chain == ()
     assert "formalization_digest" in spec.evidence
     assert "solver_result" in spec.evidence
@@ -355,7 +355,7 @@ def test_prove_contract_matches_issue_11_spec(registry):
     assert ("proof:artifact", "checker_result:artifact") == spec.outputs
     assert spec.routing.minimum_tier is RoutingTier.T2
     assert spec.routing.preferred_tier is RoutingTier.T3
-    assert spec.routing.validator_tier is RoutingTier.T0
+    assert spec.routing.validator_tier is RoutingTier.T2
     assert spec.routing.fallback_chain == ()
     assert "proof_digest" in spec.evidence
     assert "checker_result" in spec.evidence
@@ -375,7 +375,7 @@ def test_delegate_contract_matches_issue_25_spec(registry):
     assert spec.effect_class is EffectClass.READ_ONLY
     assert spec.routing.minimum_tier is RoutingTier.T2
     assert spec.routing.preferred_tier is RoutingTier.T3
-    assert spec.routing.validator_tier is RoutingTier.T0
+    assert spec.routing.validator_tier is RoutingTier.T2
     assert "plan_digest" in spec.evidence
     assert "child_run_id" in spec.evidence
 

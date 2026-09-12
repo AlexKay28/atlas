@@ -163,9 +163,9 @@ def _fetch() -> CommandSpec:
         compensation="none",
         routing=RoutingPolicy(
             minimum_tier=RoutingTier.T1,
-            permitted_tiers=(RoutingTier.T0, RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
             preferred_tier=RoutingTier.T1,
-            validator_tier=RoutingTier.T0,
+            validator_tier=RoutingTier.T1,
             confidence_policy="none",
             escalation_on=(FailureKind.TIMEOUT, FailureKind.UNAVAILABLE),
             fallback_chain=("search@1.0.0",),
@@ -1138,9 +1138,9 @@ def _solve() -> CommandSpec:
         compensation="none",
         routing=RoutingPolicy(
             minimum_tier=RoutingTier.T1,
-            permitted_tiers=(RoutingTier.T0, RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
             preferred_tier=RoutingTier.T2,
-            validator_tier=RoutingTier.T0,
+            validator_tier=RoutingTier.T1,
             confidence_policy="none",
             escalation_on=(FailureKind.FORMALIZATION, FailureKind.UNAVAILABLE),
             fallback_chain=(),
@@ -1194,9 +1194,9 @@ def _prove() -> CommandSpec:
         compensation="none",
         routing=RoutingPolicy(
             minimum_tier=RoutingTier.T2,
-            permitted_tiers=(RoutingTier.T0, RoutingTier.T2, RoutingTier.T3),
+            permitted_tiers=(RoutingTier.T2, RoutingTier.T3),
             preferred_tier=RoutingTier.T3,
-            validator_tier=RoutingTier.T0,
+            validator_tier=RoutingTier.T2,
             confidence_policy="none",
             escalation_on=(FailureKind.FORMALIZATION, FailureKind.UNAVAILABLE),
             fallback_chain=(),
@@ -1269,9 +1269,9 @@ def _delegate() -> CommandSpec:
         # validator/checker of the authored artifact is a T0 concern.
         routing=RoutingPolicy(
             minimum_tier=RoutingTier.T2,
-            permitted_tiers=(RoutingTier.T0, RoutingTier.T2, RoutingTier.T3),
+            permitted_tiers=(RoutingTier.T2, RoutingTier.T3),
             preferred_tier=RoutingTier.T3,
-            validator_tier=RoutingTier.T0,
+            validator_tier=RoutingTier.T2,
             confidence_policy="none",
             escalation_on=(FailureKind.FORMALIZATION, FailureKind.UNAVAILABLE),
             fallback_chain=(),
