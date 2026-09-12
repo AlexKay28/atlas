@@ -562,3 +562,342 @@ def test_bridge_projection_matches_coordinator_path(tmp_path):
         assert audit_run(store2, "r1").ok
     finally:
         store2.close()
+
+
+# ============================================== issue #42: renew / heartbeat
+
+
+def test_renew_with_correct_token_extends_freshness_and_delayed_submit_succeeds(
+    two_step,
+):
+    """Acceptance (1): renew with correct token extends freshness past
+    claim_timeout_seconds and the delayed submit succeeds."""
+    store, driver = two_step
+    from datetime import datetime, timezone, timedelta
+
+    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    times = [t0]
+
+    def clock():
+        return times[0]
+
+    bridge = ClaimBridge(driver, claim_timeout_seconds=100.0, clock=clock)
+    handout = bridge.ready()
+    assert handout["ready"] is True
+    token = handout["claim"]["claim_token"]
+    invocation_id = handout["claim"]["invocation_id"]
+    from tikhon.envelope import TaskEnvelope
+
+    task = TaskEnvelope.from_dict(handout["envelope"])
+
+    # Advance past the claim timeout (100s) — without renew, submit should fail.
+    times[0] = t0 + timedelta(seconds=150)
+    before = len(store.events("r1"))
+    with pytest.raises(DriverError, match="expired"):
+        bridge.submit(_result_for(task, {"plan": "x"}), claim_token=token)
+    assert len(store.events("r1")) == before  # nothing appended
+
+    # Rewind to within the timeout and renew.
+    times[0] = t0 + timedelta(seconds=50)
+    outcome = bridge.renew(invocation_id, token)
+    assert outcome["renewed"] is True
+    assert outcome["invocation_id"] == invocation_id
+    assert outcome["claim_attempt"] == 1
+
+    # Heartbeat event was appended.
+    heartbeats = _events_of_type(store, "r1", EventType.HEARTBEAT)
+    assert len(heartbeats) == 1
+    hb = heartbeats[0]
+    assert hb.invocation_id == invocation_id
+    hb_payload = hb.payload if isinstance(hb.payload, dict) else {}
+    assert "claim_token_fingerprint" in hb_payload
+    assert "ts" in hb_payload
+    # Fingerprint is a sha256 hex, not the raw token.
+    assert hb_payload["claim_token_fingerprint"] != token
+    assert len(hb_payload["claim_token_fingerprint"]) == 64
+
+    # Now advance past the original timeout (150s from t0) — the heartbeat
+    # at t0+50s extends freshness to t0+50s+100s = t0+150s. At t0+140s we
+    # are still fresh.
+    times[0] = t0 + timedelta(seconds=140)
+    result = bridge.submit(_result_for(task, {"plan": "framed"}), claim_token=token)
+    assert result["recorded"] is True
+    assert result["run_status"] == "in_progress"
+    assert audit_run(store, "r1").ok
+
+
+def test_renew_with_stale_foreign_token_appends_nothing(two_step):
+    """Acceptance (2): renew with stale/foreign token appends nothing."""
+    store, driver = two_step
+    bridge = ClaimBridge(driver)
+    handout = bridge.ready()
+    invocation_id = handout["claim"]["invocation_id"]
+    correct_token = handout["claim"]["claim_token"]
+    before = len(store.events("r1"))
+
+    # Wrong token.
+    with pytest.raises(DriverError, match="claim token mismatch"):
+        bridge.renew(invocation_id, "f" * 32)
+    assert len(store.events("r1")) == before  # nothing appended
+
+    # Empty token.
+    with pytest.raises(DriverError, match="nonempty"):
+        bridge.renew(invocation_id, "")
+    assert len(store.events("r1")) == before
+
+    # Unknown invocation.
+    with pytest.raises(DriverError, match="no open claim"):
+        bridge.renew("inv-99", correct_token)
+    assert len(store.events("r1")) == before
+
+    # Correct token still works after the failed attempts.
+    outcome = bridge.renew(invocation_id, correct_token)
+    assert outcome["renewed"] is True
+    assert len(store.events("r1")) == before + 1  # only the heartbeat
+
+
+def test_renew_on_terminal_run_rejected(two_step):
+    """Renew on a terminal run is rejected with nothing appended."""
+    store, driver = two_step
+    bridge = ClaimBridge(driver)
+    _drive_step(bridge, {"plan": "framed"})
+    _drive_step(bridge, 12)
+    before = len(store.events("r1"))
+    with pytest.raises(DriverError, match="terminal"):
+        bridge.renew("inv-1", "whatever")
+    assert len(store.events("r1")) == before
+
+
+# ----------------------------------------------- issue #42: fencing
+
+
+def test_tokenless_submit_against_open_claim_is_rejected(tmp_path, capsys):
+    """Acceptance (3): legacy token-less submit against an open claim is
+    rejected with nothing appended."""
+    program = _write(tmp_path, "prog.think", TWO_STEP_PROGRAM)
+    digest = seal_digest(parse_program(TWO_STEP_PROGRAM))
+    db = str(tmp_path / "events.db")
+
+    # ready/claim to create an open claim on inv-1.
+    handout = _ready(tmp_path, program, digest, db, capsys)
+    assert handout["ready"] is True
+
+    store = EventStore(db)
+    try:
+        before = len(store.events("r1"))
+    finally:
+        store.close()
+
+    # Token-less submit against the open claim must be fenced off.
+    result = _result_file(handout["envelope"], {"plan": "x"}, tmp_path)
+    rc = main([
+        "submit", "--db", db, "--run-id", "r1",
+        "--invocation-id", "inv-1", "--result-file", result,
+    ])
+    assert rc == 1
+    assert "fenced" in capsys.readouterr().err
+
+    store = EventStore(db)
+    try:
+        assert len(store.events("r1")) == before  # nothing appended
+    finally:
+        store.close()
+
+
+def test_tokenless_submit_without_open_claim_still_works(tmp_path, capsys):
+    """Token-less submit still works when there is NO open claim
+    (coordinator-driven or next-dispatched invocations)."""
+    program = _write(tmp_path, "prog.think", TWO_STEP_PROGRAM)
+    digest = seal_digest(parse_program(TWO_STEP_PROGRAM))
+    db = str(tmp_path / "events.db")
+
+    # Use `next` (Wave 8) to dispatch without claiming.
+    rc = main([
+        "next", "--db", db, "--run-id", "r1",
+        "--program", program, "--seal", digest,
+    ])
+    assert rc == 0, capsys.readouterr().err
+    envelope = json.loads(capsys.readouterr().out)
+
+    # Token-less submit should succeed (no open claim).
+    result = _result_file(envelope, {"plan": "ok"}, tmp_path)
+    rc = main([
+        "submit", "--db", db, "--run-id", "r1",
+        "--invocation-id", "inv-1", "--result-file", result,
+    ])
+    assert rc == 0, capsys.readouterr().err
+    outcome = json.loads(capsys.readouterr().out)
+    assert outcome["recorded"] is True
+
+
+# ------------------------------------------ issue #42: CLI renew subcommand
+
+
+def _renew_cli(tmp_path, db, program, digest, invocation_id, token, capsys):
+    rc = main([
+        "renew", "--db", db, "--run-id", "r1",
+        "--program", program, "--seal", digest,
+        "--invocation-id", invocation_id,
+        "--claim-token", token,
+    ])
+    return rc
+
+
+def test_cli_renew_extends_freshness_and_delayed_submit_succeeds(
+    tmp_path, capsys,
+):
+    """Acceptance (4): `tikhon renew` CLI works end-to-end — renew
+    extends freshness and the delayed submit succeeds."""
+    program = _write(tmp_path, "prog.think", TWO_STEP_PROGRAM)
+    digest = seal_digest(parse_program(TWO_STEP_PROGRAM))
+    db = str(tmp_path / "events.db")
+
+    handout = _ready(tmp_path, program, digest, db, capsys)
+    token = handout["claim"]["claim_token"]
+    invocation_id = handout["claim"]["invocation_id"]
+
+    # CLI renew.
+    rc = _renew_cli(
+        tmp_path, db, program, digest, invocation_id, token, capsys,
+    )
+    assert rc == 0, capsys.readouterr().err
+    renewed = json.loads(capsys.readouterr().out)
+    assert renewed["renewed"] is True
+    assert renewed["invocation_id"] == invocation_id
+
+    # Verify a HEARTBEAT event was recorded.
+    store = EventStore(db)
+    try:
+        heartbeats = _events_of_type(store, "r1", EventType.HEARTBEAT)
+        assert len(heartbeats) == 1
+        assert heartbeats[0].invocation_id == invocation_id
+        assert audit_run(store, "r1").ok
+    finally:
+        store.close()
+
+    # The submit with the original token still succeeds (freshness extended).
+    outcome = _submit_cli(
+        tmp_path, db, handout["envelope"], {"plan": "framed"},
+        token, capsys,
+    )
+    assert outcome["recorded"] is True
+
+
+def test_cli_renew_wrong_token_rejected(tmp_path, capsys):
+    """CLI renew with wrong token exits 1 and appends nothing."""
+    program = _write(tmp_path, "prog.think", TWO_STEP_PROGRAM)
+    digest = seal_digest(parse_program(TWO_STEP_PROGRAM))
+    db = str(tmp_path / "events.db")
+
+    handout = _ready(tmp_path, program, digest, db, capsys)
+    invocation_id = handout["claim"]["invocation_id"]
+
+    store = EventStore(db)
+    try:
+        before = len(store.events("r1"))
+    finally:
+        store.close()
+
+    rc = _renew_cli(
+        tmp_path, db, program, digest, invocation_id, "wrong-token",
+        capsys,
+    )
+    assert rc == 1
+    assert "mismatch" in capsys.readouterr().err
+
+    store = EventStore(db)
+    try:
+        assert len(store.events("r1")) == before
+    finally:
+        store.close()
+
+
+# ------------------------------------- issue #42: coordinator-path unchanged
+
+
+def test_coordinator_driven_no_claim_runs_unchanged(tmp_path):
+    """Acceptance (5): coordinator-driven (no-claim) runs behave
+    exactly as before — the bridge and its fencing never interfere."""
+    program = parse_program(TWO_STEP_PROGRAM)
+    store = EventStore(str(tmp_path / "coord.db"))
+    try:
+        worker = DeterministicWorker({
+            "define": lambda **kwargs: {"plan": "coordinator"},
+            "calculate": lambda **kwargs: 12,
+        })
+        result = SequentialCoordinator(store, worker).execute(
+            program, run_id="r1",
+        )
+        assert result["status"] == "succeeded"
+        assert audit_run(store, "r1").ok
+        # No claim events in coordinator-driven runs.
+        claims = _events_of_type(store, "r1", EventType.INVOCATION_CLAIMED)
+        assert len(claims) == 0
+        heartbeats = _events_of_type(store, "r1", EventType.HEARTBEAT)
+        assert len(heartbeats) == 0
+        state = store.project_state("r1")
+        assert state["nodes"]["G.plan"]["value"] == {"plan": "coordinator"}
+        assert state["nodes"]["OUT.total"]["value"] == 12
+    finally:
+        store.close()
+
+
+# -------------------------------------- issue #42: reissue respects max_attempts
+
+
+def test_reissue_respects_max_attempts(two_step):
+    """Acceptance (6): reissue stops once claim_attempt exceeds
+    contract.budget.max_attempts."""
+    store, driver = two_step
+    # TWO_STEP_PROGRAM's first step is `define` with max_attempts=1.
+    # With our > check, claim_attempt=1 allows one reissue (to 2),
+    # then claim_attempt=2 > 1 blocks further reissue.
+    stale_bridge = ClaimBridge(driver, claim_timeout_seconds=0.0)
+
+    first = stale_bridge.ready()
+    assert first["ready"] is True
+    assert first["claim"]["claim_attempt"] == 1
+
+    second = stale_bridge.ready()
+    assert second["ready"] is True
+    assert second["claim"]["claim_attempt"] == 2
+
+    # Third ready: claim_attempt=2 > max_attempts=1 → blocked.
+    third = stale_bridge.ready()
+    assert third["ready"] is False
+    assert "max_attempts" in third["reason"]
+    assert third["claim"]["claim_attempt"] == 2
+
+    # Nothing was appended by the blocked reissue attempt.
+    claims = _events_of_type(store, "r1", EventType.INVOCATION_CLAIMED)
+    assert len(claims) == 2
+    dispatches = _events_of_type(
+        store, "r1", EventType.INVOCATION_DISPATCHED
+    )
+    assert len(dispatches) == 2  # no third dispatch
+
+
+def test_reissue_unlimited_when_max_attempts_absent(two_step):
+    """When the envelope has no contract.budget.max_attempts (or it is
+    invalid), reissue is unlimited (preserves historical behavior)."""
+    from tikhon.envelope import TaskEnvelope
+
+    store, driver = two_step
+    stale_bridge = ClaimBridge(driver, claim_timeout_seconds=0.0)
+    # Patch the envelope's contract to remove max_attempts.
+    original_next = driver.next_envelope
+
+    def patched_next():
+        env = original_next()
+        if isinstance(env.contract, dict):
+            budget = env.contract.get("budget")
+            if isinstance(budget, dict):
+                budget.pop("max_attempts", None)
+        return env
+
+    driver.next_envelope = patched_next
+    first = stale_bridge.ready()
+    assert first["ready"] is True
+    for _ in range(5):
+        result = stale_bridge.ready()
+        assert result["ready"] is True  # always reissues, no cap

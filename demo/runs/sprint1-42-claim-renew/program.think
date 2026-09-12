@@ -1,0 +1,52 @@
+# Tikhon run for GitHub issue #42: claim renew/heartbeat + close the
+# token-less submit bypass.
+#
+# Sealed BEFORE any source edit (tikhon protocol step 2). Uses only the
+# canonical grammar that exists at seal time: plain DO steps over
+# registered commands, one SCATTER/GATHER bounded fan-out, one PAR MAX 3
+# block with heterogeneous branches, and one CALL protocol.framing line.
+# Every argument is a single typed reference or a JSON literal.
+
+PROGRAM issue_42_claim_renew VERSION 1.0
+
+INPUT
+    G.goal = "Implement ClaimBridge.renew(invocation_id, claim_token) that validates the token, extends freshness via a HEARTBEAT event, and makes the delayed submit succeed; add tikhon renew CLI subcommand; fence legacy token-less submit against open claims; cap bridge reissue at contract.budget.max_attempts"
+    C.scope = "src/tikhon/bridge.py, src/tikhon/claims.py, src/tikhon/runtime/events.py, src/tikhon/cli.py, tests/test_bridge.py"
+    C.done = "renew with correct token extends freshness past claim_timeout_seconds and the delayed submit succeeds; renew with stale/foreign token appends nothing; legacy token-less submit against an open claim is rejected with nothing appended; tikhon renew CLI works end-to-end; coordinator-driven no-claim runs behave exactly as before; reissue respects max_attempts; full 760-test suite stays green"
+    Q.parts = ["renew-extends-freshness", "stale-token-rejects", "tokenless-submit-fenced", "cli-renew-e2e", "coordinator-unchanged", "reissue-max-attempts"]
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "claim_bridge_renew") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "claim_renew_fencing") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.goal, evidence = E.findings) -> H.theses
+step.calculate: DO calculate(expression = "freshness_window", values = {"claim_timeout_seconds": 900, "heartbeat_extends": true}) -> F.metrics
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue42-claim-renew", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue42-claim-renew") -> K.recalled
+step.solve: DO solve(problem = G.goal, domain = "claim_lease_extension") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "claim_fencing") -> V.review
+step.design: DO summarize(source_refs = V.review, budget = 6000) -> P.design
+step.scatter_prepare: DO define(goal = Q.parts) -> Q.tasks
+SCATTER X.part IN Q.tasks MAX 4
+  step.part_rank: DO rank(options = X.part, criteria = C.done) -> R.part
+GATHER part_rank AS R.parts USING all
+PAR MAX 3
+    step.par_sites: DO search(query = G.plan, scope = C.scope) -> E.par_sites
+    step.par_check: DO check(artifact = V.review, predicate = "claim_invariants_preserved") -> V.par_verdict
+    CALL protocol.framing(request = G.plan, scope = C.scope) -> E.context, V.analysis
+BARRIER -> E.par_sites, V.par_verdict, E.context, V.analysis
+step.implement: DO edit(path = "src/tikhon/bridge.py", content = "ClaimBridge.renew + _last_heartbeat + max_attempts reissue cap") -> ART.bridge
+step.cli_wire: DO edit(path = "src/tikhon/cli.py", content = "tikhon renew subcommand + fencing guard + docstring update") -> ART.cli
+step.test_write: DO edit(path = "tests/test_bridge.py", content = "tests for renew, fencing, max_attempts, CLI renew") -> ART.tests
+step.test: DO test(path = "tests/test_bridge.py", timeout_seconds = 600) -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = [V.verdict, F.metrics, R.parts], format = "markdown") -> ART.report
+step.verify: DO verify(goal = G.goal, evidence = [ART.bridge, ART.cli, V.tests, R.parts]) -> V.result
+
+RETURN P.design, V.verdict, V.result, R.parts, U.solution, A.proof, F.metrics, V.analysis

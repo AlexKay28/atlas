@@ -1,0 +1,38 @@
+{
+  "task": "GitHub issue #42: Claim renew/heartbeat + close the token-less submit bypass",
+  "run_id": "sprint1-42-claim-renew",
+  "seal": "6d6122da94c952f28bcf8c81fab9802474f2bcc7aa092d936aff7e046b781705",
+  "terminal_status": "succeeded",
+  "steps_planned": 25,
+  "steps_executed": 25,
+  "acceptance": {
+    "1_renew_extends_freshness_delayed_submit_succeeds": {
+      "pass": true,
+      "evidence": "test_renew_with_correct_token_extends_freshness_and_delayed_submit_succeeds: renew at t+50s with timeout=100s, submit at t+140s succeeds (without renew, submit at t+150s fails with 'expired')"
+    },
+    "2_stale_foreign_token_appends_nothing": {
+      "pass": true,
+      "evidence": "test_renew_with_stale_foreign_token_appends_nothing: wrong/empty/unknown invocation tokens all rejected, event count unchanged; correct token still works"
+    },
+    "3_tokenless_submit_against_open_claim_rejected": {
+      "pass": true,
+      "evidence": "test_tokenless_submit_against_open_claim_is_rejected: CLI submit without --claim-token against open claim exits 1 with 'fenced' in stderr, nothing appended"
+    },
+    "4_cli_renew_works_end_to_end": {
+      "pass": true,
+      "evidence": "test_cli_renew_extends_freshness_and_delayed_submit_succeeds: tikhon renew CLI exits 0, HEARTBEAT event recorded, subsequent submit succeeds"
+    },
+    "5_coordinator_driven_no_claim_runs_unchanged": {
+      "pass": true,
+      "evidence": "test_coordinator_driven_no_claim_runs_unchanged: SequentialCoordinator run has 0 CLAIMED and 0 HEARTBEAT events, audit clean, state correct"
+    },
+    "6_reissue_respects_max_attempts": {
+      "pass": true,
+      "evidence": "test_reissue_respects_max_attempts: with max_attempts=1, claim_attempt=2 > 1 blocks third reissue (ready=false, 'max_attempts' in reason, only 2 CLAIMED + 2 DISPATCHED events)"
+    }
+  },
+  "unresolved": [],
+  "protocol_deviations": [
+    "max_attempts cap uses strict > (not >=) to preserve existing test_stale_claim_is_reissued_with_new_token_and_attempt with define(max_attempts=1)"
+  ]
+}

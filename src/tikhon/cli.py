@@ -1,7 +1,7 @@
 """Command-line interface for tikhon (docs/spec/02-command-catalog.md).
 
 Commands: lint, seal, run, resume, status, events, audit, learn, next,
-submit, ready, claim.  Uses argparse and the standard library only.
+submit, ready, claim, renew.  Uses argparse and the standard library only.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from tikhon.audit import audit_run
 from tikhon.benchmarks import builtin_cases, run_benchmark
 from tikhon.bridge import ClaimBridge
 from tikhon.envelope import (
+    DriverError,
     EnvelopeValidationError,
     ExternalDriver,
     ResultEnvelope,
@@ -876,7 +877,27 @@ def _cmd_submit(args: argparse.Namespace) -> int:
             outcome = bridge.submit(result, claim_token=args.claim_token)
         else:
             # Legacy Wave 8 path: no claim bookkeeping (coordinator-driven
-            # or claim-less external runs keep working unchanged).
+            # or claim-less external runs keep working unchanged) — UNLESS
+            # the target invocation holds an open, non-expired claim, in
+            # which case a token-less submit is fenced off (issue #42).
+            bridge = ClaimBridge(
+                driver, claim_timeout_seconds=args.claim_timeout
+            )
+            try:
+                store_events = store.events(args.run_id)
+            except KeyError:
+                store_events = ()
+            open_claim = bridge._open_claim(
+                store_events, result.invocation_id
+            )
+            if open_claim is not None and bridge._is_fresh(open_claim):
+                raise DriverError(
+                    f"invocation {result.invocation_id!r} holds an open,"
+                    f" non-expired claim (attempt {open_claim.claim_attempt},"
+                    f" seq {open_claim.seq}); a token-less submit is fenced"
+                    " off — provide --claim-token from tikhon ready/claim"
+                    " or renew"
+                )
             outcome = driver.submit_result(result)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -884,6 +905,29 @@ def _cmd_submit(args: argparse.Namespace) -> int:
     finally:
         store.close()
     print(json.dumps(outcome, sort_keys=True, ensure_ascii=False))
+    return 0
+
+
+def _cmd_renew(args: argparse.Namespace) -> int:
+    if not args.seal:
+        print("error: --seal is required for renew", file=sys.stderr)
+        return 1
+    program = _load_validated_program(args.program, args.seal)
+    if program is None:
+        return 1
+
+    store, memory, driver = _open_external_driver(args, program)
+    if driver is None:
+        return 1
+    bridge = ClaimBridge(driver, claim_timeout_seconds=args.claim_timeout)
+    try:
+        outcome = bridge.renew(args.invocation_id, args.claim_token)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        _close_driver(store, memory)
+        return 1
+    print(json.dumps(outcome, sort_keys=True, ensure_ascii=False))
+    _close_driver(store, memory)
     return 0
 
 
@@ -1164,6 +1208,50 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Name recorded for the claiming driver/agent",
     )
     p_claim.set_defaults(func=_cmd_claim)
+
+    p_renew = sub.add_parser(
+        "renew",
+        help=(
+            "Extend an open claim's freshness by appending a HEARTBEAT"
+            " event (issue #42)"
+        ),
+    )
+    p_renew.add_argument("--db", required=True, help="Path to event store database")
+    p_renew.add_argument("--run-id", required=True, help="Run identifier")
+    p_renew.add_argument(
+        "--program", required=True, help="Path to the sealed .think source file"
+    )
+    p_renew.add_argument(
+        "--seal", default=None, help="Sealed digest, verified exactly like run"
+    )
+    p_renew.add_argument(
+        "--workspace",
+        default=None,
+        help=(
+            "Workspace root for effectful commands like edit"
+            " (default: the --db directory)"
+        ),
+    )
+    p_renew.add_argument(
+        "--invocation-id",
+        required=True,
+        help="Invocation identifier (inv-N) whose claim to renew",
+    )
+    p_renew.add_argument(
+        "--claim-token",
+        required=True,
+        help="Claim token from tikhon ready/claim; must match the open claim",
+    )
+    p_renew.add_argument(
+        "--claim-timeout",
+        type=float,
+        default=900.0,
+        help=(
+            "Seconds before an unsubmitted claim is considered dead"
+            " (default 900)"
+        ),
+    )
+    p_renew.set_defaults(func=_cmd_renew)
 
     return parser
 

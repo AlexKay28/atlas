@@ -55,6 +55,11 @@ __all__ = [
     "claim_from_event",
 ]
 
+
+def _token_fingerprint(token: str) -> str:
+    """SHA-256 fingerprint of a claim token (never store the raw token)."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
 #: Seconds before an unsubmitted claim is considered dead and re-issued.
 DEFAULT_CLAIM_TIMEOUT_SECONDS = 900.0
 
@@ -166,8 +171,24 @@ class ClaimBridge:
                 ),
                 "claim": claim.to_dict(),
             }
+        max_attempts = self._envelope_max_attempts(envelope)
+        if claim is not None and not self._is_fresh(claim):
+            if max_attempts is not None and claim.claim_attempt > max_attempts:
+                return {
+                    "ready": False,
+                    "run_id": driver.run_id,
+                    "invocation_id": invocation_id,
+                    "reason": (
+                        f"invocation {invocation_id!r} has reached the"
+                        f" contract budget max_attempts ({max_attempts});"
+                        " the stale claim will not be re-issued"
+                    ),
+                    "claim": claim.to_dict(),
+                }
         claim, envelope = self._issue_claim(
-            envelope, events, claimant=claimant, reissue=claim is not None
+            envelope, events, claimant=claimant,
+            reissue=claim is not None,
+            max_attempts=max_attempts,
         )
         return {
             "ready": True,
@@ -184,6 +205,7 @@ class ClaimBridge:
         *,
         claimant: Optional[str],
         reissue: bool,
+        max_attempts: Optional[int] = None,
     ) -> tuple[ClaimInfo, Any]:
         """Record the INVOCATION_CLAIMED event for ``envelope``.
 
@@ -282,6 +304,75 @@ class ClaimBridge:
         )
         return driver.submit_result(result)
 
+    # -- renew -----------------------------------------------------------
+
+    def renew(self, invocation_id: str, claim_token: str) -> dict[str, Any]:
+        """Extend the freshness of an open claim by appending a HEARTBEAT.
+
+        Validates the token against the invocation's OPEN claim (wrong or
+        expired-foreign token → clean error, NOTHING appended).  On
+        success a HEARTBEAT event is appended carrying the invocation id,
+        a fingerprint of the claim token (never the raw token), and the
+        timestamp — so :meth:`_is_fresh` reads ``max(claimed_at, last
+        heartbeat)`` and the claimant's eventual :meth:`submit` succeeds
+        even after working longer than ``claim_timeout_seconds``.
+        """
+        driver = self.driver
+        store = driver.store
+        _check_claim(
+            isinstance(claim_token, str) and claim_token != "",
+            "claim token must be a nonempty string",
+        )
+        try:
+            store.run(driver.run_id)
+            events = store.events(driver.run_id)
+        except KeyError as exc:
+            raise DriverError(f"unknown run: {driver.run_id!r}") from exc
+        status = self._terminal_status(events)
+        _check_claim(
+            status is None,
+            f"run {driver.run_id!r} is already terminal"
+            f" (status {status!r}); no further results are accepted",
+        )
+        claim = self._open_claim(events, invocation_id)
+        _check_claim(
+            claim is not None,
+            f"no open claim for invocation {invocation_id!r} in run"
+            f" {driver.run_id!r}; nothing to renew",
+        )
+        assert claim is not None  # narrowed for type checkers
+        _check_claim(
+            claim.claim_token == claim_token,
+            f"claim token mismatch for invocation {invocation_id!r}: the"
+            f" open claim (attempt {claim.claim_attempt}, seq {claim.seq})"
+            " was issued to another token; nothing appended",
+        )
+        last_dispatch = self._last_dispatch(events, invocation_id)
+        ts = self._clock().isoformat()
+        record = _Record(
+            event_type=EventType.HEARTBEAT,
+            instruction_id=last_dispatch.instruction_id,
+            invocation_id=invocation_id,
+            task_id=last_dispatch.task_id,
+            attempt=claim.claim_attempt,
+            payload={
+                "invocation_id": invocation_id,
+                "claim_token_fingerprint": _token_fingerprint(claim_token),
+                "ts": ts,
+            },
+            store=store,
+        )
+        appended = store.append_batch(driver.run_id, [record])
+        heartbeat_event = appended[0]
+        return {
+            "renewed": True,
+            "run_id": driver.run_id,
+            "invocation_id": invocation_id,
+            "claim_attempt": claim.claim_attempt,
+            "heartbeat_seq": heartbeat_event.seq,
+            "freshness_ts": ts,
+        }
+
     # -- claim queries -----------------------------------------------------
 
     def _open_claim(
@@ -301,15 +392,63 @@ class ClaimBridge:
         return claim_from_event(claims[-1])
 
     def _is_fresh(self, claim: ClaimInfo) -> bool:
+        base = self._claim_freshness_base(claim)
+        if base is None:
+            return False
+        return self._clock() < base + timedelta(
+            seconds=self.claim_timeout_seconds
+        )
+
+    def _claim_freshness_base(
+        self, claim: ClaimInfo
+    ) -> Optional[datetime]:
+        """The effective freshness origin: ``max(claimed_at, last heartbeat)``.
+
+        Reads the last HEARTBEAT for the claim's invocation from the store
+        (if any), parses its ``ts`` payload, and returns the later of the
+        two timestamps.  Returns ``None`` when ``claimed_at`` is
+        unparseable.
+        """
         try:
             claimed_at = datetime.fromisoformat(claim.claimed_at)
         except ValueError:
-            return False
+            return None
         if claimed_at.tzinfo is None:
             claimed_at = claimed_at.replace(tzinfo=timezone.utc)
-        return self._clock() < claimed_at + timedelta(
-            seconds=self.claim_timeout_seconds
-        )
+        driver = self.driver
+        try:
+            events = driver.store.events(driver.run_id)
+        except Exception:
+            return claimed_at
+        last_hb = self._last_heartbeat(events, claim.invocation_id)
+        if last_hb is not None:
+            return last_hb
+        return claimed_at
+
+    @staticmethod
+    def _last_heartbeat(
+        events: tuple, invocation_id: str
+    ) -> Optional[datetime]:
+        """Most recent HEARTBEAT timestamp for the invocation, or None."""
+        latest: Optional[datetime] = None
+        for event in events:
+            if (
+                event.event_type is EventType.HEARTBEAT
+                and event.invocation_id == invocation_id
+            ):
+                payload = event.payload if isinstance(event.payload, dict) else {}
+                ts_str = payload.get("ts")
+                if not ts_str:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_str)
+                except ValueError:
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if latest is None or ts > latest:
+                    latest = ts
+        return latest
 
     @staticmethod
     def _claims(events: tuple, invocation_id: str) -> list:
@@ -347,6 +486,24 @@ class ClaimBridge:
                 payload = event.payload if isinstance(event.payload, dict) else {}
                 status = payload.get("status", "unknown")
         return status
+
+    @staticmethod
+    def _envelope_max_attempts(envelope: Any) -> Optional[int]:
+        """Read ``contract.budget.max_attempts`` off a TaskEnvelope.
+
+        Returns ``None`` when the field is absent or unparseable,
+        preserving the historical unlimited-reissue behaviour.
+        """
+        contract = getattr(envelope, "contract", None)
+        if not isinstance(contract, dict):
+            return None
+        budget = contract.get("budget")
+        if not isinstance(budget, dict):
+            return None
+        value = budget.get("max_attempts")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return None
 
 
 def _utcnow() -> datetime:
