@@ -1,0 +1,29 @@
+{
+  "task": "GitHub issue #29: PAR resume drops completed branches' outputs and bricks the run (critical)",
+  "run_id": "sprint2-29-par-resume",
+  "seal": "f7b2c86a33b599ca6488942d7dfa175c36d83b4fdcd9f72902d049a70919a831",
+  "terminal_status": "succeeded",
+  "steps_planned": 10,
+  "steps_executed": 10,
+  "acceptance": [
+    {
+      "criterion": "Crash after branch-1 CHILD_ADOPTED + resume yields succeeded, PAR SUCCEEDED delta contains ALL barrier refs",
+      "passed": true,
+      "evidence": "tests/test_par_resume.py::test_crash_after_branch_adoption_resume_succeeds_with_barrier_refs — crash at PAR crash_hook (after all branches adopted, before SUCCEEDED), resume yields succeeded; the SUCCEEDED event for inv-1 has delta.add_nodes containing E.alpha and E.beta (the barrier refs)"
+    },
+    {
+      "criterion": "project_state after resume contains every barrier ref",
+      "passed": true,
+      "evidence": "tests/test_par_resume.py::test_project_state_after_resume_contains_every_barrier_ref — store.project_state after resume has nodes E.alpha, E.beta, and D.plan (the post-PAR step output)"
+    },
+    {
+      "criterion": "No duplicate INVOCATION_READY for an already-dispatched par<k> id",
+      "passed": true,
+      "evidence": "tests/test_par_resume.py::test_no_duplicate_invocation_ready_for_dispatched_par_branch — after crash + resume, exactly 2 INVOCATION_READY events for par<k> ids (one per branch, no duplicates); also 2 INVOCATION_DISPATCHED (no duplicates)"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The sealed program copied from issue #29 had two string literals referencing src/atlas/ paths; these were updated to src/tahoe/ to reflect the #53 TAHOE rebrand. Logic stays identical; only path string literals changed. Recorded per the step-0 instruction."
+  ]
+}
