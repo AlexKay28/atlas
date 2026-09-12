@@ -1,0 +1,41 @@
+# Tikhon run for GitHub issue #25: runtime-authored child plans and
+# nested delegation (epic #27, step 5).
+#
+# Sealed BEFORE any source edit. Uses only the grammar that exists at
+# seal time: plain DO steps over the 22 registered commands. The new
+# runtime-authored child plan mechanism (the delegate command) does not
+# exist yet and is deliberately absent from this sealed program — the
+# runtime flow it enables is validated by tests/test_delegate.py against
+# this same sealed source.
+
+PROGRAM issue_25_runtime_plans VERSION 1.0
+
+INPUT
+    G.goal = "Add runtime-authored child plans: a worker or model may author a complete child program at runtime, which the coordinator validates, seals-like, records as CHILD_PLAN_AUTHORED history, and executes as a bounded isolated child run whose outputs the parent adopts — with no delegate recursion, a bounded step count, budget-gated child depth, and replay that pins the accepted artifact"
+    C.scope = "src/tikhon/registry/builtins.py, src/tikhon/runtime/coordinator.py, src/tikhon/runtime/events.py, src/tikhon/cli.py, src/tikhon/worker_adapter.py, tests/test_delegate.py, tests/test_registry.py, demo/runs/issue-25-runtime-plans/"
+    C.done = "delegate authors a child plan at runtime; the coordinator validates parse, registry, step bound and no-recursion; CHILD_PLAN_AUTHORED records the plan digest and text before execution; the child runs isolated with parent:invocation lineage; authored RETURN refs adopt onto the delegate targets; invalid or oversized plans fail atomically with actionable diagnostics; replay after reopen preserves the accepted artifact; the full suite passes unmodified"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "child_plan_authoring") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "runtime_delegation") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.goal, evidence = E.findings) -> H.theses
+step.calculate: DO calculate(expression = "max_plan_steps", values = {"hard_cap": 12}) -> F.metrics
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue25.runtime_plans", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue25.runtime_plans") -> K.recalled
+step.solve: DO solve(problem = G.goal, domain = "runtime_plan_authoring") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "delegate_authoring_flow") -> V.review
+step.design: DO summarize(source_refs = V.review, budget = 6000) -> P.design
+step.patch: DO edit(path = "src/tikhon/runtime/coordinator.py", content = P.design) -> ART.patch
+step.test: DO test(path = "tests/test_delegate.py") -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = V.verdict, format = "markdown") -> ART.report
+step.verify: DO verify(goal = G.goal, evidence = V.tests) -> V.result
+
+RETURN P.design, V.tests, V.verdict, V.result

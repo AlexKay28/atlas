@@ -242,7 +242,29 @@ class ModelWorker:
             "",
         ]
         targets = envelope.targets
-        if len(targets) > 1:
+        if envelope.command == "delegate":
+            # Issue #25: a delegate dispatch AUTHORS a child plan.  The
+            # reply contract is the issue-specified JSON shape; the
+            # coordinator validates the plan text against the registry
+            # (registered commands only, bounded step count, no nested
+            # delegate) and adopts the plan's RETURN refs onto the
+            # dispatching step's targets positionally.
+            lines.append(
+                "This step AUTHORS a bounded child plan at runtime."
+                ' Reply with ONLY a JSON object {"plan_text": "..."}'
+                " whose plan_text value is one complete tikhon program in"
+                " the canonical grammar: a PROGRAM header, INPUT"
+                " declarations binding the resolved arguments by their"
+                " leaf names (the goal argument binds the leaf name"
+                ' "goal", the constraints argument the leaf name'
+                ' "constraints"), step.<id>: DO lines using only'
+                " registered commands, and a terminal RETURN.  Keep the"
+                " step count within the requested max_steps bound (hard"
+                " cap 12), never use the delegate command inside the"
+                " authored plan (no recursion), and end with RETURN refs"
+                " mapping one-to-one onto this step's targets in order."
+            )
+        elif len(targets) > 1:
             lines.append(
                 "This step commits results to multiple targets:"
                 f" {', '.join(targets)}."

@@ -1204,6 +1204,81 @@ def _prove() -> CommandSpec:
     )
 
 
+def _delegate() -> CommandSpec:
+    return CommandSpec(
+        name="delegate",
+        version=_VERSION,
+        purpose=(
+            "Author and execute a bounded child plan at runtime from"
+            " committed context"
+        ),
+        inputs=("goal:text", "constraints:text"),
+        parameters=("max_steps:int>0",),
+        preconditions=(
+            "goal_committed",
+            "constraints_committed",
+            "budget_within_parent",
+            "no_nested_delegation",
+        ),
+        outputs=("plan_digest:artifact", "result:artifact"),
+        effects=("none",),
+        done=(
+            "authored_plan_validated_recorded_and_executed_as_a_bounded"
+            "_child_run_with_outputs_adopted"
+        ),
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery=(
+                    "reject and report the missing or malformed goal,"
+                    " constraints, or max_steps bound"
+                ),
+            ),
+            FailureSpec(
+                kind=FailureKind.FORMALIZATION,
+                retryable=True,
+                recovery=(
+                    "request a new authored plan, not a blind retry; the"
+                    " rejected plan's digest stays recorded in history"
+                ),
+            ),
+            FailureSpec(
+                kind=FailureKind.UNAVAILABLE,
+                retryable=True,
+                recovery="retry within budget attempts, then fall back",
+            ),
+        ),
+        # READ_ONLY for the authoring step itself: the delegation dispatch
+        # writes nothing.  The authored child's own steps carry their own
+        # effect classes and run under their own contracts.
+        effect_class=EffectClass.READ_ONLY,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("child_plan_authoring",),
+        evidence=("plan_digest", "child_run_id", "adopted_targets"),
+        budget=Budget(
+            max_seconds=120.0,
+            max_tokens=8000,
+            max_cost=0.10,
+            max_attempts=2,
+            max_output_bytes=262144,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation="none",
+        # Plan authoring needs a strong model; the deterministic
+        # validator/checker of the authored artifact is a T0 concern.
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T2,
+            permitted_tiers=(RoutingTier.T0, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T3,
+            validator_tier=RoutingTier.T0,
+            confidence_policy="none",
+            escalation_on=(FailureKind.FORMALIZATION, FailureKind.UNAVAILABLE),
+            fallback_chain=(),
+        ),
+    )
+
+
 BUILTIN_FACTORIES = (
     _define,
     _search,
@@ -1227,6 +1302,7 @@ BUILTIN_FACTORIES = (
     _review,
     _solve,
     _prove,
+    _delegate,
 )
 
 

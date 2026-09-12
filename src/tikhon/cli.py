@@ -191,6 +191,36 @@ def _deterministic_handlers(
     def _review(**kwargs: Any) -> Any:
         return kwargs.get("artifact_refs", dict(kwargs))
 
+    # Issue #25: the deterministic delegate handler replies with a FIXED
+    # canonical sample plan (so tests and CI never need a model).  The
+    # plan declares G.goal/C.constraints INPUT placeholders; the
+    # coordinator binds the delegate step's resolved arguments onto them
+    # by leaf name before the child run starts, so the sample echoes the
+    # committed goal without the handler knowing any run identity.
+    def _delegate(**kwargs: Any) -> Any:
+        goal = kwargs.get("goal")
+        if not isinstance(goal, (str, dict, list)) or (
+            isinstance(goal, str) and not goal.strip()
+        ):
+            raise ValueError(
+                "delegate requires a nonempty committed goal argument"
+            )
+        return (
+            "PROGRAM delegated_child VERSION 1.0\n"
+            "\n"
+            "INPUT\n"
+            "    G.goal = \"\"\n"
+            "    C.constraints = \"\"\n"
+            "\n"
+            "step.frame: DO define(request = G.goal) -> P.plan\n"
+            "step.measure: DO calculate(expression = \"goal_units\","
+            " values = {\"units\": 3}) -> F.metrics\n"
+            "step.check: DO check(artifact = P.plan, predicate ="
+            " \"nonempty\") -> V.verdict\n"
+            "\n"
+            "RETURN P.plan, F.metrics\n"
+        )
+
     return {
         "define": _define,
         "search": _search,
@@ -206,6 +236,7 @@ def _deterministic_handlers(
         "edit": _edit,
         "test": _test,
         "review": _review,
+        "delegate": _delegate,
     }
 
 

@@ -67,6 +67,15 @@ class EventType(str, Enum):
     # delta); the payload records the per-branch terminal statuses and the
     # merged-artifact accounting.
     PAR_JOINED = "par.joined"
+    # Issue #25: a delegate step's worker returned an AUTHORED child plan
+    # and the coordinator recorded it before any validation or execution —
+    # the authored artifact is part of history, never ephemeral.  Carries
+    # no state delta of its own; the payload records the authoring step's
+    # id, the plan digest (sha256 over the canonical JSON of the bound
+    # plan identity + raw text) and the raw plan text.  Recorded even when
+    # the plan is subsequently rejected, so a failed authoring attempt
+    # stays diagnosable.
+    CHILD_PLAN_AUTHORED = "child_plan.authored"
     TASK_UPDATED = "task.updated"
 
 

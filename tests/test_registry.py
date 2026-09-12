@@ -32,6 +32,7 @@ BUILTIN_NAMES = (
     "compare",
     "decompose",
     "define",
+    "delegate",
     "edit",
     "extract",
     "fetch",
@@ -72,6 +73,11 @@ EFFECTFUL_COMMANDS = (
 FORMAL_COMMANDS = (
     "prove",
     "solve",
+)
+
+# Issue #25: runtime-authored child plans.
+DELEGATE_COMMANDS = (
+    "delegate",
 )
 
 CONTRACT_FIELDS = (
@@ -241,6 +247,7 @@ def test_decision_commands_extend_the_nine_originals():
         | set(MEMORY_COMMANDS)
         | set(EFFECTFUL_COMMANDS)
         | set(FORMAL_COMMANDS)
+        | set(DELEGATE_COMMANDS)
     )
 
 
@@ -352,6 +359,51 @@ def test_prove_contract_matches_issue_11_spec(registry):
     assert spec.routing.fallback_chain == ()
     assert "proof_digest" in spec.evidence
     assert "checker_result" in spec.evidence
+
+
+# --- runtime-authored child plans (issue #25) -----------------------------------
+
+
+def test_delegate_contract_matches_issue_25_spec(registry):
+    spec = registry.resolve("delegate", "1.0.0")
+    assert spec.purpose == (
+        "Author and execute a bounded child plan at runtime from"
+        " committed context"
+    )
+    assert ("goal:text", "constraints:text") == spec.inputs
+    assert ("plan_digest:artifact", "result:artifact") == spec.outputs
+    assert spec.effect_class is EffectClass.READ_ONLY
+    assert spec.routing.minimum_tier is RoutingTier.T2
+    assert spec.routing.preferred_tier is RoutingTier.T3
+    assert spec.routing.validator_tier is RoutingTier.T0
+    assert "plan_digest" in spec.evidence
+    assert "child_run_id" in spec.evidence
+
+
+@pytest.mark.parametrize("name", DELEGATE_COMMANDS)
+def test_delegate_command_resolves_with_complete_contract(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    assert spec.name == name
+    assert spec.version == "1.0.0"
+    for value in (spec.purpose, spec.done, spec.compensation):
+        assert isinstance(value, str) and value.strip()
+    for field in (spec.inputs, spec.outputs, spec.effects):
+        assert field and all(isinstance(entry, str) and entry.strip() for entry in field)
+    assert spec.failures
+    for failure in spec.failures:
+        assert failure.kind in FailureKind
+        assert isinstance(failure.retryable, bool)
+        assert failure.recovery.strip()
+
+
+def test_delegate_declares_expected_failures(registry):
+    spec = registry.resolve("delegate", "1.0.0")
+    kinds = {failure.kind for failure in spec.failures}
+    assert {FailureKind.INVALID_INPUT, FailureKind.FORMALIZATION, FailureKind.UNAVAILABLE} <= kinds
+    invalid = [f for f in spec.failures if f.kind is FailureKind.INVALID_INPUT]
+    assert invalid[0].retryable is False
+    formalization = [f for f in spec.failures if f.kind is FailureKind.FORMALIZATION]
+    assert formalization[0].retryable is True
 
 
 # --- memory commands (issue #5) ------------------------------------------------
