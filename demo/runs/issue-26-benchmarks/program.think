@@ -1,0 +1,54 @@
+# Tikhon run for GitHub issue #26: benchmark harness + measured evidence
+# (epic #27 step 6 tail: "Validate live OpenCode speed, cost and quality;
+# publish benchmark evidence and examples").
+#
+# Sealed BEFORE any source edit (tikhon protocol step 2). Uses only the
+# canonical grammar that exists at seal time: plain DO steps over all 23
+# registered commands, one SCATTER/GATHER bounded fan-out, one PAR MAX 3
+# block with heterogeneous branches (2 DO + 1 CALL), one runtime delegate
+# authoring step, and one CALL protocol.framing line. Every argument is a
+# single typed reference or a JSON literal; ref lists where a step accepts
+# several inputs.
+
+PROGRAM issue_26_benchmarks VERSION 1.0
+
+INPUT
+    G.goal = "Deliver the issue #26 benchmark harness: a deterministic sleep-simulated benchmark runner (src/tikhon/benchmarks.py) measuring critical-path speedup, task-envelope context cost and delegation granularity for sequential vs bounded-parallel execution, wired as tikhon bench, with committed evidence in benchmarks/report-2026-09-12.md and tests/test_benchmarks.py; live OpenCode/model numbers stay one command away behind TIKHON_* operator credentials"
+    C.scope = "src/tikhon/benchmarks.py, src/tikhon/cli.py, tests/test_benchmarks.py, benchmarks/report-2026-09-12.md, demo/runs/issue-26-benchmarks/"
+    C.done = "tikhon bench runs the three built-in cases (linear 6-step frontier, scatter/gather 8 candidates, PAR 4 heterogeneous branches) and prints a markdown report with speedup, envelope-bytes and delegation-granularity tables; the committed report carries the actual measured deterministic output; all 741 pre-existing tests still pass unmodified and the suite stays under ~40s"
+    Q.samples = ["linear-independent-6", "scatter-gather-8", "par-heterogeneous-4", "delegated-child"]
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "benchmark_harness") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "bench_harness") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.goal, evidence = E.findings) -> H.theses
+step.calculate: DO calculate(expression = "critical_path_speedup", values = {"baseline_ms": 0, "variant_ms": 0, "repetitions": 3}) -> F.metrics
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue26-benchmarks", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue26-benchmarks") -> K.recalled
+step.solve: DO solve(problem = G.goal, domain = "benchmarking") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "benchmark_evidence") -> V.review
+step.design: DO summarize(source_refs = V.review, budget = 6000) -> P.design
+step.scatter_prepare: DO define(goal = Q.samples) -> Q.parts
+SCATTER X.sample IN Q.parts MAX 4
+  step.sample_rank: DO rank(options = X.sample, criteria = C.done) -> R.sample
+GATHER sample_rank AS R.samples USING all
+PAR MAX 3
+    step.par_sites: DO search(query = G.plan, scope = C.scope) -> E.par_sites
+    step.par_check: DO check(artifact = V.review, predicate = "evidence_committed") -> V.par_verdict
+    CALL protocol.framing(request = G.plan, scope = C.scope) -> E.context, V.analysis
+BARRIER -> E.par_sites, V.par_verdict, E.context, V.analysis
+step.author: DO delegate(goal = G.plan, constraints = C.scope, max_steps = 6) -> OUT.plan, OUT.metrics
+step.patch: DO edit(path = "benchmarks/report-2026-09-12.md", content = "regenerate with: PYTHONPATH=src python3 -m tikhon bench --out benchmarks/report-2026-09-12.md") -> ART.patch
+step.test: DO test(path = "tests/test_benchmarks.py", timeout_seconds = 600) -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = [V.verdict, F.metrics], format = "markdown") -> ART.report
+step.verify: DO verify(goal = G.goal, evidence = [ART.patch, V.tests, R.samples]) -> V.result
+
+RETURN P.design, V.verdict, V.result, R.samples, OUT.plan, OUT.metrics, F.metrics, V.analysis

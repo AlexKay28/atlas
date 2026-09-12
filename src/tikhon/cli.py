@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from tikhon.audit import audit_run
+from tikhon.benchmarks import builtin_cases, run_benchmark
 from tikhon.bridge import ClaimBridge
 from tikhon.envelope import (
     EnvelopeValidationError,
@@ -699,6 +700,27 @@ def _cmd_learn(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_bench(args: argparse.Namespace) -> int:
+    """Run the deterministic benchmark harness (issue #26)."""
+    try:
+        cases = builtin_cases(latency_seconds=args.latency_seconds)
+        report = run_benchmark(cases, repetitions=args.repetitions)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    markdown = report.to_markdown()
+    print(markdown)
+    if args.out:
+        try:
+            with open(args.out, "w", encoding="utf-8") as fh:
+                fh.write(markdown)
+        except OSError as exc:
+            print(f"error: cannot write report: {exc}", file=sys.stderr)
+            return 1
+        print(args.out)
+    return 0
+
+
 def _load_validated_program(program_path: str, seal: str | None) -> Any:
     """Parse, seal-verify and validate a program (run's guard style).
 
@@ -963,6 +985,36 @@ def _build_parser() -> argparse.ArgumentParser:
         "--out", default=None, help="Optional path to write the markdown report"
     )
     p_learn.set_defaults(func=_cmd_learn)
+
+    p_bench = sub.add_parser(
+        "bench",
+        help=(
+            "Run the deterministic (sleep-simulated) benchmark harness:"
+            " critical-path speedup, envelope context cost and delegation"
+            " granularity for the built-in cases (issue #26)"
+        ),
+    )
+    p_bench.add_argument(
+        "--repetitions",
+        type=int,
+        default=3,
+        help="Repeated trials per case per side (default 3)",
+    )
+    p_bench.add_argument(
+        "--out",
+        default=None,
+        help="Optional path to write the markdown report",
+    )
+    p_bench.add_argument(
+        "--latency-seconds",
+        type=float,
+        default=0.04,
+        help=(
+            "Simulated per-step worker latency in seconds"
+            " (default 0.04); lower it for a fast smoke run"
+        ),
+    )
+    p_bench.set_defaults(func=_cmd_bench)
 
     p_next = sub.add_parser(
         "next",
