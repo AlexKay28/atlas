@@ -1,6 +1,6 @@
-"""Tests specifying crash-window recovery for ATLAS runs (issue #10).
+"""Tests specifying crash-window recovery for TAHOE runs (issue #10).
 
-Contract under test (``atlas.resume.resume_run`` plus the coordinator's
+Contract under test (``tahoe.resume.resume_run`` plus the coordinator's
 ``crash_hook``): a true mid-run abort (CrashInterrupt propagating out of
 ``execute`` uncaught) leaves a committed event prefix with no FAILED and
 no RUN_FINISHED; ``resume_run`` continues that run to the same terminal
@@ -18,16 +18,16 @@ import json
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.cli import main as cli_main
-from atlas.resume import resume_run
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.coordinator import (
+from tahoe.audit import audit_run
+from tahoe.cli import main as cli_main
+from tahoe.resume import resume_run
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.coordinator import (
     CrashInterrupt,
     DeterministicWorker,
     SequentialCoordinator,
 )
-from atlas.syntax import parse_program, seal_digest
+from tahoe.syntax import parse_program, seal_digest
 
 THREE_STEP_PROGRAM = """\
 PROGRAM resume_demo VERSION 1.0
@@ -166,7 +166,7 @@ class TestCrashAndResume:
         store.close()
 
     def test_task_ledger_fully_complete_after_resume(self, tmp_path):
-        from atlas.runtime.tasks import TaskStatus
+        from tahoe.runtime.tasks import TaskStatus
 
         store, _, _ = crash_and_resume(tmp_path, hook_idx=1)
         profile = store.task_ledger("run-1").profile()

@@ -1,4 +1,4 @@
-"""Crash-window recovery: resume an interrupted ATLAS run (issue #10).
+"""Crash-window recovery: resume an interrupted TAHOE run (issue #10).
 
 Implements the pragmatic subset of the deterministic resume algorithm
 from ``demo/runs/crash-recovery-glm52/solution.md`` (crash-window table
@@ -47,14 +47,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from atlas.budgets import BudgetGate, ExecutionBudget
-from atlas.runtime.coordinator import SequentialCoordinator, _uses_kb_refs
-from atlas.runtime.events import EventStore, EventType
-from atlas.syntax import validate_program
+from tahoe.budgets import BudgetGate, ExecutionBudget
+from tahoe.runtime.coordinator import SequentialCoordinator, _uses_kb_refs
+from tahoe.runtime.events import EventStore, EventType
+from tahoe.syntax import validate_program
 
 if TYPE_CHECKING:
-    from atlas.memory import KnowledgeBase
-    from atlas.syntax.model import Program
+    from tahoe.memory import KnowledgeBase
+    from tahoe.syntax.model import Program
 
 __all__ = ["resume_run"]
 

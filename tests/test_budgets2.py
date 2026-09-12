@@ -19,16 +19,16 @@ from typing import Any
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.budgets import BudgetGate, ExecutionBudget
-from atlas.resume import resume_run
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.coordinator import (
+from tahoe.audit import audit_run
+from tahoe.budgets import BudgetGate, ExecutionBudget
+from tahoe.resume import resume_run
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.coordinator import (
     CrashInterrupt,
     DeterministicWorker,
     SequentialCoordinator,
 )
-from atlas.syntax import parse_program
+from tahoe.syntax import parse_program
 
 
 TWO_STEP = """\
@@ -187,7 +187,7 @@ def test_token_cap_exceeded_fails_run(tmp_path):
 
 def test_max_attempts_refused_on_redispatch(tmp_path):
     """(5) Dispatch beyond max_attempts refused."""
-    from atlas.registry.registry import builtin_registry
+    from tahoe.registry.registry import builtin_registry
     max_attempts = builtin_registry().resolve("define").budget.max_attempts
     assert max_attempts == 1
 

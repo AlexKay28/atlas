@@ -17,11 +17,11 @@ from typing import Any
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.coordinator import DeterministicWorker, SequentialCoordinator
-from atlas.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
-from atlas.syntax import parse_program
+from tahoe.audit import audit_run
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.coordinator import DeterministicWorker, SequentialCoordinator
+from tahoe.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
+from tahoe.syntax import parse_program
 
 # a: consumes G.left (INPUT), produces G.plan.
 # b: consumes G.plan -> depends on a.

@@ -1,4 +1,4 @@
-"""Grep gate test (issue #52): zero old-name references in live code/docs.
+"""Grep gate test (issue #53): zero old-name references in live code/docs.
 
 Asserts that ``git grep -c`` (case-insensitive) for the pre-rebrand
 project name over src/ tests/ README.md docs/ pyproject.toml .opencode/
@@ -31,7 +31,7 @@ def test_no_tikhon_references_in_live_code():
     ]
     result = subprocess.run(
         [
-            "git", "grep", "-i", "-c", "tikhon",
+            "git", "grep", "-i", "-c", "atlas",
             "--",
             *scopes,
         ],

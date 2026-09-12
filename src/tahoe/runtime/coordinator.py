@@ -1,4 +1,4 @@
-"""Deterministic sequential coordinator for ATLAS programs.
+"""Deterministic sequential coordinator for TAHOE programs.
 
 Implements the runtime contract from docs/spec/03-runtime-and-events.md:
 sequential invocation lifecycle, durable task ledger per invocation,
@@ -18,17 +18,17 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
-from atlas.budgets import BudgetDeadlineExceeded, BudgetGate, ExecutionBudget
-from atlas.claims import ResourceLedger
-from atlas.runtime.events import (
+from tahoe.budgets import BudgetDeadlineExceeded, BudgetGate, ExecutionBudget
+from tahoe.claims import ResourceLedger
+from tahoe.runtime.events import (
     EventStore,
     EventType,
     _Record,
     canonical_json as _canonical_event_json,
 )
-from atlas.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
-from atlas.state import StateDelta
-from atlas.syntax import (
+from tahoe.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
+from tahoe.state import StateDelta
+from tahoe.syntax import (
     ParseError,
     is_typed_reference,
     load_protocol,
@@ -36,7 +36,7 @@ from atlas.syntax import (
     parse_program,
     validate_program,
 )
-from atlas.syntax.model import (
+from tahoe.syntax.model import (
     Argument,
     Call,
     Conditional,
@@ -52,8 +52,8 @@ from atlas.syntax.model import (
 )
 
 if TYPE_CHECKING:
-    from atlas.memory import KnowledgeBase
-    from atlas.syntax.model import DonePredicate
+    from tahoe.memory import KnowledgeBase
+    from tahoe.syntax.model import DonePredicate
 
 __all__ = [
     "CrashInterrupt",
@@ -358,7 +358,7 @@ def _builtin_registry_digest() -> str:
     """Digest of the builtin command registry, computed once per process."""
     global _BUILTIN_REGISTRY_DIGEST
     if _BUILTIN_REGISTRY_DIGEST is None:
-        from atlas.registry.registry import builtin_registry, registry_digest
+        from tahoe.registry.registry import builtin_registry, registry_digest
 
         _BUILTIN_REGISTRY_DIGEST = registry_digest(builtin_registry())
     return _BUILTIN_REGISTRY_DIGEST
@@ -373,8 +373,8 @@ def _effectful_commands() -> frozenset[str]:
     """
     global _EFFECTFUL_COMMANDS
     if _EFFECTFUL_COMMANDS is None:
-        from atlas.registry.enums import EffectClass
-        from atlas.registry.registry import builtin_registry
+        from tahoe.registry.enums import EffectClass
+        from tahoe.registry.registry import builtin_registry
 
         durable = {EffectClass.REVERSIBLE_WRITE, EffectClass.IRREVERSIBLE_WRITE}
         registry = builtin_registry()
@@ -398,7 +398,7 @@ def _command_max_attempts(command: str) -> int | None:
     """
     global _COMMAND_MAX_ATTEMPTS
     if _COMMAND_MAX_ATTEMPTS is None:
-        from atlas.registry.registry import builtin_registry
+        from tahoe.registry.registry import builtin_registry
 
         registry = builtin_registry()
         _COMMAND_MAX_ATTEMPTS = {
@@ -689,7 +689,7 @@ class DeterministicWorker:
 
 
 class SequentialCoordinator:
-    """Drives an ATLAS program sequentially through an EventStore.
+    """Drives an TAHOE program sequentially through an EventStore.
 
     ``workspace_root`` is the WorkspacePolicy hook (issue #9): when set,
     every dispatch of an effectful command (durable-write class per the
@@ -3920,7 +3920,7 @@ class SequentialCoordinator:
         committed SUCCEEDED deltas in seq order), verifies the
         SUCCEEDED-invocation prefix invariant, ensures the plan's tasks
         exist with the canonical texts, and drives the remaining plan
-        through :meth:`_drive_plan`.  Used by ``atlas.resume.resume_run``
+        through :meth:`_drive_plan`.  Used by ``tahoe.resume.resume_run``
         for a crashed parent and by ``_execute_call`` to re-drive a
         non-terminal child (at-least-once; the DISPATCHED idempotency key
         is the dedup contract for effectful workers).

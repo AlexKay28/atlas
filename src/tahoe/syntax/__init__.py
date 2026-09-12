@@ -1,4 +1,4 @@
-"""atlas.syntax — models, parser and sealing helpers for the minimal ATLAS pseudo-language."""
+"""tahoe.syntax — models, parser and sealing helpers for the minimal TAHOE pseudo-language."""
 
 from .model import (
     Argument,

@@ -3,7 +3,7 @@
 Covers the real CLI handlers: ``edit`` writes under the workspace root and
 refuses absolute paths and ``..`` escapes, ``test`` runs pytest in a
 subprocess and returns ``{"exit_code", "tail"}``, ``review`` returns the
-artifact refs.  Sealed programs drive ``atlas run`` with ``--workspace``
+artifact refs.  Sealed programs drive ``tahoe run`` with ``--workspace``
 and must fail coherently (FAILED + RUN_FINISHED, no partial state) on
 traversal attempts.  Every INVOCATION_DISPATCHED payload carries the
 ``<run_id>:<invocation_id>`` idempotency key.
@@ -14,8 +14,8 @@ import os
 
 import pytest
 
-from atlas.cli import _deterministic_handlers, main
-from atlas.runtime import EventStore, EventType
+from tahoe.cli import _deterministic_handlers, main
+from tahoe.runtime import EventStore, EventType
 
 PROGRAM = """\
 PROGRAM effectful_demo VERSION 1.0
@@ -36,7 +36,7 @@ ABSOLUTE_PATH_PROGRAM = """\
 PROGRAM absolute_edit VERSION 1.0
 
 INPUT
-  G.path = "/tmp/atlas-should-never-write-here.py"
+  G.path = "/tmp/tahoe-should-never-write-here.py"
   G.content = "malicious"
 
 step.write: DO edit(path = G.path, content = G.content) -> E.written
@@ -63,7 +63,7 @@ def write_program(tmp_path, text, name="demo.think"):
 
 
 def run_cli(argv):
-    from atlas.cli import main as cli_main
+    from tahoe.cli import main as cli_main
 
     rc = cli_main(argv)
     return rc
@@ -174,7 +174,7 @@ def test_edit_traversal_fails_the_run_coherently(tmp_path, program):
     # no partial state: nothing written inside or outside the workspace
     assert list(workspace.iterdir()) == []
     assert not (tmp_path / "escaped.txt").exists()
-    assert not os.path.exists("/tmp/atlas-should-never-write-here.py")
+    assert not os.path.exists("/tmp/tahoe-should-never-write-here.py")
 
     state_store = EventStore(db)
     try:

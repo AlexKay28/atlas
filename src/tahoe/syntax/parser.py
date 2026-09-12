@@ -1,4 +1,4 @@
-"""Parser and sealing helpers for the sequential ATLAS subset."""
+"""Parser and sealing helpers for the sequential TAHOE subset."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-from atlas.cli import main
+from tahoe.cli import main
 
 
 if __name__ == "__main__":

@@ -1,16 +1,16 @@
 """Protocol A/B evaluation pilot scaffolding (issue #47, methodology #50).
 
 Builds on the #46 benchmark harness to provide an arm runner for
-controlled A/B comparisons of ATLAS vs plain agent (ReAct) execution.
+controlled A/B comparisons of TAHOE vs plain agent (ReAct) execution.
 The pilot scaffolding is deterministic-testable with fake workers and
 graders; live model runs are the orchestrator's post-merge step through
-``ATLAS_*`` environment configuration.
+``TAHOE_*`` environment configuration.
 
 Key types:
 
 - :class:`ArmSpec` — names an arm and its kind (``"react"`` or
-  ``"atlas"``).  ``react`` is the plain tool-loop baseline prompt; the
-  model runs unconstrained.  ``atlas`` is the sealed-program arm where
+  ``"tahoe"``).  ``react`` is the plain tool-loop baseline prompt; the
+  model runs unconstrained.  ``tahoe`` is the sealed-program arm where
   the program is authored IN-LOOP by the model under test, and every
   authoring attempt is COUNTED as a charged step per #50's
   authoring-parity clause.
@@ -31,7 +31,7 @@ Key types:
 Authoring parity (#50 section 4):
 
 Every arm uses the same model/version, tools, environment, grader and
-resource ceilings.  The ``"atlas"`` arm's program is authored IN-LOOP
+resource ceilings.  The ``"tahoe"`` arm's program is authored IN-LOOP
 by the model under test through the T3 authoring loop (``delegate``);
 each authoring attempt is charged as a step.  The ``"react"`` arm gets
 a plain tool-loop baseline prompt with no sealed-program scaffolding.
@@ -49,11 +49,11 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from atlas.budgets import ExecutionBudget
-from atlas.registry import builtin_registry
-from atlas.runtime import EventStore, SequentialCoordinator
-from atlas.runtime.coordinator import DeterministicWorker
-from atlas.syntax import parse_program
+from tahoe.budgets import ExecutionBudget
+from tahoe.registry import builtin_registry
+from tahoe.runtime import EventStore, SequentialCoordinator
+from tahoe.runtime.coordinator import DeterministicWorker
+from tahoe.syntax import parse_program
 
 __all__ = [
     "ArmKind",
@@ -68,7 +68,7 @@ __all__ = [
 ]
 
 
-ArmKind = str  # "react" | "atlas"
+ArmKind = str  # "react" | "tahoe"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -77,13 +77,13 @@ class ArmSpec:
 
     ``name`` is a short identifier (e.g. ``"react-baseline"``).
     ``kind`` is ``"react"`` (plain tool-loop baseline prompt) or
-    ``"atlas"`` (sealed-program arm; authoring attempts via the T3
+    ``"tahoe"`` (sealed-program arm; authoring attempts via the T3
     authoring loop COUNTED as charged steps per #50's authoring-parity
     clause).
     ``worker_factory`` builds the worker for this arm; ``None`` uses a
     deterministic sleep-simulated worker (the scaffold path).
     ``prompt_template`` is an optional override for the react arm's
-    system prompt (the atlas arm derives its program from the task
+    system prompt (the tahoe arm derives its program from the task
     manifest).
     ``max_workers`` and ``budget`` configure execution parallelism for
     the arm (defaults: 1 worker, no budget cap — the pilot measures
@@ -100,9 +100,9 @@ class ArmSpec:
     def __post_init__(self) -> None:
         if not self.name or not self.name.strip():
             raise ValueError("ArmSpec.name must be nonempty")
-        if self.kind not in ("react", "atlas"):
+        if self.kind not in ("react", "tahoe"):
             raise ValueError(
-                f'ArmSpec.kind must be "react" or "atlas", got {self.kind!r}'
+                f'ArmSpec.kind must be "react" or "tahoe", got {self.kind!r}'
             )
         if not isinstance(self.max_workers, int) or isinstance(
             self.max_workers, bool
@@ -122,12 +122,12 @@ class TaskManifest:
     both arms.
     ``expected_state`` is the expected final state (e.g. DB rows for
     tau-bench); passed to the grader.
-    ``program_source`` is the ATLAS program source for the atlas
+    ``program_source`` is the TAHOE program source for the tahoe
     arm (pre-authored for the scaffold path; in live runs this is
     authored IN-LOOP by the model via the delegate authoring loop).
     ``protocols`` maps protocol stems to source for programs that CALL.
     ``authoring_attempts_expected`` is the expected number of authoring
-    attempts for the atlas arm (for testing; in live runs the actual
+    attempts for the tahoe arm (for testing; in live runs the actual
     count is observed and charged).
     """
 
@@ -249,7 +249,7 @@ class TrialRecord:
       empty for the deterministic path.
     - ``wall_seconds``: wall-clock time of the trial.
     - ``authoring_attempts``: number of authoring attempts (charged
-      steps for the atlas arm per #50's authoring-parity clause).
+      steps for the tahoe arm per #50's authoring-parity clause).
     - ``event_store_path``: path to the event-store DB file for audit.
     - ``run_id``: the run id used in the event store.
     """
@@ -332,7 +332,7 @@ class PilotReport:
     def to_markdown(self) -> str:
         lines: list[str] = []
         lines.append(
-            "# ATLAS Eval Pilot Report (scaffold — deterministic"
+            "# TAHOE Eval Pilot Report (scaffold — deterministic"
             " fake-worker evidence)"
         )
         lines.append("")
@@ -380,7 +380,7 @@ class PilotReport:
         lines.append("## Authoring parity (#50 section 4)")
         lines.append("")
         lines.append(
-            "Authoring attempts are charged as steps for the atlas arm"
+            "Authoring attempts are charged as steps for the tahoe arm"
             " per #50's authoring-parity clause.  The react arm has zero"
             " authoring attempts (no sealed-program scaffolding)."
         )
@@ -398,12 +398,12 @@ class PilotReport:
             "- This is a pilot scaffold: deterministic fake workers and"
             " graders prove the runner end-to-end.  Live model runs"
             " (real tau-bench env + live GLM-5.2) are the orchestrator's"
-            " post-merge step with ATLAS_* env."
+            " post-merge step with TAHOE_* env."
         )
         lines.append(
             "- Authoring attempts in the scaffold are pre-configured"
             " (the program is provided by the manifest).  In live runs"
-            " the atlas arm's program is authored IN-LOOP by the model"
+            " the tahoe arm's program is authored IN-LOOP by the model"
             " via the delegate authoring loop and every attempt is"
             " charged."
         )
@@ -455,7 +455,7 @@ def _run_react_arm(
         "step.report: DO report(committed_refs = ART.result, format = \"json\") -> OUT.answer\n"
         "RETURN OUT.answer\n"
     )
-    return _run_atlas_program(
+    return _run_tahoe_program(
         task=task,
         arm=arm,
         program_source=react_program,
@@ -465,14 +465,14 @@ def _run_react_arm(
     )
 
 
-def _run_atlas_arm(
+def _run_tahoe_arm(
     task: TaskManifest,
     arm: ArmSpec,
     *,
     workdir: str,
     run_id: str,
 ) -> tuple[TrialRecord, Any]:
-    """Run the atlas (sealed-program) arm.
+    """Run the tahoe (sealed-program) arm.
 
     In the scaffold path the program source is provided by the task
     manifest.  In live runs the program is authored IN-LOOP by the
@@ -482,9 +482,9 @@ def _run_atlas_arm(
     program_source = task.program_source
     if not program_source:
         raise ValueError(
-            f"atlas arm requires program_source in task {task.task_id!r}"
+            f"tahoe arm requires program_source in task {task.task_id!r}"
         )
-    return _run_atlas_program(
+    return _run_tahoe_program(
         task=task,
         arm=arm,
         program_source=program_source,
@@ -494,7 +494,7 @@ def _run_atlas_arm(
     )
 
 
-def _run_atlas_program(
+def _run_tahoe_program(
     task: TaskManifest,
     arm: ArmSpec,
     *,
@@ -590,7 +590,7 @@ def _default_eval_worker() -> DeterministicWorker:
     Each handler returns a fixed echo; ``delegate`` returns a fixed
     canonical plan (same as the benchmark harness).
     """
-    from atlas.benchmarks import DELEGATE_SAMPLE_PLAN
+    from tahoe.benchmarks import DELEGATE_SAMPLE_PLAN
 
     registry = builtin_registry()
 
@@ -654,7 +654,7 @@ def run_pilot(
         )
 
     all_trials: list[TrialRecord] = []
-    with tempfile.TemporaryDirectory(prefix="atlas-eval-") as workdir:
+    with tempfile.TemporaryDirectory(prefix="tahoe-eval-") as workdir:
         for rep in range(1, repetitions + 1):
             for task in manifest:
                 for arm in arms:
@@ -669,7 +669,7 @@ def run_pilot(
                             run_id=run_id,
                         )
                     else:
-                        record, raw_result = _run_atlas_arm(
+                        record, raw_result = _run_tahoe_arm(
                             task=task,
                             arm=arm,
                             workdir=workdir,

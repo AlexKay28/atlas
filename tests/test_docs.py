@@ -1,7 +1,7 @@
 """Documentation consistency tests (issue #49).
 
 Verifies that:
-1. Every subcommand name from ``atlas.cli._build_parser()`` appears in the
+1. Every subcommand name from ``tahoe.cli._build_parser()`` appears in the
    README's CLI reference section.
 2. The design-doc command count matches ``len(builtin_registry().names())``.
 3. CHANGELOG.md exists and references the registry vocabulary.
@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from atlas.cli import _build_parser
-from atlas.registry import builtin_registry
+from tahoe.cli import _build_parser
+from tahoe.registry import builtin_registry
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -125,8 +125,8 @@ def test_readme_links_changelog():
 
 
 def test_skill_md_has_step0_inventory_gate():
-    """atlas-demo SKILL.md contains Step 0 skill/MCP inventory gate."""
-    skill = _read(".opencode/skills/atlas-demo/SKILL.md")
+    """tahoe-demo SKILL.md contains Step 0 skill/MCP inventory gate."""
+    skill = _read(".opencode/skills/tahoe-demo/SKILL.md")
     assert "Step 0" in skill, "SKILL.md missing 'Step 0' heading"
     assert "skill/mcp" in skill.lower(), (
         "SKILL.md missing 'skill/MCP' in Step 0"
@@ -148,7 +148,7 @@ def test_skill_md_has_step0_inventory_gate():
 
 def test_worker_adapter_t3_prompt_has_inventory_check():
     """worker_adapter.py T3 delegate prompt includes the inventory check."""
-    adapter = _read("src/atlas/worker_adapter.py")
+    adapter = _read("src/tahoe/worker_adapter.py")
     # The T3 delegate authoring block must mention the inventory check
     assert "Step 0" in adapter, (
         "worker_adapter.py T3 prompt missing 'Step 0' reference"

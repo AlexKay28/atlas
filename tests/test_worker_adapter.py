@@ -1,6 +1,6 @@
 """Tests for the model worker adapter with tier-based routing (issue #8).
 
-Contract under test (atlas.worker_adapter.ModelWorker):
+Contract under test (tahoe.worker_adapter.ModelWorker):
 
 - Duck-type compatibility with ``DeterministicWorker``: ``.commands``
   (the registry's command names) and ``.execute(command, resolved_kwargs)``.
@@ -28,32 +28,32 @@ import sys
 
 import pytest
 
-from atlas.cli import DETERMINISTIC_UNDER_MODEL, _HybridModelWorker, _build_model_worker, main
-from atlas.registry import builtin_registry
-from atlas.registry.enums import RoutingTier
-from atlas.runtime import EventStore, SequentialCoordinator
-from atlas.runtime.coordinator import map_results_to_targets
-from atlas.syntax import parse_program, seal_digest
-from atlas.worker_adapter import (
+from tahoe.cli import DETERMINISTIC_UNDER_MODEL, _HybridModelWorker, _build_model_worker, main
+from tahoe.registry import builtin_registry
+from tahoe.registry.enums import RoutingTier
+from tahoe.runtime import EventStore, SequentialCoordinator
+from tahoe.runtime.coordinator import map_results_to_targets
+from tahoe.syntax import parse_program, seal_digest
+from tahoe.worker_adapter import (
     DEFAULT_TIMEOUT_SECONDS,
     ModelWorker,
     TransportResult,
     WorkerError,
 )
 
-ATLAS_ENV_VARS = (
-    "ATLAS_WORKER_TRANSPORT",
-    "ATLAS_MODEL",
-    "ATLAS_TIER_MODELS",
-    "ATLAS_API_BASE",
-    "ATLAS_API_KEY",
-    "ATLAS_EXEC_COMMAND",
+TAHOE_ENV_VARS = (
+    "TAHOE_WORKER_TRANSPORT",
+    "TAHOE_MODEL",
+    "TAHOE_TIER_MODELS",
+    "TAHOE_API_BASE",
+    "TAHOE_API_KEY",
+    "TAHOE_EXEC_COMMAND",
 )
 
 
 @pytest.fixture(autouse=True)
-def _clean_atlas_env(monkeypatch):
-    for name in ATLAS_ENV_VARS:
+def _clean_tahoe_env(monkeypatch):
+    for name in TAHOE_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 
 
@@ -294,7 +294,7 @@ def test_cli_model_worker_without_env_exits_before_run(tmp_path, capsys):
     )
     assert rc == 1
     captured = capsys.readouterr()
-    assert "ATLAS_WORKER_TRANSPORT" in captured.err
+    assert "TAHOE_WORKER_TRANSPORT" in captured.err
     # Guard fired before run creation: the db carries zero events.
     store = EventStore(str(db))
     try:
@@ -315,7 +315,7 @@ def test_cli_model_worker_resume_guard_exits_before_store(tmp_path, capsys):
     )
     assert rc == 1
     captured = capsys.readouterr()
-    assert "ATLAS_WORKER_TRANSPORT" in captured.err
+    assert "TAHOE_WORKER_TRANSPORT" in captured.err
 
 
 def test_cli_deterministic_baseline_unchanged(tmp_path, capsys):
@@ -344,7 +344,7 @@ def test_cli_deterministic_baseline_unchanged(tmp_path, capsys):
 
 
 def test_cli_model_worker_rejects_bad_transport_env(tmp_path, capsys, monkeypatch):
-    monkeypatch.setenv("ATLAS_WORKER_TRANSPORT", "carrier-pigeon")
+    monkeypatch.setenv("TAHOE_WORKER_TRANSPORT", "carrier-pigeon")
     program = _write_program(tmp_path, SMALL_PROGRAM)
     digest = seal_digest(parse_program(program.read_text(encoding="utf-8")))
     rc = main(
@@ -354,28 +354,28 @@ def test_cli_model_worker_rejects_bad_transport_env(tmp_path, capsys, monkeypatc
         ]
     )
     assert rc == 1
-    assert "ATLAS_WORKER_TRANSPORT" in capsys.readouterr().err
+    assert "TAHOE_WORKER_TRANSPORT" in capsys.readouterr().err
 
 
 def test_build_model_worker_http_requires_credentials(monkeypatch):
-    monkeypatch.setenv("ATLAS_WORKER_TRANSPORT", "http")
-    monkeypatch.setenv("ATLAS_MODEL", "m")
-    with pytest.raises(ValueError, match="ATLAS_API_BASE"):
+    monkeypatch.setenv("TAHOE_WORKER_TRANSPORT", "http")
+    monkeypatch.setenv("TAHOE_MODEL", "m")
+    with pytest.raises(ValueError, match="TAHOE_API_BASE"):
         _build_model_worker()
 
 
 def test_build_model_worker_requires_some_model(monkeypatch):
-    monkeypatch.setenv("ATLAS_WORKER_TRANSPORT", "exec")
-    monkeypatch.setenv("ATLAS_EXEC_COMMAND", "true")
-    with pytest.raises(ValueError, match="ATLAS_MODEL"):
+    monkeypatch.setenv("TAHOE_WORKER_TRANSPORT", "exec")
+    monkeypatch.setenv("TAHOE_EXEC_COMMAND", "true")
+    with pytest.raises(ValueError, match="TAHOE_MODEL"):
         _build_model_worker()
 
 
 def test_build_model_worker_exec_transport_runs_subprocess(monkeypatch):
-    monkeypatch.setenv("ATLAS_WORKER_TRANSPORT", "exec")
-    monkeypatch.setenv("ATLAS_MODEL", "stub-model")
+    monkeypatch.setenv("TAHOE_WORKER_TRANSPORT", "exec")
+    monkeypatch.setenv("TAHOE_MODEL", "stub-model")
     monkeypatch.setenv(
-        "ATLAS_TIER_MODELS",
+        "TAHOE_TIER_MODELS",
         json.dumps({"T0": "tier-zero-model"}),
     )
     printer = (
@@ -384,7 +384,7 @@ def test_build_model_worker_exec_transport_runs_subprocess(monkeypatch):
         " 'prompt_tail': p[-100:]}))"
     )
     monkeypatch.setenv(
-        "ATLAS_EXEC_COMMAND",
+        "TAHOE_EXEC_COMMAND",
         json.dumps([sys.executable, "-c", printer, "{model}", "{prompt}"]),
     )
     worker = _build_model_worker()
@@ -396,10 +396,10 @@ def test_build_model_worker_exec_transport_runs_subprocess(monkeypatch):
 
 
 def test_exec_transport_nonzero_exit_raises(monkeypatch):
-    monkeypatch.setenv("ATLAS_WORKER_TRANSPORT", "exec")
-    monkeypatch.setenv("ATLAS_MODEL", "m")
+    monkeypatch.setenv("TAHOE_WORKER_TRANSPORT", "exec")
+    monkeypatch.setenv("TAHOE_MODEL", "m")
     monkeypatch.setenv(
-        "ATLAS_EXEC_COMMAND",
+        "TAHOE_EXEC_COMMAND",
         json.dumps([sys.executable, "-c", "raise SystemExit(3)"]),
     )
     worker = _build_model_worker()
@@ -408,11 +408,11 @@ def test_exec_transport_nonzero_exit_raises(monkeypatch):
 
 
 def test_build_model_worker_rejects_non_string_tier_mapping(monkeypatch):
-    monkeypatch.setenv("ATLAS_WORKER_TRANSPORT", "exec")
-    monkeypatch.setenv("ATLAS_MODEL", "m")
-    monkeypatch.setenv("ATLAS_EXEC_COMMAND", "true")
-    monkeypatch.setenv("ATLAS_TIER_MODELS", json.dumps({"T1": 42}))
-    with pytest.raises(ValueError, match="ATLAS_TIER_MODELS"):
+    monkeypatch.setenv("TAHOE_WORKER_TRANSPORT", "exec")
+    monkeypatch.setenv("TAHOE_MODEL", "m")
+    monkeypatch.setenv("TAHOE_EXEC_COMMAND", "true")
+    monkeypatch.setenv("TAHOE_TIER_MODELS", json.dumps({"T1": 42}))
+    with pytest.raises(ValueError, match="TAHOE_TIER_MODELS"):
         _build_model_worker()
 
 
@@ -429,8 +429,8 @@ def test_hybrid_worker_routes_edit_deterministically(tmp_path):
     model_worker = ModelWorker(
         registry=builtin_registry(), transport=transport, default_model="m"
     )
-    from atlas.cli import _deterministic_handlers
-    from atlas.runtime import DeterministicWorker
+    from tahoe.cli import _deterministic_handlers
+    from tahoe.runtime import DeterministicWorker
 
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -454,8 +454,8 @@ def test_hybrid_worker_routes_other_commands_to_model():
         transport=recording_transport('{"plan": "from-model"}'),
         default_model="m",
     )
-    from atlas.cli import _deterministic_handlers
-    from atlas.runtime import DeterministicWorker
+    from tahoe.cli import _deterministic_handlers
+    from tahoe.runtime import DeterministicWorker
 
     hybrid = _HybridModelWorker(
         model_worker, DeterministicWorker(_deterministic_handlers())
@@ -473,7 +473,7 @@ def test_hybrid_worker_falls_back_to_model_for_unknown_deterministic_command():
         transport=recording_transport('"model-result"'),
         default_model="m",
     )
-    from atlas.runtime import DeterministicWorker
+    from tahoe.runtime import DeterministicWorker
 
     hybrid = _HybridModelWorker(model_worker, DeterministicWorker({}))
     # A command the deterministic side lacks routes to the model even if it

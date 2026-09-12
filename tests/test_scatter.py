@@ -17,17 +17,17 @@ from typing import Any
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.resume import resume_run
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.coordinator import (
+from tahoe.audit import audit_run
+from tahoe.resume import resume_run
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.coordinator import (
     CrashInterrupt,
     DeterministicWorker,
     SequentialCoordinator,
     judge_score,
 )
-from atlas.runtime.tasks import TaskStatus
-from atlas.syntax import (
+from tahoe.runtime.tasks import TaskStatus
+from tahoe.syntax import (
     ParseError,
     canonical_json,
     parse_program,

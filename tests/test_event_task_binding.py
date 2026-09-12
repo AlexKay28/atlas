@@ -8,10 +8,10 @@ run's stored task events.
 
 import pytest
 
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.events import _Record
-from atlas.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
-from atlas.state import StateDelta
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.events import _Record
+from tahoe.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
+from tahoe.state import StateDelta
 
 
 def test_two_ledger_events_append(tmp_path):

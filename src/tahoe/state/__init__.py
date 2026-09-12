@@ -1,4 +1,4 @@
-"""Deterministic state projections for ATLAS runs."""
+"""Deterministic state projections for TAHOE runs."""
 
 from .delta import StateDelta
 

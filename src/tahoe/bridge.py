@@ -1,9 +1,9 @@
 """External-driver claim bridge (issue #19).
 
 Adds a ready/claim/submit lifecycle on top of the Wave 8 sequential
-external driver (``atlas next`` / ``atlas submit``, issue #18) so an
-already-running agent can execute ATLAS invocations with its own tools
-while ATLAS maintains state and validates results — the driver process
+external driver (``tahoe next`` / ``tahoe submit``, issue #18) so an
+already-running agent can execute TAHOE invocations with its own tools
+while TAHOE maintains state and validates results — the driver process
 never holds the event store open beyond one command.
 
 Claim semantics — an additive overlay the coordinator-driven path
@@ -45,8 +45,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
-from atlas.envelope import DriverError, ExternalDriver, ResultEnvelope
-from atlas.runtime.events import Event, EventType, _Record
+from tahoe.envelope import DriverError, ExternalDriver, ResultEnvelope
+from tahoe.runtime.events import Event, EventType, _Record
 
 __all__ = [
     "DEFAULT_CLAIM_TIMEOUT_SECONDS",
@@ -285,7 +285,7 @@ class ClaimBridge:
         _check_claim(
             claim is not None,
             f"no open claim for invocation {result.invocation_id!r} in run"
-            f" {driver.run_id!r}; run `atlas claim` first (nothing"
+            f" {driver.run_id!r}; run `tahoe claim` first (nothing"
             " appended)",
         )
         assert claim is not None  # narrowed for type checkers
@@ -474,7 +474,7 @@ class ClaimBridge:
         if not dispatches:
             raise DriverError(
                 f"invocation {invocation_id!r} has no DISPATCHED event to"
-                " claim against; run `atlas next` first"
+                " claim against; run `tahoe next` first"
             )
         return dispatches[-1]
 

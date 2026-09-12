@@ -17,12 +17,12 @@ from typing import Any
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.budgets import BudgetDeadlineExceeded, BudgetGate, ExecutionBudget
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.coordinator import DeterministicWorker, SequentialCoordinator
-from atlas.syntax import parse_program
-from atlas.worker_adapter import ModelWorker, WorkerError
+from tahoe.audit import audit_run
+from tahoe.budgets import BudgetDeadlineExceeded, BudgetGate, ExecutionBudget
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.coordinator import DeterministicWorker, SequentialCoordinator
+from tahoe.syntax import parse_program
+from tahoe.worker_adapter import ModelWorker, WorkerError
 
 
 class ConcurrencyTracker:
@@ -551,7 +551,7 @@ def test_budget_none_keeps_behavior_identical(tmp_path):
 
 def test_model_worker_envelope_carries_budget_deadline():
     """The execution budget's deadline binds into rendered TaskEnvelopes."""
-    from atlas.registry.registry import builtin_registry
+    from tahoe.registry.registry import builtin_registry
 
     def transport(model: str, prompt: str) -> str:
         return '{"goal": "x"}'

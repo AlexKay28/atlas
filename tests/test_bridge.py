@@ -1,6 +1,6 @@
 """Tests for the external-driver claim bridge (issue #19).
 
-Contract under test (atlas.bridge + its CLI bindings):
+Contract under test (tahoe.bridge + its CLI bindings):
 
 - ``ready``/``claim`` render the next ready invocation's TaskEnvelope and
   record an INVOCATION_CLAIMED event (fencing token, claimed_at, envelope
@@ -29,24 +29,24 @@ import json
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.bridge import ClaimBridge, claim_from_event
-from atlas.cli import main
-from atlas.envelope import (
+from tahoe.audit import audit_run
+from tahoe.bridge import ClaimBridge, claim_from_event
+from tahoe.cli import main
+from tahoe.envelope import (
     ENVELOPE_SCHEMA_VERSION,
     DriverError,
     ExternalDriver,
     ResultEnvelope,
 )
-from atlas.registry import builtin_registry
-from atlas.resume import resume_run
-from atlas.runtime import (
+from tahoe.registry import builtin_registry
+from tahoe.resume import resume_run
+from tahoe.runtime import (
     DeterministicWorker,
     EventStore,
     EventType,
     SequentialCoordinator,
 )
-from atlas.syntax import parse_program, seal_digest
+from tahoe.syntax import parse_program, seal_digest
 
 
 TWO_STEP_PROGRAM = """\
@@ -88,7 +88,7 @@ def _drive_step(bridge: ClaimBridge, payload) -> dict:
     handout = bridge.ready()
     assert handout["ready"] is True
     envelope = handout["envelope"]
-    from atlas.envelope import TaskEnvelope
+    from tahoe.envelope import TaskEnvelope
 
     task = TaskEnvelope.from_dict(envelope)
     return bridge.submit(
@@ -218,7 +218,7 @@ def test_stale_claim_is_reissued_with_new_token_and_attempt(two_step):
     )) == 2
 
     # The old token rejects against the re-issued open claim...
-    from atlas.envelope import TaskEnvelope
+    from tahoe.envelope import TaskEnvelope
 
     old_task = TaskEnvelope.from_dict(first["envelope"])
     before = len(store.events("r1"))
@@ -253,7 +253,7 @@ def test_expired_claim_rejected_at_submit_with_nothing_appended(two_step):
     stale_bridge = ClaimBridge(driver, claim_timeout_seconds=0.0)
     handout = stale_bridge.ready()
     token = handout["claim"]["claim_token"]
-    from atlas.envelope import TaskEnvelope
+    from tahoe.envelope import TaskEnvelope
 
     task = TaskEnvelope.from_dict(handout["envelope"])
     before = len(store.events("r1"))
@@ -269,7 +269,7 @@ def test_wrong_token_rejected_and_nothing_appended(two_step):
     store, driver = two_step
     bridge = ClaimBridge(driver)
     handout = bridge.ready()
-    from atlas.envelope import TaskEnvelope
+    from tahoe.envelope import TaskEnvelope
 
     task = TaskEnvelope.from_dict(handout["envelope"])
     before = len(store.events("r1"))
@@ -299,7 +299,7 @@ def test_submit_without_open_claim_rejected(two_step):
 def test_empty_claim_token_rejected(two_step):
     _, driver = two_step
     bridge = ClaimBridge(driver)
-    from atlas.envelope import TaskEnvelope
+    from tahoe.envelope import TaskEnvelope
 
     handout = bridge.ready()
     task = TaskEnvelope.from_dict(handout["envelope"])
@@ -586,7 +586,7 @@ def test_renew_with_correct_token_extends_freshness_and_delayed_submit_succeeds(
     assert handout["ready"] is True
     token = handout["claim"]["claim_token"]
     invocation_id = handout["claim"]["invocation_id"]
-    from atlas.envelope import TaskEnvelope
+    from tahoe.envelope import TaskEnvelope
 
     task = TaskEnvelope.from_dict(handout["envelope"])
 
@@ -746,7 +746,7 @@ def _renew_cli(tmp_path, db, program, digest, invocation_id, token, capsys):
 def test_cli_renew_extends_freshness_and_delayed_submit_succeeds(
     tmp_path, capsys,
 ):
-    """Acceptance (4): `atlas renew` CLI works end-to-end — renew
+    """Acceptance (4): `tahoe renew` CLI works end-to-end — renew
     extends freshness and the delayed submit succeeds."""
     program = _write(tmp_path, "prog.think", TWO_STEP_PROGRAM)
     digest = seal_digest(parse_program(TWO_STEP_PROGRAM))
@@ -880,7 +880,7 @@ def test_reissue_respects_max_attempts(two_step):
 def test_reissue_unlimited_when_max_attempts_absent(two_step):
     """When the envelope has no contract.budget.max_attempts (or it is
     invalid), reissue is unlimited (preserves historical behavior)."""
-    from atlas.envelope import TaskEnvelope
+    from tahoe.envelope import TaskEnvelope
 
     store, driver = two_step
     stale_bridge = ClaimBridge(driver, claim_timeout_seconds=0.0)

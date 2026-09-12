@@ -1,4 +1,4 @@
-"""Replay-based run verification for the ATLAS runtime (issue #14).
+"""Replay-based run verification for the TAHOE runtime (issue #14).
 
 ``audit_run`` re-derives every invariant a trusted run must satisfy from
 the event store alone and reports each violation together with the
@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from atlas.runtime.events import Event, EventStore, EventType, canonical_json
+from tahoe.runtime.events import Event, EventStore, EventType, canonical_json
 
 __all__ = ["AuditFinding", "AuditReport", "audit_run"]
 

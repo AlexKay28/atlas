@@ -1,6 +1,6 @@
 """Tests for the task/result envelope protocol and external driver (issue #18).
 
-Contract under test (atlas.envelope + its bindings):
+Contract under test (tahoe.envelope + its bindings):
 
 - TaskEnvelope / ResultEnvelope dataclasses round trip through canonical
   JSON with strict validation and clear errors (unknown fields, missing
@@ -10,8 +10,8 @@ Contract under test (atlas.envelope + its bindings):
   canonical JSON is embedded; the transport seam is unchanged) and parses
   the reply INTO a validated ResultEnvelope whose receipt distinguishes
   unavailable telemetry (``None``) from a measured zero.
-- ``atlas next`` renders the next ready invocation's envelope from the
-  event store; ``atlas submit`` accepts a result file and commits
+- ``tahoe next`` renders the next ready invocation's envelope from the
+  event store; ``tahoe submit`` accepts a result file and commits
   RESULT_RECEIVED / VALIDATION / SUCCEEDED through the same coordinator
   machinery.  A 2-step program drives to a succeeded run externally, the
   event-type sequence matches a coordinator-driven run of the same
@@ -26,9 +26,9 @@ import json
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.cli import main
-from atlas.envelope import (
+from tahoe.audit import audit_run
+from tahoe.cli import main
+from tahoe.envelope import (
     DIRECT_DISPATCH_RUN_ID,
     ENVELOPE_SCHEMA_VERSION,
     DriverError,
@@ -38,10 +38,10 @@ from atlas.envelope import (
     TaskEnvelope,
     build_task_envelope,
 )
-from atlas.registry import builtin_registry
-from atlas.runtime import EventStore, EventType, SequentialCoordinator
-from atlas.syntax import parse_program, seal_digest
-from atlas.worker_adapter import ModelWorker
+from tahoe.registry import builtin_registry
+from tahoe.runtime import EventStore, EventType, SequentialCoordinator
+from tahoe.syntax import parse_program, seal_digest
+from tahoe.worker_adapter import ModelWorker
 
 
 TWO_STEP_PROGRAM = """\
@@ -463,7 +463,7 @@ def test_external_round_trip_event_sequence_matches_coordinator(tmp_path):
 
     store1 = EventStore(str(tmp_path / "coordinator.db"))
     try:
-        from atlas.runtime import DeterministicWorker
+        from tahoe.runtime import DeterministicWorker
 
         worker = DeterministicWorker({
             "define": lambda **kwargs: {"plan": "frame and locate"},

@@ -1,4 +1,4 @@
-"""Command-line interface for ATLAS (docs/spec/02-command-catalog.md).
+"""Command-line interface for TAHOE (docs/spec/02-command-catalog.md).
 
 Commands: lint, seal, run, resume, status, events, audit, learn, bench,
 next, submit, ready, claim, renew.  Uses argparse and the standard library
@@ -38,22 +38,22 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Mapping
 
-from atlas.audit import audit_run
-from atlas.benchmarks import builtin_cases, run_benchmark
-from atlas.bridge import ClaimBridge
-from atlas.envelope import (
+from tahoe.audit import audit_run
+from tahoe.benchmarks import builtin_cases, run_benchmark
+from tahoe.bridge import ClaimBridge
+from tahoe.envelope import (
     DriverError,
     EnvelopeValidationError,
     ExternalDriver,
     ResultEnvelope,
 )
-from atlas.learn import mine_run_directory
-from atlas.memory import KnowledgeBase
-from atlas.registry import builtin_registry
-from atlas.resume import resume_run
-from atlas.runtime import DeterministicWorker, EventStore, EventType, SequentialCoordinator
-from atlas.syntax import ParseError, parse_program, seal_digest, validate_program
-from atlas.worker_adapter import (
+from tahoe.learn import mine_run_directory
+from tahoe.memory import KnowledgeBase
+from tahoe.registry import builtin_registry
+from tahoe.resume import resume_run
+from tahoe.runtime import DeterministicWorker, EventStore, EventType, SequentialCoordinator
+from tahoe.syntax import ParseError, parse_program, seal_digest, validate_program
+from tahoe.worker_adapter import (
     DEFAULT_TIMEOUT_SECONDS,
     ModelWorker,
     TransportResult,
@@ -169,7 +169,7 @@ def _deterministic_handlers(
         if not isinstance(root, str) or not root:
             raise ValueError(
                 "edit/test require a workspace root: pass --workspace to"
-                " atlas run (default: the --db directory)"
+                " tahoe run (default: the --db directory)"
             )
         return root
 
@@ -374,55 +374,55 @@ def _make_exec_transport(template: str) -> Any:
 
 
 def _build_model_worker() -> ModelWorker:
-    """Build a ModelWorker from ATLAS_* environment configuration.
+    """Build a ModelWorker from TAHOE_* environment configuration.
 
     Raises ``ValueError`` with a clear message when required environment
     is missing or malformed — the caller prints it and exits 1 before any
     run is created (same guard style as ``--seal``).
     """
-    transport_kind = os.environ.get("ATLAS_WORKER_TRANSPORT")
+    transport_kind = os.environ.get("TAHOE_WORKER_TRANSPORT")
     if transport_kind not in ("http", "exec"):
         raise ValueError(
-            f"ATLAS_WORKER_TRANSPORT must be 'http' or 'exec',"
+            f"TAHOE_WORKER_TRANSPORT must be 'http' or 'exec',"
             f" got {transport_kind!r}"
         )
 
     tier_models: dict[str, str] = {}
-    raw_tiers = os.environ.get("ATLAS_TIER_MODELS")
+    raw_tiers = os.environ.get("TAHOE_TIER_MODELS")
     if raw_tiers:
         try:
             parsed_tiers = json.loads(raw_tiers)
         except ValueError as exc:
-            raise ValueError(f"ATLAS_TIER_MODELS is not valid JSON: {exc}") from exc
+            raise ValueError(f"TAHOE_TIER_MODELS is not valid JSON: {exc}") from exc
         if not isinstance(parsed_tiers, dict) or not all(
             isinstance(key, str) and isinstance(value, str)
             for key, value in parsed_tiers.items()
         ):
             raise ValueError(
-                "ATLAS_TIER_MODELS must be a JSON object mapping"
+                "TAHOE_TIER_MODELS must be a JSON object mapping"
                 " tier (T0..T3) to model name"
             )
         tier_models = parsed_tiers
 
-    default_model = os.environ.get("ATLAS_MODEL")
+    default_model = os.environ.get("TAHOE_MODEL")
     if not default_model and not tier_models:
         raise ValueError(
-            "no model configured: set ATLAS_MODEL or ATLAS_TIER_MODELS"
+            "no model configured: set TAHOE_MODEL or TAHOE_TIER_MODELS"
         )
 
     if transport_kind == "http":
-        api_base = os.environ.get("ATLAS_API_BASE")
-        api_key = os.environ.get("ATLAS_API_KEY")
+        api_base = os.environ.get("TAHOE_API_BASE")
+        api_key = os.environ.get("TAHOE_API_KEY")
         if not api_base or not api_key:
             raise ValueError(
-                "http transport requires ATLAS_API_BASE and ATLAS_API_KEY"
+                "http transport requires TAHOE_API_BASE and TAHOE_API_KEY"
             )
         transport = _make_http_transport(api_base, api_key)
     else:
-        template = os.environ.get("ATLAS_EXEC_COMMAND")
+        template = os.environ.get("TAHOE_EXEC_COMMAND")
         if not template or not template.strip():
             raise ValueError(
-                "exec transport requires ATLAS_EXEC_COMMAND"
+                "exec transport requires TAHOE_EXEC_COMMAND"
                 " (argv template with {model} and {prompt} placeholders)"
             )
         transport = _make_exec_transport(template)
@@ -971,7 +971,7 @@ def _cmd_submit(args: argparse.Namespace) -> int:
                     f"invocation {result.invocation_id!r} holds an open,"
                     f" non-expired claim (attempt {open_claim.claim_attempt},"
                     f" seq {open_claim.seq}); a token-less submit is fenced"
-                    " off — provide --claim-token from atlas ready/claim"
+                    " off — provide --claim-token from tahoe ready/claim"
                     " or renew"
                 )
             outcome = driver.submit_result(result)
@@ -1006,7 +1006,7 @@ def _cmd_renew(args: argparse.Namespace) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="atlas",
+        prog="tahoe",
         description="Executable text harness for durable AI thinking programs.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1048,7 +1048,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="deterministic",
         help=(
             "Worker backend: deterministic handlers (default, CI baseline)"
-            " or model routing via ATLAS_* environment configuration"
+            " or model routing via TAHOE_* environment configuration"
         ),
     )
     p_run.add_argument(
@@ -1085,7 +1085,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="deterministic",
         help=(
             "Worker backend: deterministic handlers (default, CI baseline)"
-            " or model routing via ATLAS_* environment configuration"
+            " or model routing via TAHOE_* environment configuration"
         ),
     )
     p_resume.set_defaults(func=_cmd_resume)
@@ -1232,7 +1232,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--claim-token",
         default=None,
         help=(
-            "Claim token from atlas ready/claim; validates the"
+            "Claim token from tahoe ready/claim; validates the"
             " invocation's open claim before committing (issue #19);"
             " omit for the claim-less Wave 8 path"
         ),
@@ -1353,7 +1353,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_renew.add_argument(
         "--claim-token",
         required=True,
-        help="Claim token from atlas ready/claim; must match the open claim",
+        help="Claim token from tahoe ready/claim; must match the open claim",
     )
     p_renew.add_argument(
         "--claim-timeout",

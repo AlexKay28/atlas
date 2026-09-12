@@ -1,4 +1,4 @@
-"""Tests for replay-based run verification (issue #14, atlas.audit).
+"""Tests for replay-based run verification (issue #14, tahoe.audit).
 
 Contract under test:
 
@@ -10,7 +10,7 @@ Contract under test:
   on terminal runs (no PENDING/IN_PROGRESS tasks, nonempty evidence on
   COMPLETED tasks, nonempty task_id/instruction_id on invocation-bound
   events), and state projection determinism.
-- ``atlas audit --db PATH --run-id ID`` prints OK or each violation
+- ``tahoe audit --db PATH --run-id ID`` prints OK or each violation
   with seq refs; exits 0 clean, 1 on violations, 1 for unknown run.
 
 Runs are produced by SequentialCoordinator + DeterministicWorker;
@@ -23,16 +23,16 @@ from __future__ import annotations
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.cli import _deterministic_handlers, main
-from atlas.runtime import (
+from tahoe.audit import audit_run
+from tahoe.cli import _deterministic_handlers, main
+from tahoe.runtime import (
     DeterministicWorker,
     EventStore,
     EventType,
     SequentialCoordinator,
 )
-from atlas.runtime.events import canonical_json
-from atlas.syntax import parse_program
+from tahoe.runtime.events import canonical_json
+from tahoe.syntax import parse_program
 
 RUN_ID = "run-1"
 

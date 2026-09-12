@@ -24,11 +24,11 @@ from typing import Any
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.claims import ResourceLedger
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.coordinator import DeterministicWorker, SequentialCoordinator
-from atlas.syntax import parse_program
+from tahoe.audit import audit_run
+from tahoe.claims import ResourceLedger
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.coordinator import DeterministicWorker, SequentialCoordinator
+from tahoe.syntax import parse_program
 
 
 def edit_handler(workspace_root: str):
