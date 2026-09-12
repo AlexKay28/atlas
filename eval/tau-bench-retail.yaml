@@ -1,0 +1,58 @@
+# tau-bench retail subset manifest stub (issue #47, methodology #50 section 2)
+#
+# This is a SCAFFOLD stub: pinned task IDs are placeholders pending
+# primary-source verification per #50's rules.  The orchestrator fills
+# in the real task IDs, env pinning and user-simulator settings before
+# the live run.
+#
+# Paper: https://arxiv.org/abs/2406.12045
+# pip-installable env; programmatic DB-state grading; pass^k consistency.
+
+manifest_name: tau-bench-retail-subset
+benchmark:
+  name: tau-bench
+  version: "1.0"  # verify and pin before live run
+  split: retail
+  paper: https://arxiv.org/abs/2406.12045
+
+# Pinned task IDs — placeholder list; replace with verified IDs
+# from the tau-bench retail split before the live run.
+task_ids:
+  - "retail-001"
+  - "retail-002"
+  - "retail-003"
+  - "retail-004"
+  - "retail-005"
+
+# Environment/model pinning fields (#50 section 2)
+environment:
+  # tau-bench env: pip-installable, DB-state grader
+  type: tau-bench
+  version: ""  # pin before live run
+  # User-simulator freeze fields per #50 section 2:
+  # the user simulator model and settings must be frozen across arms
+  # and trials for reproducibility.
+  user_simulator:
+    model: ""  # pin before live run (e.g. "gpt-4o-mini")
+    temperature: 0.0
+    seed: 42
+    system_prompt: ""  # pin before live run
+
+model:
+  # The model under test (both arms use the same model per #50 section 4)
+  name: ""  # set via TIKHON_MODEL env
+  transport: ""  # set via TIKHON_WORKER_TRANSPORT env
+  api_base: ""  # set via TIKHON_API_BASE env
+  api_key: ""  # set via TIKHON_API_KEY env
+  temperature: 0.0
+  max_tokens: 4096
+
+# Grader: tau-bench DB-state match (programmatic)
+grader:
+  type: db_state_match
+  # The grader compares the final DB state against the expected state
+  # per task.  In the scaffold path, the ProgrammaticGrader callable
+  # is DBStateGrader from tikhon.eval.
+
+# Repetitions for pass^k reliability (#50 section 1)
+repetitions: 5

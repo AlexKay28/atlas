@@ -1,0 +1,51 @@
+# Tikhon run for GitHub issue #47: Protocol A/B evaluation pilot scaffolding
+# (Tier-B per #50 methodology; arms 1 and 4; pilot scaffolding — no live spend).
+#
+# Sealed BEFORE any source edit (tikhon protocol step 2). Uses only the
+# canonical grammar with all 23 registered commands as DO steps, one
+# SCATTER/GATHER bounded fan-out, one PAR MAX 3 block with heterogeneous
+# branches, and one runtime delegate authoring step. Every argument is a
+# single typed reference or a JSON literal.
+
+PROGRAM sprint1_47_eval_pilot VERSION 1.0
+
+INPUT
+    G.goal = "Deliver the issue #47 Tier-B pilot scaffolding: src/tikhon/eval.py (arm runner with ArmSpec for react vs tikhon arms, TrialRecord, run_pilot, ProgrammaticGrader interface), eval/ manifests and arms config, tests/test_eval.py, docs/eval-pilot.md — built on the #46 benchmark harness, with authoring attempts charged per #50 authoring-parity clause"
+    C.scope = "src/tikhon/eval.py (new), eval/ (new), tests/test_eval.py (new), docs/eval-pilot.md (new), demo/runs/sprint1-47-eval-pilot/"
+    C.done = "full pytest suite green (baseline 809); TrialRecord roundtrips; authoring attempts charged on tikhon arm; report to_json roundtrips; fake-worker pilot runs via ONE entry point; git status shows ONLY owned files"
+    Q.tasks = ["tau-bench-retail-stub", "custom-battery-3", "arms-config-1-4"]
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "eval_pilot") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "eval_pilot") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.goal, evidence = E.findings) -> H.theses
+step.calculate: DO calculate(expression = "arm_parity", values = {"arms": 2, "tasks": 3, "trials": 1}) -> F.metrics
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue47-eval-pilot", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue47-eval-pilot") -> K.recalled
+step.solve: DO solve(problem = G.goal, domain = "evaluation") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "eval_scaffolding") -> V.review
+step.design: DO summarize(source_refs = V.review, budget = 6000) -> P.design
+step.scatter_prepare: DO define(goal = Q.tasks) -> Q.parts
+SCATTER X.task IN Q.parts MAX 3
+  step.task_rank: DO rank(options = X.task, criteria = C.done) -> R.task
+GATHER task_rank AS R.tasks USING all
+PAR MAX 3
+    step.par_arms: DO search(query = G.plan, scope = C.scope) -> E.par_arms
+    step.par_check: DO check(artifact = V.review, predicate = "scaffolding_complete") -> V.par_verdict
+    step.par_author: DO delegate(goal = G.goal, constraints = C.scope, max_steps = 4) -> OUT.plan, OUT.metrics
+BARRIER -> E.par_arms, V.par_verdict, OUT.plan, OUT.metrics
+step.implement: DO edit(path = "src/tikhon/eval.py", content = "arm runner module") -> ART.module
+step.config: DO report(committed_refs = R.tasks, format = "yaml") -> ART.config
+step.test: DO test(path = "tests/test_eval.py", timeout_seconds = 600) -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = [V.verdict, F.metrics], format = "markdown") -> ART.report
+step.verify: DO verify(goal = G.goal, evidence = [ART.module, V.tests, R.tasks]) -> V.result
+
+RETURN P.design, V.verdict, V.result, R.tasks, OUT.plan, OUT.metrics, F.metrics

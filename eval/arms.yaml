@@ -1,0 +1,25 @@
+# Eval pilot configuration — arms 1 and 4 per #50 section 4
+#
+# Arm 1: plain agent/ReAct-style execution (no sealed-program scaffolding)
+# Arm 4: Tikhon core, sequential execution, no learned protocols
+#
+# Both arms use the same model/version, tools, environment, grader and
+# resource ceilings per #50's authoring-parity clause.
+# Authoring attempts on the tikhon arm are COUNTED as charged steps.
+
+arms:
+  - name: react-baseline
+    kind: react
+    max_workers: 1
+    # worker_factory: null in scaffold (deterministic); live runs use
+    # TIKHON_WORKER_TRANSPORT/TIKHON_MODEL/TIKHON_API_* env
+    prompt_template: |
+      You are a tool-using agent. Solve the task using available tools.
+      Respond with JSON actions and observations until the task is complete.
+
+  - name: tikhon-core
+    kind: tikhon
+    max_workers: 1
+    # The tikhon arm's program is authored IN-LOOP by the model via the
+    # delegate authoring loop in live runs; in the scaffold path the
+    # program_source is provided by the task manifest.

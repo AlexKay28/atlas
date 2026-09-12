@@ -1,0 +1,76 @@
+{
+  "task": "GitHub issue #47: Protocol A/B evaluation — Tier-B pilot scaffolding (arms 1+4 per #50 methodology)",
+  "run_id": "sprint1-47-eval-pilot",
+  "seal": "bdf30ba3b4d62adc6e712d6cd328359fd1acb4087ce438558c4e3f458355bc8a",
+  "terminal_status": "succeeded",
+  "steps_planned": 20,
+  "steps_executed": 20,
+  "acceptance": [
+    {
+      "criterion": "Sealed program created before any source edit (Tikhon protocol steps 1-2)",
+      "passed": true,
+      "evidence": "demo/runs/sprint1-47-eval-pilot/program.think linted valid and sealed to bdf30ba3... before any source edit; md5 5630f96409425dd176f176259b723f85 unchanged after all edits"
+    },
+    {
+      "criterion": "src/tikhon/eval.py: ArmSpec(name, kind) with kinds 'react' and 'tikhon'",
+      "passed": true,
+      "evidence": "src/tikhon/eval.py ArmSpec dataclass with kind validation ('react'|'tikhon'); tests/test_eval.py::test_arm_spec_rejects_bad_kind, ::test_arm_spec_rejects_empty_name, ::test_arm_spec_rejects_bad_max_workers"
+    },
+    {
+      "criterion": "TrialRecord: durable per-trial record (task_id, arm, result, failure class, usage dict, wall, authoring_attempts, event-store ref) — JSON-serializable",
+      "passed": true,
+      "evidence": "src/tikhon/eval.py TrialRecord frozen dataclass with to_json/from_json/to_dict/from_dict; tests/test_eval.py::test_trial_record_roundtrip, ::test_trial_record_roundtrip_failed_trial, ::test_trial_record_to_dict_from_dict"
+    },
+    {
+      "criterion": "run_pilot(manifest, arms, model_config) -> PilotReport with per-task results and to_json()/to_markdown() pair (mirroring #46's report pattern)",
+      "passed": true,
+      "evidence": "src/tikhon/eval.py run_pilot() returns PilotReport; PilotReport.to_json() and to_markdown(); tests/test_eval.py::test_run_pilot_basic, ::test_run_pilot_report_to_json_roundtrips, ::test_run_pilot_report_to_markdown, ::test_run_pilot_report_to_json_roundtrips_through_json_loads"
+    },
+    {
+      "criterion": "Grader interface: ProgrammaticGrader callables per task (tau-bench-style DB-state match as the documented example grader)",
+      "passed": true,
+      "evidence": "src/tikhon/eval.py ProgrammaticGrader type alias; DBStateGrader class with exact-match and partial match_keys modes; tests/test_eval.py::test_db_state_grader_exact_match, ::test_db_state_grader_mismatch, ::test_db_state_grader_partial_match_keys, ::test_db_state_grader_partial_mismatch_keys, ::test_db_state_grader_non_dict_actual"
+    },
+    {
+      "criterion": "Authoring attempts charged on the tikhon arm (authoring attempts via T3 authoring loop COUNTED as charged steps per #50's authoring-parity clause)",
+      "passed": true,
+      "evidence": "src/tikhon/eval.py _run_tikhon_arm sets authoring_attempts=task.authoring_attempts_expected; tests/test_eval.py::test_run_pilot_authoring_attempts_charged_on_tikhon_arm (tikhon task 003 → 1 attempt, react → 0)"
+    },
+    {
+      "criterion": "eval/: tau-bench retail subset manifest stub (pinned task IDs placeholder list, env/model pinning fields, user-simulator freeze fields per #50 section 2), arms.yaml-style config for arms 1 and 4, small custom battery manifest (3 deterministic tasks with fake workers proving the runner end-to-end)",
+      "passed": true,
+      "evidence": "eval/tau-bench-retail.yaml (task_ids, environment.user_simulator, model pinning); eval/arms.yaml (arms 1+4); eval/custom-battery.yaml (3 tasks); eval/README.md"
+    },
+    {
+      "criterion": "tests/test_eval.py: full pilot on fake workers/graders runs green via ONE entry point; TrialRecord roundtrips; authoring attempts charged on tikhon arm; report to_json roundtrips",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest tests/test_eval.py -q → 28 passed in 1.00s; run_pilot is the ONE entry point (test_run_pilot_basic); TrialRecord roundtrip (test_trial_record_roundtrip); authoring charged (test_run_pilot_authoring_attempts_charged_on_tikhon_arm); report roundtrip (test_run_pilot_report_to_json_roundtrips)"
+    },
+    {
+      "criterion": "docs/eval-pilot.md: how to run (one command), #50 methodology pointers, what is NOT yet live",
+      "passed": true,
+      "evidence": "docs/eval-pilot.md with 'How to run' section (scaffold + live smoke), #50 methodology pointers table, 'What is NOT yet live' section"
+    },
+    {
+      "criterion": "Full pytest suite green (baseline 809 — must stay green)",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q → 837 passed in 19.74s (809 baseline + 28 new)"
+    },
+    {
+      "criterion": "git status --porcelain shows ONLY owned files",
+      "passed": true,
+      "evidence": "git status --porcelain → demo/runs/sprint1-47-eval-pilot/, docs/eval-pilot.md, eval/, src/tikhon/eval.py, tests/test_eval.py — all owned, no existing files modified"
+    }
+  ],
+  "unresolved": [
+    "Real tau-bench environment: the tau-bench retail manifest is a stub with placeholder task IDs; the orchestrator must verify primary sources, pin exact versions/task IDs, and configure the tau-bench environment before live runs",
+    "Live GLM-5.2 smoke: the scaffold uses deterministic fake workers; the orchestrator runs the live smoke command (documented in docs/eval-pilot.md) with TIKHON_* env",
+    "Arms 2, 3, 5, 6 (concise NL, structured NL, Tikhon+protocols, Tikhon+parallel) are future arms per #50 section 4",
+    "Confidence intervals: the pilot scaffolding records per-trial results; CI computation is a post-hoc analysis step per #50 section 5"
+  ],
+  "protocol_deviations": [
+    "The react arm's 'plain agent tool loop' is simulated by constructing a simple define→search→fetch→report program from the task description in the scaffold path; in live runs this would dispatch a plain ReAct prompt to the model via the transport",
+    "Authoring attempts in the scaffold are pre-configured (TaskManifest.authoring_attempts_expected); in live runs the actual count is observed from CHILD_PLAN_AUTHORED events and charged",
+    "Usage telemetry is zero-filled in the deterministic path; live workers populate tokens/cost through the same TrialRecord shape"
+  ]
+}
