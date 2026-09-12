@@ -18,6 +18,7 @@ from tikhon.syntax import validate_program
 from tikhon.syntax.model import Invocation, Program, Return, Stop
 
 if TYPE_CHECKING:
+    from tikhon.memory import KnowledgeBase
     from tikhon.syntax.model import DonePredicate
 
 __all__ = [
@@ -26,6 +27,34 @@ __all__ = [
     "evaluate_done_predicate",
     "map_results_to_targets",
 ]
+
+_BUILTIN_REGISTRY_DIGEST: str | None = None
+
+
+def _builtin_registry_digest() -> str:
+    """Digest of the builtin command registry, computed once per process."""
+    global _BUILTIN_REGISTRY_DIGEST
+    if _BUILTIN_REGISTRY_DIGEST is None:
+        from tikhon.registry.registry import builtin_registry, registry_digest
+
+        _BUILTIN_REGISTRY_DIGEST = registry_digest(builtin_registry())
+    return _BUILTIN_REGISTRY_DIGEST
+
+
+def _uses_kb_refs(program: Program) -> bool:
+    """Whether any invocation argument mentions a ``KB.`` reference."""
+    for statement in program.statements:
+        if not isinstance(statement, Invocation):
+            continue
+        for arg in statement.args:
+            if isinstance(arg.value, str) and arg.value.startswith("KB."):
+                return True
+            if isinstance(arg.value, list) and any(
+                isinstance(item, str) and item.startswith("KB.")
+                for item in arg.value
+            ):
+                return True
+    return False
 
 
 def map_results_to_targets(
@@ -149,20 +178,54 @@ class DeterministicWorker:
 class SequentialCoordinator:
     """Drives a tikhon program sequentially through an EventStore."""
 
-    def __init__(self, store: EventStore, worker: DeterministicWorker):
+    def __init__(
+        self,
+        store: EventStore,
+        worker: DeterministicWorker,
+        memory: "KnowledgeBase | None" = None,
+    ):
         self.store = store
         self.worker = worker
+        self.memory = memory
+
+    def _resolve_kb_ref(self, ref: str) -> Any:
+        """Resolve a ``KB.<name>`` reference from the knowledge base."""
+        if self.memory is None:
+            raise ValueError(
+                f"KB reference {ref} requires a knowledge base:"
+                " construct SequentialCoordinator with"
+                " memory=KnowledgeBase(path)"
+            )
+        key = "kb." + ref.split(".", 1)[1]
+        if key not in self.memory:
+            raise ValueError(f"KB key {key!r} not found (reference {ref})")
+        return self.memory.get(key)
 
     def execute(self, program: Program, run_id: str = "run-1") -> dict[str, Any]:
         validate_program(program, known_commands=self.worker.commands)
+        if self.memory is None and _uses_kb_refs(program):
+            raise ValueError(
+                "program uses KB.* references but no knowledge base was"
+                " provided: construct SequentialCoordinator with"
+                " memory=KnowledgeBase(path)"
+            )
 
         program_version = f"{program.name}@{program.version}"
-        self.store.create_run(run_id, program_version, metadata={"program": program.name})
+        registry_digest = _builtin_registry_digest()
+        self.store.create_run(
+            run_id,
+            program_version,
+            metadata={"program": program.name, "registry_digest": registry_digest},
+        )
 
         self.store.append(
             run_id,
             EventType.RUN_STARTED,
-            payload={"program": program.name, "version": program.version},
+            payload={
+                "program": program.name,
+                "version": program.version,
+                "registry_digest": registry_digest,
+            },
         )
 
         values: dict[str, Any] = {}
@@ -298,21 +361,38 @@ class SequentialCoordinator:
                 ),
             ])
 
-            resolved_kwargs: dict[str, Any] = {}
-            for arg in statement.args:
-                if isinstance(arg.value, str) and arg.value in values:
-                    resolved_kwargs[arg.name] = values[arg.value]
-                elif isinstance(arg.value, list):
-                    # Reference-list argument ([E.a, E.b]): each listed ref
-                    # resolves through the same values mapping as single
-                    # refs; literal items (validation guarantees ref-shaped
-                    # strings always resolve) pass through untouched.
-                    resolved_kwargs[arg.name] = [
-                        values[item] if isinstance(item, str) and item in values else item
-                        for item in arg.value
-                    ]
-                else:
-                    resolved_kwargs[arg.name] = arg.value
+            try:
+                resolved_kwargs: dict[str, Any] = {}
+                for arg in statement.args:
+                    if isinstance(arg.value, str) and arg.value in values:
+                        resolved_kwargs[arg.name] = values[arg.value]
+                    elif isinstance(arg.value, str) and arg.value.startswith("KB."):
+                        # KB.<name> resolves from the cross-run knowledge base
+                        # at dispatch time, never from run-local state.
+                        resolved_kwargs[arg.name] = self._resolve_kb_ref(arg.value)
+                    elif isinstance(arg.value, list):
+                        # Reference-list argument ([E.a, E.b]): each listed ref
+                        # resolves through the same values mapping as single
+                        # refs; literal items (validation guarantees ref-shaped
+                        # strings always resolve) pass through untouched.
+                        resolved_kwargs[arg.name] = [
+                            values[item] if isinstance(item, str) and item in values
+                            else self._resolve_kb_ref(item)
+                            if isinstance(item, str) and item.startswith("KB.")
+                            else item
+                            for item in arg.value
+                        ]
+                    else:
+                        resolved_kwargs[arg.name] = arg.value
+            except Exception as exc:
+                # KB resolution errors (no memory, unknown key) fail the
+                # invocation through the standard failure path.
+                failed = True
+                error_msg = str(exc)
+                finish_failed_invocation(
+                    idx, statement, invocation_id, task_id, error_msg
+                )
+                break
 
             self.store.append(
                 run_id,

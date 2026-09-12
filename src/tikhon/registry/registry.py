@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Optional
 
@@ -17,6 +19,32 @@ def _version_sort_key(version: str) -> tuple:
     major, minor, patch = int(match.group(1)), int(match.group(2)), int(match.group(3))
     is_release = 0 if version[match.end() :].startswith("-") else 1
     return (major, minor, patch, is_release, version)
+
+
+def registry_digest(registry: "Registry") -> str:
+    """Deterministic digest of the registry's command-contract set.
+
+    Canonical JSON of the sorted ``(name, version, effect_class, execution,
+    minimum_tier)`` summary tuples, sha256-hex-encoded.  Only the stable
+    summary fields are hashed, so the digest is cheap to compute and stays
+    deterministic across registration order, interpreter runs, and hosts;
+    any change to the registered spec set (names, versions, or one of the
+    summary fields) changes the digest.
+    """
+    summaries = sorted(
+        (
+            spec.name,
+            spec.version,
+            spec.effect_class.value,
+            spec.execution.value,
+            spec.routing.minimum_tier.value,
+        )
+        for name in registry.names()
+        for version in registry.versions(name)
+        for spec in (registry.resolve(name, version),)
+    )
+    payload = json.dumps(summaries, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class Registry:

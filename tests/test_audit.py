@@ -398,3 +398,26 @@ def test_cli_audit_unknown_run_exits_one(tmp_path, capsys):
     captured = capsys.readouterr()
     assert rc == 1
     assert "unknown run" in captured.err
+
+
+# -- legacy runs without a registry digest (issue #15) ------------------
+
+
+def test_audit_clean_on_legacy_run_without_registry_digest(tmp_path):
+    """Pre-digest event stores (no registry_digest in RUN_STARTED) audit clean."""
+    with EventStore(str(tmp_path / "events.db")) as store:
+        store.create_run(RUN_ID, "legacy@1.0", metadata={"program": "legacy"})
+        store.append(
+            RUN_ID,
+            EventType.RUN_STARTED,
+            payload={"program": "legacy", "version": "1.0"},
+        )
+        store.append(RUN_ID, EventType.RUN_FINISHED, payload={"status": "succeeded"})
+
+        report = audit_run(store, RUN_ID)
+        assert report.ok, f"unexpected findings: {report.to_dict()}"
+        assert report.findings == ()
+        assert not [
+            finding for finding in report.findings
+            if "registry_digest" in finding.code or "registry_digest" in finding.message
+        ]

@@ -11,10 +11,14 @@ from typing import Any, Iterable
 from .model import Argument, Declaration, DonePredicate, Invocation, Program, Return, Stop
 
 _NAME = r"[a-z][a-z0-9_]*"
-_PREFIX = r"(?:G|Q|CTX|C|P|F|E|A|H|O|K|D|X|V|R|U|OUT|ART)"
+# Program header names allow hyphens after the first character (issue #15).
+# Everything else — step ids, typed-reference leaf segments, command names,
+# argument names, STOP kinds — keeps the underscore-only _NAME pattern.
+_PROGRAM_NAME = r"[a-z][a-z0-9_-]*"
+_PREFIX = r"(?:G|Q|CTX|C|P|F|E|A|H|O|K|D|X|V|R|U|OUT|ART|KB)"
 _REF_PATTERN = rf"{_PREFIX}\.{_NAME}(?:\.{_NAME})*"
 _REF_RE = re.compile(rf"^{_REF_PATTERN}$")
-_HEADER_RE = re.compile(rf"^PROGRAM\s+(?P<name>{_NAME})\s+VERSION\s+(?P<version>\d+(?:\.\d+)*)$")
+_HEADER_RE = re.compile(rf"^PROGRAM\s+(?P<name>{_PROGRAM_NAME})\s+VERSION\s+(?P<version>\d+(?:\.\d+)*)$")
 _DECL_RE = re.compile(rf"^(?P<ref>{_REF_PATTERN})\s*=\s*(?P<value>.+)$")
 _STEP_RE = re.compile(
     rf"^(?P<step>step\.{_NAME}):\s*DO\s+(?P<command>{_NAME})"
@@ -428,6 +432,14 @@ def validate_program(program: Program, known_commands: Iterable[str] | None = No
     known = set(known_commands) if known_commands is not None else None
     available: set[str] = set()
     for declaration in program.declarations:
+        # KB.* is cross-run semantic memory, not run-local state: it cannot
+        # be declared in INPUT and resolves from the KnowledgeBase at runtime.
+        if declaration.ref.startswith("KB."):
+            raise ParseError(
+                f"KB reference {declaration.ref} cannot be declared in INPUT:"
+                " semantic memory is durable across runs and is read with"
+                " recall, not run-local state"
+            )
         if declaration.ref in available:
             raise ParseError(f"duplicate declaration {declaration.ref}")
         available.add(declaration.ref)
@@ -445,6 +457,10 @@ def validate_program(program: Program, known_commands: Iterable[str] | None = No
                 raise ParseError(f"unknown command {statement.command}")
             for argument in statement.args:
                 for ref in _references_in(argument.value):
+                    # KB.* refs resolve from the KnowledgeBase at dispatch
+                    # time, so they need no run-local definition.
+                    if ref.startswith("KB."):
+                        continue
                     if ref not in available:
                         raise ParseError(
                             f"reference {ref} used before definition",
@@ -452,6 +468,12 @@ def validate_program(program: Program, known_commands: Iterable[str] | None = No
                             1,
                         )
             for target in statement.targets:
+                if target.startswith("KB."):
+                    raise ParseError(
+                        f"KB reference {target} cannot be an invocation target:"
+                        " semantic memory is written with the remember command,"
+                        " not produced as a state node"
+                    )
                 if target in available:
                     raise ParseError(f"duplicate target {target}")
                 available.add(target)

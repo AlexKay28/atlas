@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from tikhon.memory import KnowledgeBase
 from tikhon.runtime import EventStore, EventType
 from tikhon.runtime.coordinator import (
     DeterministicWorker,
@@ -904,3 +905,245 @@ def test_invocations_without_done_unchanged(tmp_path):
         grouped = events_by_invocation(history)
         for events in grouped.values():
             assert tuple(event.event_type for event in events) == LIFECYCLE
+
+
+# -- registry digest in RUN_STARTED (issue #15) -------------------------
+
+
+def test_run_started_carries_stable_registry_digest(tmp_path):
+    from tikhon.registry import builtin_registry
+    from tikhon.registry.registry import registry_digest
+
+    with EventStore(tmp_path / "events.db") as store:
+        run_canonical(store, run_id="run-digest")
+        started = store.events("run-digest")[0]
+        assert started.event_type is EventType.RUN_STARTED
+
+        expected = registry_digest(builtin_registry())
+        assert started.payload["registry_digest"] == expected
+        assert started.payload["program"] == "adder"
+        assert started.payload["version"] == "1.0"
+        metadata = store.run("run-digest")["metadata"]
+        assert metadata["registry_digest"] == expected
+        assert metadata["program"] == "adder"
+
+
+def test_two_coordinators_same_registry_same_digest(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        run_canonical(store, run_id="run-a")
+        run_canonical(store, run_id="run-b")
+        first = store.events("run-a")[0].payload["registry_digest"]
+        second = store.events("run-b")[0].payload["registry_digest"]
+        assert first == second
+        assert len(first) == 64
+
+
+def test_extra_spec_changes_registry_digest():
+    import dataclasses
+
+    from tikhon.registry import Registry, builtin_registry
+    from tikhon.registry.registry import registry_digest
+
+    base = builtin_registry()
+    baseline = registry_digest(base)
+
+    extended = Registry()
+    for name in base.names():
+        for version in base.versions(name):
+            extended.register(base.resolve(name, version))
+    extra = dataclasses.replace(
+        base.resolve("define"), name="zz_extra_probe", version="1.0.0"
+    )
+    extended.register(extra)
+
+    assert registry_digest(extended) != baseline
+
+
+# -- cross-run semantic memory (issue #5) --------------------------------
+
+KB_REMEMBER_PROGRAM = """\
+PROGRAM rememberer VERSION 1.0
+INPUT
+    G.fact = "seal before editing"
+step.frame: DO define(goal = G.fact) -> G.plan
+step.store: DO remember(key = "kb.lesson", value = G.fact) -> ART.record
+RETURN ART.record
+"""
+
+KB_RECALL_PROGRAM = """\
+PROGRAM recallr VERSION 1.0
+INPUT
+    G.query = "kb.lesson"
+step.fetch: DO recall(query = "kb.lesson") -> OUT.found
+step.wrap: DO define(goal = OUT.found) -> G.recalled
+RETURN OUT.found, G.recalled
+"""
+
+
+def test_remember_persists_value_across_runs_and_files(tmp_path):
+    kb_path = tmp_path / "kb.sqlite"
+    remembered: dict[str, Any] = {}
+
+    with EventStore(tmp_path / "events.db") as store:
+        memory = KnowledgeBase(kb_path)
+
+        def remember_handler(key, value):
+            record = memory.set(key, value, source_run="run-remember")
+            remembered.update(record)
+            return record
+
+        worker = DeterministicWorker(
+            handlers={
+                "define": define_handler,
+                "remember": remember_handler,
+            }
+        )
+        result = SequentialCoordinator(store, worker, memory=memory).execute(
+            parse_program(KB_REMEMBER_PROGRAM), run_id="run-remember"
+        )
+
+        assert result["status"] == "succeeded"
+        assert remembered["key"] == "kb.lesson"
+        assert remembered["value"] == "seal before editing"
+        assert remembered["source_run"] == "run-remember"
+        assert remembered["updated_at"]
+        memory.close()
+
+    with KnowledgeBase(kb_path) as reopened:
+        assert reopened.get("kb.lesson") == "seal before editing"
+
+
+def test_recall_across_runs_resolves_kb_ref_into_state_node(tmp_path):
+    kb_path = tmp_path / "kb.sqlite"
+    with KnowledgeBase(kb_path) as memory:
+        memory.set("kb.lesson", "seal before editing", source_run="run-1")
+
+    with EventStore(tmp_path / "events.db") as store:
+        memory = KnowledgeBase(kb_path)
+        worker = DeterministicWorker(
+            handlers={
+                "define": define_handler,
+                "recall": lambda query: {query: memory.get(query)},
+            }
+        )
+        result = SequentialCoordinator(store, worker, memory=memory).execute(
+            parse_program(KB_RECALL_PROGRAM), run_id="run-recall"
+        )
+        memory.close()
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {
+            "OUT.found": {"kb.lesson": "seal before editing"},
+            "G.recalled": {"goal": "add two inputs", "observed": {"kb.lesson": "seal before editing"}},
+        }
+
+        state = store.project_state("run-recall")
+        assert state["nodes"]["OUT.found"]["value"] == {
+            "kb.lesson": "seal before editing"
+        }
+
+        dispatched = {
+            event.instruction_id: event.payload["args"]
+            for event in store.events("run-recall")
+            if event.event_type is EventType.INVOCATION_DISPATCHED
+        }
+        assert dispatched["step.fetch"] == {"query": "kb.lesson"}
+
+
+def test_end_to_end_run1_remembers_run2_recalls_same_kb_file(tmp_path):
+    kb_path = tmp_path / "kb.sqlite"
+
+    with EventStore(tmp_path / "events.db") as store:
+        memory = KnowledgeBase(kb_path)
+        worker = DeterministicWorker(
+            handlers={
+                "define": define_handler,
+                "remember": lambda key, value: memory.set(key, value, source_run="run-1"),
+            }
+        )
+        first = SequentialCoordinator(store, worker, memory=memory).execute(
+            parse_program(KB_REMEMBER_PROGRAM), run_id="run-1"
+        )
+        assert first["status"] == "succeeded"
+        memory.close()
+
+    with EventStore(tmp_path / "events.db") as store:
+        memory = KnowledgeBase(kb_path)
+        worker = DeterministicWorker(
+            handlers={
+                "define": define_handler,
+                "recall": lambda query: {query: memory.get(query)},
+            }
+        )
+        second = SequentialCoordinator(store, worker, memory=memory).execute(
+            parse_program(KB_RECALL_PROGRAM), run_id="run-2"
+        )
+        memory.close()
+
+        assert second["status"] == "succeeded"
+        assert second["outputs"]["OUT.found"] == {"kb.lesson": "seal before editing"}
+
+
+def test_kb_ref_without_memory_raises_clear_error_before_run(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        coordinator = SequentialCoordinator(store, make_worker())
+
+        with pytest.raises(ValueError, match="no knowledge base"):
+            coordinator.execute(
+                parse_program(
+                    """\
+PROGRAM needs_kb VERSION 1.0
+INPUT
+    G.left = 1
+step.use: DO define(goal = KB.lesson) -> G.goal
+RETURN G.goal
+"""
+                ),
+                run_id="run-nokb",
+            )
+
+        # raised before run creation: the event store stays clean
+        with pytest.raises(KeyError):
+            store.run("run-nokb")
+        assert store.events("run-nokb") == ()
+
+
+def test_unknown_kb_key_fails_resolution_clearly(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        memory = KnowledgeBase(tmp_path / "kb.sqlite")
+        result = SequentialCoordinator(store, make_worker(), memory=memory).execute(
+            parse_program(
+                """\
+PROGRAM missing_kb VERSION 1.0
+INPUT
+    G.left = 1
+step.use: DO define(goal = KB.absent) -> G.goal
+RETURN G.goal
+"""
+            ),
+            run_id="run-missing-kb",
+        )
+        memory.close()
+
+        assert result["status"] == "failed"
+        assert "kb.absent" in result["error"]
+
+
+def test_kb_ref_inside_reference_list_resolves_from_memory(tmp_path):
+    source = """\
+PROGRAM list_kb VERSION 1.0
+INPUT
+    G.left = 5
+step.total: DO calculate(items = [G.left, KB.right]) -> OUT.total
+RETURN OUT.total
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        memory = KnowledgeBase(tmp_path / "kb.sqlite")
+        memory.set("kb.right", 7)
+        result = SequentialCoordinator(store, make_list_worker(), memory=memory).execute(
+            parse_program(source), run_id="run-kb-list"
+        )
+        memory.close()
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"OUT.total": 12}

@@ -9,10 +9,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from typing import Any, Mapping
 
 from tikhon.audit import audit_run
+from tikhon.memory import KnowledgeBase
 from tikhon.registry import builtin_registry
 from tikhon.runtime import DeterministicWorker, EventStore, EventType, SequentialCoordinator
 from tikhon.syntax import ParseError, parse_program, seal_digest, validate_program
@@ -27,7 +29,7 @@ def _builtin_command_names() -> set[str]:
     return set(builtin_registry().names())
 
 
-def _deterministic_handlers() -> dict[str, Any]:
+def _deterministic_handlers(memory: Any = None, run_id: str = "") -> dict[str, Any]:
     def _define(**kwargs: Any) -> Any:
         if "value" in kwargs:
             return kwargs["value"]
@@ -67,6 +69,29 @@ def _deterministic_handlers() -> dict[str, Any]:
     def _check(**kwargs: Any) -> Any:
         return kwargs.get("artifact", kwargs)
 
+    def _require_memory() -> Any:
+        if memory is None:
+            raise ValueError(
+                "remember/recall require a knowledge base: the run must be"
+                " wired with KnowledgeBase(<db dir>/kb.sqlite)"
+            )
+        return memory
+
+    def _remember(**kwargs: Any) -> Any:
+        kb = _require_memory()
+        if "key" not in kwargs or "value" not in kwargs:
+            raise ValueError("remember requires key and value arguments")
+        return kb.set(kwargs["key"], kwargs["value"], source_run=run_id)
+
+    def _recall(**kwargs: Any) -> Any:
+        kb = _require_memory()
+        query = kwargs.get("query")
+        if not isinstance(query, str) or not query:
+            raise ValueError("recall requires a kb. key or prefix query")
+        if query in kb:
+            return {query: kb.get(query)}
+        return {key: kb.get(key) for key in kb.keys(prefix=query)}
+
     return {
         "define": _define,
         "search": _search,
@@ -77,6 +102,8 @@ def _deterministic_handlers() -> dict[str, Any]:
         "verify": _verify,
         "calculate": _calculate,
         "check": _check,
+        "remember": _remember,
+        "recall": _recall,
     }
 
 
@@ -138,17 +165,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"error: cannot open event store: {exc}", file=sys.stderr)
         return 1
 
-    worker = DeterministicWorker(_deterministic_handlers())
-    coordinator = SequentialCoordinator(store, worker)
+    memory = KnowledgeBase(
+        os.path.join(os.path.dirname(os.path.abspath(args.db)), "kb.sqlite")
+    )
+
+    worker = DeterministicWorker(
+        _deterministic_handlers(memory=memory, run_id=args.run_id)
+    )
+    coordinator = SequentialCoordinator(store, worker, memory=memory)
 
     try:
         result = coordinator.execute(program, run_id=args.run_id)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         store.close()
+        memory.close()
         return 1
     finally:
         store.close()
+        memory.close()
 
     status = result.get("status", "unknown")
     print(status)

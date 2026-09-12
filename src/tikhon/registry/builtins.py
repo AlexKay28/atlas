@@ -799,6 +799,115 @@ def _choose() -> CommandSpec:
     )
 
 
+def _remember() -> CommandSpec:
+    return CommandSpec(
+        name="remember",
+        version=_VERSION,
+        purpose="Write a durable key/value fact into the cross-run knowledge base",
+        inputs=("key:kb_key", "value:json"),
+        parameters=("overwrite:bool", "namespace:descriptor"),
+        preconditions=("key_matches_kb_prefix", "value_json_serializable", "budget_within_parent"),
+        outputs=("record:artifact",),
+        effects=("kb_write",),
+        done="stored_key_value_source_run_and_updated_at_recorded",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report the malformed key or non-serializable value",
+            ),
+            FailureSpec(
+                kind=FailureKind.PERMISSION,
+                retryable=False,
+                recovery="report the missing knowledge base; no retry without one",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        # Closest existing effect class: the KB row is durable but a later
+        # remember/delete can overwrite or remove it, so the write is
+        # reversible and no new EffectClass value is needed.
+        effect_class=EffectClass.REVERSIBLE_WRITE,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("knowledge_base_write",),
+        evidence=("stored_key", "source_run", "updated_at"),
+        budget=Budget(
+            max_seconds=5.0,
+            max_tokens=0,
+            max_cost=0.0,
+            max_attempts=1,
+            max_output_bytes=65536,
+        ),
+        idempotency=IdempotencyMode.BUSINESS_KEY,
+        compensation="delete the written key or restore the previous value",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2),
+            preferred_tier=RoutingTier.T1,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="none",
+            escalation_on=(),
+            fallback_chain=(),
+        ),
+    )
+
+
+def _recall() -> CommandSpec:
+    return CommandSpec(
+        name="recall",
+        version=_VERSION,
+        purpose="Read durable facts from the cross-run knowledge base by key or prefix",
+        inputs=("query:kb_key_or_prefix",),
+        parameters=("limit:int<=100", "include_metadata:bool"),
+        preconditions=("query_matches_kb_prefix", "knowledge_base_available"),
+        outputs=("values:map", "matched_keys:refs"),
+        effects=("none",),
+        done="matched_keys_and_their_values_returned_with_the_query_recorded",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report the malformed query",
+            ),
+            FailureSpec(
+                kind=FailureKind.PERMISSION,
+                retryable=False,
+                recovery="report the missing knowledge base; no retry without one",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.READ_ONLY,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("knowledge_base_read",),
+        evidence=("query_echo", "matched_keys"),
+        budget=Budget(
+            max_seconds=5.0,
+            max_tokens=0,
+            max_cost=0.0,
+            max_attempts=1,
+            max_output_bytes=262144,
+        ),
+        idempotency=IdempotencyMode.NONE,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2),
+            preferred_tier=RoutingTier.T1,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="none",
+            escalation_on=(),
+            fallback_chain=(),
+        ),
+    )
+
+
 BUILTIN_FACTORIES = (
     _define,
     _search,
@@ -815,6 +924,8 @@ BUILTIN_FACTORIES = (
     _rank,
     _challenge,
     _choose,
+    _remember,
+    _recall,
 )
 
 

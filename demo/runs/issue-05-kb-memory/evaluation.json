@@ -1,0 +1,57 @@
+{
+  "task": "GitHub issue #5: semantic memory — cross-run KB namespace with remember/recall",
+  "run_id": "issue-05-kb-memory",
+  "seal": "05ce785668d65695c213329ffb6bf989f695b604ed7416d2bf5f2c0b4f6d8a1c",
+  "terminal_status": "succeeded",
+  "steps_planned": 8,
+  "steps_executed": 8,
+  "acceptance": [
+    {
+      "criterion": "KnowledgeBase module with own SQLite file, set/get/delete/keys API, kb.-prefixed keys, canonical JSON values, source_run and UTC updated_at",
+      "passed": true,
+      "evidence": "tests/test_memory.py: 20 tests covering roundtrip, JSON shapes, persistence across reopen, prefix filter, key-format and value-serializability validation all pass."
+    },
+    {
+      "criterion": "KB. is a valid reference prefix; KB refs accepted in argument positions, rejected as invocation targets, and rejected as INPUT declarations",
+      "passed": true,
+      "evidence": "tests/test_syntax.py KB section: test_kb_refs_parse_as_typed_references, test_kb_ref_in_argument_position_passes_validation, test_kb_ref_used_as_invocation_target_rejected, test_kb_declaration_in_input_rejected all pass."
+    },
+    {
+      "criterion": "remember and recall CommandSpecs registered with complete contracts; remember writes (closest effect class REVERSIBLE_WRITE, no enum change needed), recall READ_ONLY; recall outputs the found values; remember evidence carries the source run id",
+      "passed": true,
+      "evidence": "tests/test_registry.py parametrized MEMORY_COMMANDS contract/effect-class/presence tests pass; source_run recorded per write and asserted in test_remember_persists_value_across_runs_and_files."
+    },
+    {
+      "criterion": "Coordinator resolves KB.x refs at dispatch from a constructor-provided KnowledgeBase; without memory, KB refs raise a clear error before run creation",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py: test_end_to_end_run1_remembers_run2_recalls_same_kb_file, test_kb_ref_without_memory_raises_clear_error_before_run (store stays clean), test_unknown_kb_key_fails_resolution_clearly, test_kb_ref_inside_reference_list_resolves_from_memory all pass."
+    },
+    {
+      "criterion": "CLI run wires a KB rooted next to --db (<db dir>/kb.sqlite) with deterministic remember/recall handlers",
+      "passed": true,
+      "evidence": "Live demo: two runs of scratch-remember-recall.think against one events.db both print 'succeeded/100%'; a follow-up recall-only run retrieved {'kb.plan_digest': 'issue-05 semantic memory smoke test'} written by an earlier run; kb.sqlite rows show key/value/source_run/updated_at; tikhon audit prints OK."
+    },
+    {
+      "criterion": "Full test suite passes",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: 314 passed (baseline 265 before edits; +49 new or extended tests)."
+    },
+    {
+      "criterion": "Tikhon protocol honored: program.think sealed before source edits and never modified afterwards; WORKLOG.md maintained; scratch program linted",
+      "passed": true,
+      "evidence": "seal.txt (05ce785668d65695c213329ffb6bf989f695b604ed7416d2bf5f2c0b4f6d8a1c) written before the first source edit; recomputed digest after all edits matches; scratch-remember-recall.think lints 'valid'; WORKLOG.md records all eight steps."
+    },
+    {
+      "criterion": "Only allowed files touched",
+      "passed": true,
+      "evidence": "Changes confined to src/tikhon/memory.py (new), src/tikhon/syntax/parser.py, src/tikhon/registry/builtins.py, src/tikhon/runtime/coordinator.py, src/tikhon/cli.py, tests/test_memory.py (new), tests/test_syntax.py, tests/test_coordinator.py, tests/test_registry.py, and demo/runs/issue-05-kb-memory/; events.py, tasks.py, audit.py, other demo runs untouched."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "No EffectClass enum value was added: REVERSIBLE_WRITE already exists and is the closest class for a durable-but-overwritable KB write, so the issue's fallback ('map to the closest existing effect class and note the deviation') applies trivially — there was nothing to add and no exhaustive test to break.",
+    "A DONE predicate over a KB.* ref is rejected at parse time by the pre-existing target-ownership rule rather than at validate_program; KB facts are observed by recalling them into a state node first.",
+    "The sealed program.think uses only pre-existing commands per protocol; remember/recall are exercised by the unsealed scratch-remember-recall.think and by the live two-run CLI demo instead.",
+    "Issue #15 ran concurrently on parser.py, coordinator.py and shared test files; all edits here were kept small, additive and in separate regions, and the combined suite is green."
+  ]
+}

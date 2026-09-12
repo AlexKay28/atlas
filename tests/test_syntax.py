@@ -438,3 +438,130 @@ def test_done_seal_digest_deterministic_and_sensitive():
         'DONE E.result IN ["passed"]',
     )
     assert seal_digest(parse_program(changed_op)) != base
+
+
+# -- hyphen-tolerant program names (issue #15) -------------------------
+
+
+def test_hyphenated_program_name_parses_and_seals_deterministically():
+    source = CANONICAL.replace("PROGRAM demo VERSION", "PROGRAM issue-15-registry-digest VERSION")
+    program = parse_program(source)
+    assert program.name == "issue-15-registry-digest"
+    assert seal_digest(parse_program(source)) == seal_digest(parse_program(source))
+
+
+def test_program_name_leading_hyphen_rejected():
+    source = CANONICAL.replace("PROGRAM demo VERSION", "PROGRAM -demo VERSION")
+    with pytest.raises(ParseError, match="header"):
+        parse_program(source)
+
+
+def test_program_name_leading_digit_rejected():
+    source = CANONICAL.replace("PROGRAM demo VERSION", "PROGRAM 1demo VERSION")
+    with pytest.raises(ParseError, match="header"):
+        parse_program(source)
+
+
+def test_step_id_with_hyphen_still_rejected():
+    source = CANONICAL.replace("step.one:", "step.one-two:")
+    with pytest.raises(ParseError, match="invocation"):
+        parse_program(source)
+
+
+def test_underscore_program_names_unchanged():
+    source = CANONICAL.replace("PROGRAM demo VERSION", "PROGRAM issue_15_registry_digest VERSION")
+    program = parse_program(source)
+    assert program.name == "issue_15_registry_digest"
+    assert parse_program(CANONICAL).name == "demo"
+
+
+# -- KB.* cross-run semantic-memory references (issue #5) --------------
+
+
+KB_ARGS_PROGRAM = """\
+PROGRAM memory_user VERSION 1.0
+
+INPUT
+  G.note = "remember me"
+
+step.recall: DO recall(query = "kb.note") -> OUT.found
+step.use: DO define(value = [G.note, KB.note]) -> E.mixed
+RETURN OUT.found, E.mixed
+"""
+
+
+def test_kb_refs_parse_as_typed_references():
+    program = parse_program(KB_ARGS_PROGRAM)
+    step = program.statements[1]
+    assert [(arg.name, arg.value) for arg in step.args] == [
+        ("value", ["G.note", "KB.note"]),
+    ]
+
+
+def test_kb_ref_in_argument_position_passes_validation():
+    assert validate_program(
+        parse_program(KB_ARGS_PROGRAM),
+        known_commands={"recall", "define"},
+    ) is True
+
+
+def test_kb_ref_used_as_invocation_target_rejected():
+    source = """\
+PROGRAM bad_target VERSION 1.0
+
+INPUT
+  G.note = "x"
+
+step.write: DO remember(key = "kb.note", value = G.note) -> KB.note
+RETURN G.note
+"""
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="cannot be an invocation target"):
+        validate_program(program, known_commands={"remember"})
+
+
+def test_kb_declaration_in_input_rejected():
+    source = """\
+PROGRAM bad_input VERSION 1.0
+
+INPUT
+  KB.note = "preloaded"
+
+step.use: DO define(value = KB.note) -> E.value
+RETURN E.value
+"""
+    with pytest.raises(ParseError, match="cannot be declared in INPUT"):
+        parse_and_validate_kb(source)
+
+
+def parse_and_validate_kb(source):
+    program = parse_program(source)
+    validate_program(program, known_commands={"define"})
+    return program
+
+
+def test_bare_kb_leaf_ref_used_before_definition_still_rejected():
+    # A KB.* ref passes the availability check, but a missing G. ref does not.
+    source = """\
+PROGRAM missing_state VERSION 1.0
+
+step.use: DO define(value = G.absent) -> E.value
+RETURN E.value
+"""
+    with pytest.raises(ParseError, match="used before definition"):
+        validate_program(parse_program(source), known_commands={"define"})
+
+
+def test_kb_ref_in_done_lhs_rejected_as_unowned_target():
+    source = """\
+PROGRAM kb_done VERSION 1.0
+
+INPUT
+  G.note = "x"
+
+step.write: DO remember(key = "kb.note", value = G.note) -> ART.record
+DONE KB.note == "x"
+RETURN ART.record
+"""
+    with pytest.raises(ParseError, match="must be one of the step's targets"):
+        parse_program(source)

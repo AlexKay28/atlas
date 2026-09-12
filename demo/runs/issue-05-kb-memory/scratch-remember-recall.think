@@ -1,0 +1,12 @@
+# Scratch program (NOT the sealed artifact): exercises the new remember and
+# recall commands added by issue #5. Linted after implementation as evidence.
+PROGRAM kb_remember_recall VERSION 1.0
+
+INPUT
+    G.note = "issue-05 semantic memory smoke test"
+
+step.frame: DO define(request = G.note) -> G.plan
+step.remember: DO remember(key = "kb.plan_digest", value = G.plan) -> ART.stored
+step.recall: DO recall(query = "kb.plan_digest") -> OUT.recalled
+step.check: DO check(artifact = OUT.recalled, predicate = "recalled value equals remembered value") -> V.match
+RETURN ART.stored, OUT.recalled, V.match

@@ -1,0 +1,60 @@
+{
+  "task": "GitHub issue #15: Registry digest in RUN_STARTED + hyphen-tolerant program names",
+  "run_id": "issue-15-registry-digest",
+  "seal": "3f2c99f04e430fd6b82ea10ecf3a1e924e3e9fafb88ec9e0c7e34edc6eeb5c16",
+  "terminal_status": "succeeded",
+  "steps_planned": 6,
+  "steps_executed": 6,
+  "acceptance": [
+    {
+      "criterion": "registry_digest() is a deterministic, cheap digest of the builtin command registry over sorted (name, version, effect_class, execution, minimum_tier) summaries",
+      "passed": true,
+      "evidence": "src/tikhon/registry/registry.py registry_digest(); builtin digest 9160b5ecc029cd02da9c109fe578c7e1ec1714c6b82267bc17157addb73381b7 stable across repeated computations"
+    },
+    {
+      "criterion": "RUN_STARTED event payload carries registry_digest alongside program/version without breaking existing payload-key assertions",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_run_started_carries_stable_registry_digest; existing lifecycle test asserting history[0] is RUN_STARTED still passes"
+    },
+    {
+      "criterion": "create_run metadata carries the same registry digest",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_run_started_carries_stable_registry_digest asserts store.run(run_id)['metadata']['registry_digest'] equals the payload value"
+    },
+    {
+      "criterion": "two coordinators with the same registry produce the same digest",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_two_coordinators_same_registry_same_digest"
+    },
+    {
+      "criterion": "changing the spec set changes the digest (extra spec built via the Registry API, builtins untouched)",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_extra_spec_changes_registry_digest uses dataclasses.replace of a builtin spec registered under a new name"
+    },
+    {
+      "criterion": "tikhon audit does not newly fail on legacy runs whose RUN_STARTED lacks a registry digest",
+      "passed": true,
+      "evidence": "src/tikhon/audit.py confirmed to never read RUN_STARTED (unchanged); tests/test_audit.py::test_audit_clean_on_legacy_run_without_registry_digest audits a hand-built pre-digest run clean"
+    },
+    {
+      "criterion": "hyphenated program name parses and seals deterministically; leading hyphen or digit rejected; hyphenated step id still rejected; underscore names unchanged",
+      "passed": true,
+      "evidence": "5 new tests in tests/test_syntax.py; CLI check: PROGRAM a-b-c lints valid and seals to the same digest twice via PYTHONPATH=src python3 -m tikhon"
+    },
+    {
+      "criterion": "SKILL.md updated: hyphen rule for PROGRAM names only, underscore rule kept for step ids and refs (single-sentence edit)",
+      "passed": true,
+      "evidence": ".opencode/skills/tikhon-demo/SKILL.md Program Rules section; git diff shows one replaced sentence"
+    },
+    {
+      "criterion": "full pytest suite passes with no files outside the allowed set touched",
+      "passed": true,
+      "evidence": "python3 -m pytest -q -> 274 passed (baseline 265); git status shows only parser.py, registry.py, coordinator.py, the three test files, SKILL.md modified, plus demo/runs/issue-15-registry-digest/ added; concurrent agent's untracked files left alone"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The sealed program uses the underscore program name issue_15_registry_digest because the protocol requires sealing before source edits and the pre-change grammar rejects hyphens; the hyphen-tolerant grammar is verified by tests and a CLI seal of PROGRAM a-b-c.",
+    "The installed ~/.local/bin/tikhon console script resolves a stale site-packages copy of tikhon (src-layout repo, pytest injects src via pythonpath); all lint/seal verifications were re-run against repo code with PYTHONPATH=src python3 -m tikhon, and the sealed program's digest is identical under both copies."
+  ]
+}

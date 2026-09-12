@@ -69,8 +69,10 @@ are `define`, `search`, `fetch`, `extract`, `summarize`, `report`, `verify`,
 `calculate`, and `check`. References produced by earlier steps may be consumed
 by later steps. Every referenced node must exist on its path.
 
-Program and step identifiers match `[a-z][a-z0-9_]*`: use underscores, never
-hyphens. An argument value is either one typed reference or one JSON literal.
+Program names match `[a-z][a-z0-9_-]*`: hyphens are allowed after the first
+character, while step ids and reference leaf names still match
+`[a-z][a-z0-9_]*` — use underscores, never hyphens, for those. An argument
+value is either one typed reference or one JSON literal.
 Arrays containing bare references such as `[E.a, E.b]` are not supported; add
 an atomic summarization step that produces one aggregate reference instead.
 
