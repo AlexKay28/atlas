@@ -1,8 +1,10 @@
-"""Grep gate test (issue #52): zero 'tikhon' references in live code/docs.
+"""Grep gate test (issue #52): zero old-name references in live code/docs.
 
-Asserts that ``git grep -c tikhon`` over src/ tests/ README.md docs/
-pyproject.toml .opencode/ returns ZERO matches. Historical demo/runs/**
-are exempt (immutable evidence).
+Asserts that ``git grep -c`` (case-insensitive) for the pre-rebrand
+project name over src/ tests/ README.md docs/ pyproject.toml .opencode/
+returns ZERO matches. Historical demo/runs/** are exempt (immutable
+evidence). This docstring itself avoids the literal token so the gate
+can include tests/ in its sweep.
 """
 from __future__ import annotations
 
