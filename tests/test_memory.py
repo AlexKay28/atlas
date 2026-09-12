@@ -154,3 +154,89 @@ def test_recall_lazy_creation_on_old_db(tmp_path):
         results = kb.recall("created")
         assert len(results) > 0
         assert results[0][0] == "kb.legacy"
+
+
+# --- Issue #30: thread safety — check_same_thread=False + RLock ---
+
+def test_kb_callable_from_non_creator_thread(tmp_path):
+    """KB methods are callable from a thread other than the one that created it."""
+    import threading
+
+    kb = KnowledgeBase(tmp_path / "kb.sqlite")
+    errors: list = []
+
+    def worker():
+        try:
+            kb.set("kb.from_thread", {"data": 42}, source_run="run-x")
+            assert kb.get("kb.from_thread") == {"data": 42}
+            assert "kb.from_thread" in kb
+            assert kb.recall("data")
+            assert kb.keys() == ("kb.from_thread",)
+        except Exception as exc:
+            errors.append(exc)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert not errors, f"non-creator thread raised: {errors}"
+    kb.close()
+
+
+def test_concurrent_remember_steps_succeed(tmp_path):
+    """Two remember (set) steps run concurrently on separate threads succeed.
+
+    Mirrors the concurrent frontier: handlers run on pool threads while
+    the CLI created the KB on the main thread.  With max_workers=2, two
+    remember steps must both succeed without crashing.
+    """
+    import concurrent.futures
+
+    with KnowledgeBase(tmp_path / "kb.sqlite") as kb:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(kb.set, "kb.fact_a", "value from thread A", "run-1"),
+                pool.submit(kb.set, "kb.fact_b", "value from thread B", "run-2"),
+            ]
+            results = [f.result() for f in futures]
+
+        assert all(r["key"].startswith("kb.fact_") for r in results)
+        assert kb.get("kb.fact_a") == "value from thread A"
+        assert kb.get("kb.fact_b") == "value from thread B"
+
+
+def test_parallel_remember_and_recall_never_tears(tmp_path):
+    """Parallel set + recall of the same key never returns torn or missing values.
+
+    Multiple threads hammer set on the same key while other threads call
+    recall.  No exception should be raised, and every recall result that
+    matches must be a valid (key, score) pair.
+    """
+    import concurrent.futures
+
+    with KnowledgeBase(tmp_path / "kb.sqlite") as kb:
+        kb.set("kb.shared", "initial deploy value", "run-0")
+
+        def remember_loop(_i):
+            kb.set("kb.shared", f"deploy value {_i}", source_run=f"run-{_i}")
+            return kb.get("kb.shared")
+
+        def recall_loop(_i):
+            results = kb.recall("deploy", k=5)
+            assert isinstance(results, list)
+            for key, score in results:
+                assert isinstance(key, str)
+                assert isinstance(score, (int, float))
+            return results
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            remember_futures = [pool.submit(remember_loop, i) for i in range(40)]
+            recall_futures = [pool.submit(recall_loop, i) for i in range(40)]
+            all_futures = remember_futures + recall_futures
+            done, _ = concurrent.futures.wait(all_futures)
+            for f in done:
+                f.result()
+
+        final = kb.get("kb.shared")
+        assert final is not None
+        assert "deploy value" in final
+        assert len(kb.keys()) == 1
