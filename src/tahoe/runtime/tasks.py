@@ -215,14 +215,12 @@ class TaskLedger:
             counts[task.status.value] += 1
         total = len(self._tasks)
         completed = counts[TaskStatus.COMPLETED.value]
-        current = next(
-            (
-                task.id
-                for task in self._tasks.values()
-                if task.status is TaskStatus.IN_PROGRESS
-            ),
-            None,
-        )
+        in_progress_ids = [
+            task.id
+            for task in self._tasks.values()
+            if task.status is TaskStatus.IN_PROGRESS
+        ]
+        current = in_progress_ids[0] if in_progress_ids else None
         return {
             "counts": {
                 "total": total,
@@ -233,6 +231,7 @@ class TaskLedger:
             },
             "percent_complete": (completed / total * 100.0) if total else 0.0,
             "current_task": current,
+            "in_progress_tasks": in_progress_ids,
             "tasks": {
                 task_id: dict(metrics)
                 for task_id, metrics in self._metrics.items()

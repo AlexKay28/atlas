@@ -1,0 +1,29 @@
+# ATLAS resolution plan for GitHub issue #40: status lifecycle
+# Documentation seal: the digest of this program is posted with it; anyone can
+# verify with: tahoe seal <file>.  Unexecuted plans live in the issue, NOT in
+# demo/runs/ (that directory is reserved for executed, evidence-bearing runs).
+# Execution-ready as the implementing worker's skeleton per the #51 gate.
+
+PROGRAM issue_40_status_lifecycle VERSION 1.0
+
+INPUT
+    G.goal = "status must tell running, failed or finished: read RUN_FINISHED, list all in-progress tasks under concurrency, hint resume for non-terminal runs"
+    C.scope = "src/tahoe/cli.py, src/tahoe/runtime/tasks.py, tests/"
+    C.done = "status on a failed run shows a failed marker with the error and a crashed run renders distinctly from finished"
+    C.advanced = "partially advanced by issue 48: status and run gained --json; terminal-state rendering still open"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.search: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "defect_context") -> E.findings
+step.plan: DO decompose(goal = G.plan, protocol = "issue_40_resolution") -> G.subgoals
+step.patch: DO edit(path = C.scope, content = G.subgoals) -> ART.patch
+step.test: DO test(path = "tests/", timeout_seconds = 900) -> V.tests
+DONE matched(V.tests, "passed")
+step.review: DO review(artifact_refs = [ART.patch, V.tests], focus = C.done) -> V.review
+step.check: DO check(artifact = V.review, predicate = C.done) -> V.verdict
+step.verify: DO verify(goal = G.goal, evidence = [V.verdict, V.tests, E.findings]) -> V.result
+DONE V.result == "resolved"
+step.report: DO report(committed_refs = [V.result, V.verdict], format = "markdown") -> ART.report
+
+RETURN V.result, V.verdict, ART.report, G.subgoals

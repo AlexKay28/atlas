@@ -1,0 +1,39 @@
+{
+  "task": "GitHub issue #40: status lifecycle — _cmd_status must answer 'is my run stuck/dead/done' by reading RUN_FINISHED, rendering status: running|succeeded|failed[:error], listing all IN_PROGRESS tasks in concurrent mode, and hinting tahoe resume for non-terminal runs",
+  "run_id": "sprint2-40-status",
+  "seal": "77cad870ab6853acc53e5b94614d7a97fee27eb71201a0683d805aaaad9c2a66",
+  "terminal_status": "succeeded",
+  "steps_planned": 8,
+  "steps_executed": 8,
+  "acceptance": [
+    {
+      "criterion": "Failed run shows failed marker + error",
+      "passed": true,
+      "evidence": "tests/test_status.py::test_status_failed_run_shows_failed_marker_and_error asserts 'failed' and 'kaput' in human output; ::test_status_failed_run_json_carries_error asserts data['status']=='failed' and data['error'] contains 'kaput'"
+    },
+    {
+      "criterion": "Concurrent run lists every IN_PROGRESS task",
+      "passed": true,
+      "evidence": "tests/test_status.py::test_status_concurrent_run_lists_all_in_progress_tasks asserts 'step.first' and 'step.second' in output; ::test_status_concurrent_run_json_lists_all_in_progress asserts 2 in_progress_tasks with task-1 and task-2"
+    },
+    {
+      "criterion": "Crashed (non-terminal) run renders distinctly from finished",
+      "passed": true,
+      "evidence": "tests/test_status.py::test_status_crashed_run_shows_running_not_succeeded asserts 'running' in output and 'succeeded' not in output; ::test_status_crashed_run_hints_resume asserts 'resume' in output; ::test_status_crashed_run_json_is_running_with_resume_hint asserts status=='running', hint=='tahoe resume'"
+    },
+    {
+      "criterion": "--json carries the new fields",
+      "passed": true,
+      "evidence": "All JSON tests assert: status (from RUN_FINISHED), in_progress_tasks (list of {id, text}), error (from failed RUN_FINISHED or null), hint ('tahoe resume' for non-terminal, null otherwise)"
+    },
+    {
+      "criterion": "Existing suite green",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q -> 875 passed in 21.62s (864 baseline unmodified + 11 new)"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "Program.think was copied from the sealed resolution plan in issue #40's comment, with only string literal path references changed from src/atlas/ to src/tahoe/ per the #53 TAHOE rebrand — logic stays identical"
+  ]
+}
