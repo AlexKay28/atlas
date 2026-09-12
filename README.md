@@ -60,6 +60,7 @@ the next integration layer.
 | `submit` | `--db`, `--run-id`, `--invocation-id`, `--result-file` | Submit a result envelope for a dispatched invocation; optional `--program`, `--seal`, `--claim-token`, `--claim-timeout` |
 | `ready` | `--db`, `--run-id`, `--program`, `--seal` | Render and claim the next ready invocation; optional `--workspace`, `--claim-timeout` |
 | `claim` | `--db`, `--run-id`, `--program`, `--seal` | Like `ready` but records a claimant name; optional `--claimant`, `--workspace`, `--claim-timeout` |
+| `renew` | `--db`, `--run-id`, `--program`, `--seal`, `--invocation-id`, `--claim-token` | Extend an open claim's freshness by a heartbeat so long work is not re-issued; optional `--claim-timeout` |
 
 See the [design doc](docs/design/01-reasoning-language-foundation.md) for the
 reasoning behind the frozen 23-command registry, the [CHANGELOG](CHANGELOG.md)
