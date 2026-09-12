@@ -1,0 +1,42 @@
+# Tikhon run for GitHub issues #21 + #22: concurrent execution frontier
+# (ready-task scheduling, single-writer commits) and execution-tree budgets
+# (global concurrency, deadlines, nested cancellation) — epic #27 step 3.
+#
+# Sealed BEFORE any source edit. Uses only the grammar that exists at seal
+# time: plain DO steps over all 22 registered commands and one standalone
+# CALL protocol.framing(...) line. The issues' proposed scheduler flags and
+# budget API are runtime parameters, not language syntax, so they appear
+# nowhere in this program by design.
+
+PROGRAM issue_21_22_frontier VERSION 1.0
+
+INPUT
+    G.goal = "Implement issues #21 and #22 in one session: issue #21 adds a ready-task execution frontier to SequentialCoordinator (max_workers dispatch of dependency-free invocations on a thread pool, thread-safe single-writer EventStore, deliberately relaxed multi-IN_PROGRESS ledger flag, deterministic final state independent of completion order); issue #22 layers ExecutionBudget on top (shared worker/child concurrency semaphore, per-invocation and global deadlines through the standard atomic failure path, nested cancellation of in-flight work, envelope deadline passthrough); default max_workers=1 and budget=None keep all 607 existing tests passing"
+    C.scope = "src/tikhon/runtime/coordinator.py, src/tikhon/runtime/events.py, src/tikhon/runtime/tasks.py, src/tikhon/budgets.py, src/tikhon/worker_adapter.py, tests/test_frontier.py, tests/test_budgets.py, demo/runs/issue-21-22-frontier/"
+    C.done = "SequentialCoordinator.execute accepts max_workers and budget; dependency-free ready invocations dispatch concurrently with overlap proven by barrier-controlled fake workers; commits stay single-writer through the store's write lock with gapless seq and CAS versions; a fixed worker pool with deterministic handlers yields a final state identical to the sequential run; the ledger allows multiple IN_PROGRESS tasks only when concurrency is enabled and stays strict by default; budget.max_concurrent_workers caps parent workers and simultaneous child runs through one shared semaphore; a per-invocation deadline fails that invocation atomically; a global deadline fails the run and cancels in-flight invocations with 'cancelled' reasons and no adoption; child depth stays capped at budget.max_child_depth; envelopes carry the budget deadline; the full suite passes with 607+ tests and no existing test modified"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "frontier_and_budgets") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "frontier_and_budgets") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.goal, evidence = E.findings) -> H.theses
+step.calculate: DO calculate(expression = "frontier_bounds", values = {"max_workers": 2, "max_child_depth": 8}) -> F.metrics
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue2122.frontier", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue2122.frontier") -> K.recalled
+step.solve: DO solve(problem = G.goal, domain = "concurrent_scheduling") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "frontier_budgets") -> V.review
+step.design: DO summarize(source_refs = V.review, budget = 6000) -> P.design
+step.patch: DO edit(path = "src/tikhon/runtime/coordinator.py", content = P.design) -> ART.patch
+step.test: DO test(path = "tests/test_frontier.py") -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = V.verdict, format = "markdown") -> ART.report
+CALL protocol.framing(request = G.goal, scope = C.scope) -> E.context, V.analysis
+step.verify: DO verify(goal = G.goal, evidence = V.tests) -> V.result
+
+RETURN P.design, V.tests, V.verdict, V.result, E.context, V.analysis

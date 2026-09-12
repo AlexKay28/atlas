@@ -8,11 +8,14 @@ completion.
 
 from __future__ import annotations
 
+import concurrent.futures
 import dataclasses
 import re
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
+from tikhon.budgets import BudgetDeadlineExceeded, BudgetGate, ExecutionBudget
 from tikhon.runtime.events import EventStore, EventType, _Record
 from tikhon.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
 from tikhon.state import StateDelta
@@ -50,6 +53,11 @@ class CrashInterrupt(Exception):
     and the run keeps exactly its committed event prefix — a true crash
     window, not a failed run (no FAILED, no RUN_FINISHED).
     """
+
+
+def _monotonic() -> float:
+    """Monotonic clock for budget deadlines (issue #22)."""
+    return time.monotonic()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -517,6 +525,7 @@ class SequentialCoordinator:
         resolved: Mapping[str, Any],
         parent_run_id: str,
         invocation_id: str,
+        gate: "BudgetGate | None" = None,
     ) -> dict[str, Any]:
         """Start, resume, or read back the CALL's isolated child run (issue #20).
 
@@ -549,6 +558,7 @@ class SequentialCoordinator:
                 child_of=parent_run_id,
                 call_name=call.protocol,
                 initial_values=child_values,
+                gate=gate,
             )
             result["protocol"] = protocol
             result["child_values"] = child_values
@@ -577,7 +587,7 @@ class SequentialCoordinator:
                 result["error"] = payload["error"]
             return result
         result = self._resume_existing_run(
-            protocol, child_run_id, initial_values=child_values
+            protocol, child_run_id, initial_values=child_values, gate=gate
         )
         result["protocol"] = protocol
         result["child_values"] = child_values
@@ -893,8 +903,48 @@ class SequentialCoordinator:
         run_id: str = "run-1",
         *,
         crash_hook: "Callable[[int], None] | None" = None,
+        max_workers: int = 1,
+        budget: "ExecutionBudget | None" = None,
     ) -> dict[str, Any]:
-        return self._execute_program(program, run_id, crash_hook=crash_hook)
+        """Execute one program run.
+
+        ``max_workers`` (issue #21) selects the execution strategy: the
+        default ``1`` keeps the historical blocking sequential loop
+        untouched; any value ``> 1`` dispatches dependency-free ready
+        invocations concurrently on a thread pool of that size while
+        every commit stays on the single-writer atomic batch path (see
+        :meth:`_drive_plan_concurrent`).  CALL child runs always execute
+        their own plans sequentially.
+
+        ``budget`` (issue #22) installs an :class:`ExecutionBudget`
+        shared across the run's whole execution tree: it caps active
+        workers and child step executions (one semaphore), enforces a
+        global and per-invocation deadline, and caps child-run nesting
+        depth.  A budget only caps — it never enables concurrency on
+        its own — and ``None`` (the default) keeps the historical
+        behavior unchanged.
+        """
+        if not isinstance(max_workers, int) or isinstance(max_workers, bool):
+            raise ValueError(
+                f"max_workers must be an integer, got {max_workers!r}"
+            )
+        if max_workers < 1:
+            raise ValueError(
+                f"max_workers must be >= 1, got {max_workers}"
+            )
+        if budget is not None and not isinstance(budget, ExecutionBudget):
+            raise TypeError(
+                f"budget must be an ExecutionBudget or None,"
+                f" got {type(budget).__name__}"
+            )
+        gate = BudgetGate(budget) if budget is not None else None
+        return self._execute_program(
+            program,
+            run_id,
+            crash_hook=crash_hook,
+            max_workers=max_workers,
+            gate=gate,
+        )
 
     def _execute_program(
         self,
@@ -905,6 +955,8 @@ class SequentialCoordinator:
         child_of: str | None = None,
         call_name: str | None = None,
         initial_values: Mapping[str, Any] | None = None,
+        max_workers: int = 1,
+        gate: "BudgetGate | None" = None,
     ) -> dict[str, Any]:
         """Start and drive one run (issue #20 parameterized start).
 
@@ -913,6 +965,11 @@ class SequentialCoordinator:
         (recorded in the run's metadata and RUN_STARTED payload for
         lineage) and ``initial_values`` seeding the child's isolated
         state namespace from the resolved CALL arguments.
+
+        Issue #21: ``max_workers > 1`` marks the run's metadata
+        ``concurrent`` (the flag the task-ledger replay reads to permit
+        multiple IN_PROGRESS tasks) and drives the plan through the
+        concurrent frontier instead of the sequential loop.
         """
         validate_program(
             program,
@@ -937,6 +994,10 @@ class SequentialCoordinator:
             "version": program.version,
             "registry_digest": registry_digest,
         }
+        concurrent_run = max_workers > 1
+        if concurrent_run:
+            metadata["concurrent"] = True
+            metadata["max_workers"] = max_workers
         if child_of is not None:
             metadata["child_of"] = child_of
             metadata["call"] = call_name
@@ -964,6 +1025,18 @@ class SequentialCoordinator:
 
         statement_to_task = self._create_plan_tasks(run_id, plan)
 
+        if concurrent_run:
+            return self._drive_plan_concurrent(
+                program,
+                run_id,
+                plan,
+                values,
+                statement_to_task,
+                crash_hook=crash_hook,
+                max_workers=max_workers,
+                gate=gate,
+            )
+
         return self._drive_plan(
             program,
             run_id,
@@ -972,6 +1045,7 @@ class SequentialCoordinator:
             statement_to_task,
             start_idx=0,
             crash_hook=crash_hook,
+            gate=gate,
         )
 
     def _resume_existing_run(
@@ -980,6 +1054,7 @@ class SequentialCoordinator:
         run_id: str,
         *,
         initial_values: Mapping[str, Any] | None = None,
+        gate: "BudgetGate | None" = None,
     ) -> dict[str, Any]:
         """Continue a non-terminal run (issue #10 core, shared with #20).
 
@@ -1013,23 +1088,40 @@ class SequentialCoordinator:
         # Invocation ids are positional (inv-1..inv-N in plan order), so a
         # step is terminal exactly when its invocation id carries a
         # SUCCEEDED event.  Dispatch alone never implies success.
+        # Issue #21: a concurrent run commits SUCCEEDED events in
+        # completion order, so its terminal set is generally NOT a
+        # prefix; such runs validate the set against the plan instead
+        # and re-drive every remaining entry through the frontier.
+        concurrent_run = self.store._run_allows_concurrent(run_id)
         succeeded = {
             event.invocation_id
             for event in events
             if event.event_type is EventType.SUCCEEDED and event.invocation_id
         }
-        start_idx = len(plan)
-        for idx in range(len(plan)):
-            if f"inv-{idx + 1}" not in succeeded:
-                start_idx = idx
-                break
-        expected_terminal = {f"inv-{i + 1}" for i in range(start_idx)}
-        if succeeded != expected_terminal:
-            raise ValueError(
-                f"run {run_id!r} has a non-prefix set of SUCCEEDED"
-                f" invocations {sorted(succeeded)}; impossible for the"
-                " sequential coordinator"
-            )
+        if concurrent_run:
+            terminal_indices: set[int] = set()
+            for inv in succeeded:
+                match = re.fullmatch(r"inv-(\d+)", inv)
+                if match is None or not (1 <= int(match.group(1)) <= len(plan)):
+                    raise ValueError(
+                        f"run {run_id!r} has SUCCEEDED invocation {inv!r}"
+                        f" outside the {len(plan)}-entry plan; impossible"
+                        " for the concurrent coordinator"
+                    )
+                terminal_indices.add(int(match.group(1)) - 1)
+        else:
+            start_idx = len(plan)
+            for idx in range(len(plan)):
+                if f"inv-{idx + 1}" not in succeeded:
+                    start_idx = idx
+                    break
+            expected_terminal = {f"inv-{i + 1}" for i in range(start_idx)}
+            if succeeded != expected_terminal:
+                raise ValueError(
+                    f"run {run_id!r} has a non-prefix set of SUCCEEDED"
+                    f" invocations {sorted(succeeded)}; impossible for the"
+                    " sequential coordinator"
+                )
 
         # -- ensure tasks exist (W0a: crash before the creation batch) -----
         ledger = self.store.task_ledger(run_id)
@@ -1071,6 +1163,21 @@ class SequentialCoordinator:
             task_ids = list(self.store.task_ledger(run_id).tasks)
         statement_to_task = {idx: task_ids[idx] for idx in range(len(plan))}
 
+        if concurrent_run:
+            max_workers = int(
+                self.store.run(run_id)["metadata"].get("max_workers") or 2
+            )
+            return self._drive_plan_concurrent(
+                program,
+                run_id,
+                plan,
+                values,
+                statement_to_task,
+                initial_terminal=frozenset(terminal_indices),
+                max_workers=max_workers,
+                gate=gate,
+            )
+
         return self._drive_plan(
             program,
             run_id,
@@ -1078,7 +1185,162 @@ class SequentialCoordinator:
             values,
             statement_to_task,
             start_idx=start_idx,
+            gate=gate,
         )
+
+    def _dispatch_worker_call(
+        self,
+        command: str,
+        resolved_kwargs: dict[str, Any],
+        gate: "BudgetGate | None" = None,
+    ) -> Any:
+        """Pool-side handler execution under the budget gate (issue #22).
+
+        Runs on a frontier worker thread: with a gate it holds one of
+        the tree's shared concurrency slots for the handler's duration
+        (waiting CALL frames hold no slot — their children's step
+        executions acquire their own, so a one-worker budget cannot
+        deadlock a parent awaiting a child).  Per-invocation deadlines
+        are enforced by the frontier's future timeouts, not here.
+        """
+        if gate is None:
+            return self.worker.execute(command, resolved_kwargs)
+        gate.acquire_slot()
+        try:
+            return self.worker.execute(command, resolved_kwargs)
+        finally:
+            gate.release_slot()
+
+    @staticmethod
+    def _frontier_wait_timeout(
+        gate: "BudgetGate | None",
+        in_flight: "dict[int, concurrent.futures.Future]",
+        dispatched_at: Mapping[int, float],
+    ) -> float | None:
+        """Wait horizon: the nearest budget deadline among in-flight work."""
+        if gate is None or not in_flight:
+            return None
+        candidates: list[float] = []
+        global_remaining = gate.global_remaining()
+        if global_remaining is not None:
+            candidates.append(global_remaining)
+        per_invocation = gate.budget.per_invocation_deadline_seconds
+        if per_invocation is not None:
+            now = _monotonic()
+            remainders = [
+                dispatched_at[idx] + per_invocation - now
+                for idx in in_flight
+                if idx in dispatched_at
+            ]
+            if remainders:
+                candidates.append(max(0.0, min(remainders)))
+        return min(candidates) if candidates else None
+
+    def _execute_worker_call(
+        self,
+        command: str,
+        resolved_kwargs: dict[str, Any],
+        gate: "BudgetGate | None" = None,
+    ) -> Any:
+        """One sequential handler dispatch under the budget gate (issue #22).
+
+        ``gate=None`` dispatches exactly as before.  With a gate, the
+        call holds one of the tree's shared concurrency slots and a
+        per-invocation deadline is checked after the handler returns —
+        a running handler cannot be interrupted, so an overrunning
+        result is discarded by failing the invocation (the DISPATCHED
+        idempotency key keeps the at-least-once contract honest).
+        """
+        if gate is None:
+            return self.worker.execute(command, resolved_kwargs)
+        per_invocation = gate.budget.per_invocation_deadline_seconds
+        started_at = _monotonic()
+        gate.acquire_slot()
+        try:
+            result = self.worker.execute(command, resolved_kwargs)
+        finally:
+            gate.release_slot()
+        if per_invocation is not None and (
+            _monotonic() - started_at
+        ) > per_invocation:
+            raise BudgetDeadlineExceeded("deadline exceeded")
+        return result
+
+    def _fail_global_deadline(
+        self,
+        run_id: str,
+        plan: list[_PlanEntry],
+        statement_to_task: dict[int, str],
+        from_idx: int,
+    ) -> dict[str, Any]:
+        """Fail a run whose global budget deadline expired (issue #22).
+
+        The invocation that was about to dispatch carries a FAILED event
+        with the recorded reason (keeping the audit's failed-status
+        truthfulness invariant), every unreached task is cancelled, and
+        RUN_FINISHED records ``"global deadline exceeded"`` — one atomic
+        batch, mirroring :meth:`_fail_run`.
+        """
+        entry = plan[from_idx]
+        instruction_id = (
+            entry.call.protocol
+            if entry.call is not None
+            else (entry.invocation.step_id if entry.invocation else "")
+        )
+        task_id = statement_to_task.get(from_idx)
+        records: list[_Record] = []
+        if task_id is not None:
+            records.extend([
+                _Record(
+                    event_type=EventType.FAILED,
+                    instruction_id=instruction_id,
+                    invocation_id=f"inv-{from_idx + 1}",
+                    task_id=task_id,
+                    payload={"error": "global deadline exceeded"},
+                    store=self.store,
+                ),
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=task_id,
+                    payload={
+                        "kind": "invocation_recorded", "id": task_id,
+                        "tokens": 0, "cost": 0.0, "retries": 0,
+                        "elapsed_seconds": 0.0,
+                    },
+                    store=self.store,
+                ),
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=task_id,
+                    payload={"kind": "task_cancelled", "id": task_id},
+                    store=self.store,
+                ),
+            ])
+        records.extend(
+            _Record(
+                event_type=EventType.TASK_UPDATED,
+                task_id=statement_to_task[pending_idx],
+                payload={
+                    "kind": "task_cancelled",
+                    "id": statement_to_task[pending_idx],
+                },
+                store=self.store,
+            )
+            for pending_idx in range(from_idx + 1, len(plan))
+            if pending_idx in statement_to_task
+        )
+        records.append(_Record(
+            event_type=EventType.RUN_FINISHED,
+            payload={"status": "failed", "error": "global deadline exceeded"},
+            store=self.store,
+        ))
+        self.store.append_batch(run_id, records)
+        return {
+            "run_id": run_id,
+            "status": "failed",
+            "error": "global deadline exceeded",
+            "outputs": {},
+        }
 
     def _drive_plan(
         self,
@@ -1090,6 +1352,7 @@ class SequentialCoordinator:
         *,
         start_idx: int = 0,
         crash_hook: "Callable[[int], None] | None" = None,
+        gate: "BudgetGate | None" = None,
     ) -> dict[str, Any]:
         """Drive the plan's per-invocation loop from ``start_idx`` on.
 
@@ -1101,6 +1364,13 @@ class SequentialCoordinator:
         are never re-emitted, but its worker call is re-executed
         (at-least-once; the DISPATCHED idempotency key is the dedup
         contract for effectful workers).
+
+        ``gate`` (issue #22) enforces an :class:`ExecutionBudget` at the
+        dispatch boundaries: the global deadline before each dispatch
+        (which is also "before a child starts" for CALL entries), the
+        child-depth cap before a CALL dispatches, and a concurrency slot
+        plus per-invocation deadline around each worker call.
+        ``gate=None`` (the default) leaves every code path untouched.
         """
         # -- batch all task-creation records --------------------------
 
@@ -1229,6 +1499,15 @@ class SequentialCoordinator:
             else:
                 task_id = statement_to_task[idx]
 
+            # Issue #22: the global deadline is checked before each
+            # dispatch — which for a CALL entry is also "before the
+            # child starts".  Exceeding it fails the run coherently
+            # through the recorded global-deadline path.
+            if gate is not None and gate.global_expired():
+                return self._fail_global_deadline(
+                    run_id, plan, statement_to_task, idx
+                )
+
             # Issue #10: a resumed in-flight step carries pre-crash
             # lifecycle events.  Its task is already IN_PROGRESS
             # (`start_task` requires PENDING), and task_started,
@@ -1300,6 +1579,19 @@ class SequentialCoordinator:
                 # SUCCEEDED delta.  Any non-succeeded child terminal fails
                 # the parent through the standard atomic path.
                 child_run_id = f"{run_id}:{invocation_id}"
+                # Issue #22: the execution-tree child-depth cap is checked
+                # before the child is dispatched at all.
+                if gate is not None and gate.depth_exceeded(child_run_id):
+                    failed = True
+                    error_msg = (
+                        f"child run {child_run_id} depth"
+                        f" {gate.depth_of(child_run_id)} exceeds budget"
+                        f" max_child_depth {gate.budget.max_child_depth}"
+                    )
+                    finish_failed_invocation(
+                        idx, call.protocol, invocation_id, task_id, error_msg
+                    )
+                    break
                 try:
                     resolved_call_args = self._resolve_call_arguments(
                         call, values
@@ -1327,7 +1619,7 @@ class SequentialCoordinator:
                     )
 
                 child_result = self._execute_call_child(
-                    call, resolved_call_args, run_id, invocation_id
+                    call, resolved_call_args, run_id, invocation_id, gate=gate
                 )
                 child_status = child_result.get("status", "unknown")
                 if child_status != "succeeded":
@@ -1521,7 +1813,9 @@ class SequentialCoordinator:
                 )
 
             try:
-                result = self.worker.execute(statement.command, resolved_kwargs)
+                result = self._execute_worker_call(
+                    statement.command, resolved_kwargs, gate
+                )
             except Exception as exc:
                 failed = True
                 error_msg = str(exc)
@@ -1726,3 +2020,970 @@ class SequentialCoordinator:
             payload={"status": "succeeded"},
         )
         return {"run_id": run_id, "status": "succeeded", "outputs": outputs}
+
+    # ------------------------------------------------------------------
+    # Concurrent execution frontier (issue #21)
+    # ------------------------------------------------------------------
+
+    _TYPED_REF_CANDIDATE_RE = re.compile(
+        r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+"
+    )
+
+    @staticmethod
+    def _scan_arg_refs(value: Any) -> frozenset[str]:
+        """Typed refs an argument value reads (issue #21 DAG input).
+
+        Mirrors the dispatch guard's scan: bare ref strings and list
+        items (``KB.*`` refs resolve from the knowledge base, never from
+        run state, so they create no plan dependencies); JSON literals
+        pass through untouched, exactly as in ``_reject_unresolved_refs``.
+        """
+        found: set[str] = set()
+        if isinstance(value, str):
+            if not value.startswith("KB.") and is_typed_reference(value):
+                found.add(value)
+        elif isinstance(value, list):
+            for item in value:
+                found |= SequentialCoordinator._scan_arg_refs(item)
+        return frozenset(found)
+
+    def _condition_refs(self, condition: str) -> frozenset[str]:
+        """Refs an IF condition reads (issue #21 DAG input).
+
+        Ref-shaped tokens filtered through ``is_typed_reference``.  This
+        is a deliberate over-approximation: a ref-shaped string inside a
+        JSON literal also counts.  Extra dependencies only serialize the
+        frontier further — they never change results.
+        """
+        return frozenset(
+            candidate
+            for candidate in self._TYPED_REF_CANDIDATE_RE.findall(condition)
+            if is_typed_reference(candidate)
+        )
+
+    def _entry_refs(
+        self, entry: _PlanEntry
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        """The refs one plan entry reads and writes (issue #21).
+
+        ``writes`` are the refs the entry mutates: targets, REVISE'd
+        refs (overwritten with the step's target value) and RETIRE'd
+        refs (removed from the projection).  ``reads`` are the refs it
+        observes: arguments and condition operands.  A retirement is a
+        write, not a read — ordering it after earlier readers and
+        writers is what keeps the frontier's outcomes identical to the
+        sequential plan's.
+        """
+        writes: set[str] = set()
+        reads: set[str] = set()
+        if entry.call is not None:
+            for arg in entry.call.args:
+                reads |= self._scan_arg_refs(arg.value)
+            writes |= set(entry.call.targets)
+        else:
+            statement = entry.invocation
+            for arg in statement.args:
+                reads |= self._scan_arg_refs(arg.value)
+            writes |= set(statement.targets)
+            writes |= set(statement.revisions)
+            writes |= set(statement.retirements)
+            if entry.condition is not None:
+                reads |= self._condition_refs(entry.condition)
+        return frozenset(writes), frozenset(reads)
+
+    @staticmethod
+    def _refs_overlap(a: frozenset[str], b: frozenset[str]) -> bool:
+        """Whether two ref sets touch (field-selection aware, issue #21).
+
+        ``V.tests.status`` overlaps ``V.tests``: a condition reading a
+        field of a node depends on the node's producer.
+        """
+        for x in a:
+            for y in b:
+                if x == y or x.startswith(y + ".") or y.startswith(x + "."):
+                    return True
+        return False
+
+    def _build_dependency_dag(
+        self, plan: list[_PlanEntry]
+    ) -> list[frozenset[int]]:
+        """Plan index -> indices that must be terminal before it dispatches.
+
+        Edge rules (issue #21): an entry depends on every earlier entry
+        that produces a ref it consumes (RAW), on every earlier producer
+        of a ref it itself writes (WAW), and — as a writer — on every
+        earlier reader or writer of any ref it writes (WAR, so a
+        retirement or revision can never invalidate an in-flight
+        reader's pinned inputs).  Two entries that only read the same
+        ref carry no edge.  Every entry therefore observes exactly the
+        committed state its sequential execution would have seen;
+        read-read pairs and ref-disjoint entries may run concurrently.
+        The DAG is acyclic by construction (edges point backwards).
+        """
+        ref_pairs = [self._entry_refs(entry) for entry in plan]
+        deps: list[frozenset[int]] = []
+        for idx in range(len(plan)):
+            writes_i, reads_i = ref_pairs[idx]
+            edges: set[int] = set()
+            for j in range(idx):
+                writes_j, reads_j = ref_pairs[j]
+                if self._refs_overlap(writes_i, writes_j | reads_j) or (
+                    self._refs_overlap(reads_i, writes_j)
+                ):
+                    edges.add(j)
+            deps.append(frozenset(edges))
+        return deps
+
+    def _drive_plan_concurrent(
+        self,
+        program: Program,
+        run_id: str,
+        plan: list[_PlanEntry],
+        values: dict[str, Any],
+        statement_to_task: dict[int, str],
+        *,
+        initial_terminal: frozenset[int] = frozenset(),
+        crash_hook: "Callable[[int], None] | None" = None,
+        max_workers: int = 2,
+        gate: "BudgetGate | None" = None,
+    ) -> dict[str, Any]:
+        """Drive the plan through a ready-task frontier (issue #21).
+
+        Ready = every plan entry sharing a ref with this one is already
+        terminal (dependency DAG from ref usage) and every source-anchored
+        conditional at or before its position is evaluated.  Ready
+        entries dispatch in stable plan order onto a thread pool; the
+        pool executes worker handlers and CALL child runs only — every
+        commit (READY, DISPATCHED, RESULT_RECEIVED, the atomic SUCCEEDED
+        batch, failures) happens on the coordinator's single-writer
+        path in this thread, so the event shapes per invocation are
+        identical to the sequential loop and the run's CAS state
+        versions stay uncontended.
+
+        Conditional DO entries and CALL entries execute only when all
+        refs they consume are terminal: the frontier naturally
+        serializes them behind their producers.  A conditional whose
+        condition does not fire is terminal without work; later
+        consumers of its targets then fail exactly like the sequential
+        coordinator (unresolved reference at dispatch).
+
+        Completion order — not plan order — fixes commit order; the
+        projection is order-independent because interacting entries are
+        serialized by the DAG and ref-disjoint deltas commute.
+        ``crash_hook`` fires at the same site as the sequential loop
+        (before VALIDATION_PASSED) and propagates uncaught, leaving the
+        committed prefix intact while in-flight pool work is discarded.
+
+        Resume (``initial_terminal``): entries already SUCCEEDED before
+        a crash are terminal from the start; in-flight entries
+        re-dispatch through the same prior-lifecycle-event guards as the
+        sequential resume (committed READY/DISPATCHED are never
+        re-emitted; the worker call is re-executed, at-least-once).
+
+        ``gate`` (issue #22) enforces an :class:`ExecutionBudget`: a
+        loop-top global-deadline check (failing the run and cancelling
+        in-flight invocations), a per-invocation deadline via future
+        timeouts, the child-depth cap at CALL dispatch, and a shared
+        concurrency slot around every handler execution (waiting CALL
+        frames hold no slot, so a one-worker budget cannot deadlock a
+        parent awaiting a child).
+        """
+        deps = self._build_dependency_dag(plan)
+        anchors = self._collect_anchors(program)
+
+        terminal: set[int] = set(initial_terminal)
+        in_flight: dict[int, concurrent.futures.Future] = {}
+        anchor_evaluated: set[int] = set()
+        dispatched_at: dict[int, float] = {}
+        executor: concurrent.futures.ThreadPoolExecutor | None = None
+
+        def drain_in_flight() -> None:
+            """Discard outstanding pool work (issue #21 cancellation rule).
+
+            Not-yet-started futures are cancelled; started handlers
+            cannot be interrupted, so they run to completion and their
+            results are dropped uncommitted — a late result can never
+            overwrite an accepted output or resurrect a failed run.
+            """
+            for future in in_flight.values():
+                future.cancel()
+            if in_flight:
+                concurrent.futures.wait(list(in_flight.values()))
+            in_flight.clear()
+
+        def cancel_all_unsettled(exclude: int | None = None) -> list[_Record]:
+            return [
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=statement_to_task[pending_idx],
+                    payload={
+                        "kind": "task_cancelled",
+                        "id": statement_to_task[pending_idx],
+                    },
+                    store=self.store,
+                )
+                for pending_idx in range(len(plan))
+                if pending_idx != exclude
+                and pending_idx not in terminal
+                and pending_idx in statement_to_task
+            ]
+
+        def finish_failed_invocation(
+            idx: int,
+            instruction_id: str,
+            invocation_id: str,
+            task_id: str,
+            error: str,
+            validation: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            """Fail one invocation and the run (mirrors the sequential batch)."""
+            records = []
+            if validation is not None:
+                records.append(_Record(
+                    event_type=EventType.VALIDATION_FAILED,
+                    instruction_id=instruction_id,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    payload=validation,
+                    store=self.store,
+                ))
+            records.append(_Record(
+                event_type=EventType.FAILED,
+                instruction_id=instruction_id,
+                invocation_id=invocation_id,
+                task_id=task_id,
+                payload={"error": error},
+                store=self.store,
+            ))
+            records.append(_Record(
+                event_type=EventType.TASK_UPDATED,
+                task_id=task_id,
+                payload={
+                    "kind": "invocation_recorded", "id": task_id,
+                    "tokens": 0, "cost": 0.0, "retries": 0,
+                    "elapsed_seconds": 0.0,
+                },
+                store=self.store,
+            ))
+            records.append(_Record(
+                event_type=EventType.TASK_UPDATED,
+                task_id=task_id,
+                payload={"kind": "task_cancelled", "id": task_id},
+                store=self.store,
+            ))
+            records.extend(cancel_all_unsettled(exclude=idx))
+            records.append(_Record(
+                event_type=EventType.RUN_FINISHED,
+                payload={"status": "failed", "error": error},
+                store=self.store,
+            ))
+            self.store.append_batch(run_id, records)
+            return {
+                "run_id": run_id,
+                "status": "failed",
+                "error": error,
+                "outputs": {},
+            }
+
+        def fail_global_deadline(
+            trigger_idx: int | None = None,
+            reason: str = "global deadline exceeded",
+        ) -> dict[str, Any]:
+            """Run-level failure when the global budget deadline expired.
+
+            In-flight invocations are marked FAILED with
+            ``"cancelled: <reason>"`` (their pool work is drained and
+            discarded — no adoption from cancelled children), the
+            not-yet-dispatched trigger invocation (if any) carries the
+            plain reason, remaining tasks are cancelled, and RUN_FINISHED
+            records the failure — one atomic batch, audit-truthful.
+            """
+            records: list[_Record] = []
+
+            def fail_one(idx: int, error: str) -> None:
+                entry = plan[idx]
+                instruction_id = (
+                    entry.call.protocol
+                    if entry.call is not None
+                    else entry.invocation.step_id
+                )
+                task_id = statement_to_task[idx]
+                records.extend([
+                    _Record(
+                        event_type=EventType.FAILED,
+                        instruction_id=instruction_id,
+                        invocation_id=f"inv-{idx + 1}",
+                        task_id=task_id,
+                        payload={"error": error},
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={
+                            "kind": "invocation_recorded", "id": task_id,
+                            "tokens": 0, "cost": 0.0, "retries": 0,
+                            "elapsed_seconds": 0.0,
+                        },
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={"kind": "task_cancelled", "id": task_id},
+                        store=self.store,
+                    ),
+                ])
+
+            if (
+                trigger_idx is not None
+                and trigger_idx not in terminal
+                and trigger_idx not in in_flight
+                and trigger_idx in statement_to_task
+            ):
+                fail_one(trigger_idx, reason)
+            for idx in list(in_flight):
+                fail_one(idx, f"cancelled: {reason}")
+            records.extend(
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=statement_to_task[pending_idx],
+                    payload={
+                        "kind": "task_cancelled",
+                        "id": statement_to_task[pending_idx],
+                    },
+                    store=self.store,
+                )
+                for pending_idx in range(len(plan))
+                if pending_idx not in terminal
+                and pending_idx not in in_flight
+                and pending_idx != trigger_idx
+                and pending_idx in statement_to_task
+            )
+            records.append(_Record(
+                event_type=EventType.RUN_FINISHED,
+                payload={"status": "failed", "error": reason},
+                store=self.store,
+            ))
+            self.store.append_batch(run_id, records)
+            return {
+                "run_id": run_id,
+                "status": "failed",
+                "error": reason,
+                "outputs": {},
+            }
+
+        def evaluate_reached_anchors() -> dict[str, Any] | None:
+            """Evaluate source-anchored STOP/RETURN conditionals in order.
+
+            An anchor at position ``pos`` is reached once every earlier
+            entry is terminal; dispatch gating keeps later entries
+            undispatched until it has been evaluated, so a fired
+            terminal never races past in-flight work (in-flight is
+            necessarily empty when an anchor evaluates).
+            """
+            for pos in sorted(anchors):
+                if pos in anchor_evaluated:
+                    continue
+                if any(i not in terminal for i in range(pos)):
+                    continue
+                anchor_evaluated.add(pos)
+                result = self._run_conditionals(
+                    run_id,
+                    anchors[pos],
+                    values,
+                    plan,
+                    statement_to_task,
+                    cancel_from_idx=pos,
+                )
+                if result is not None:
+                    return result
+            return None
+
+        def next_ready() -> int | None:
+            for idx in range(len(plan)):
+                if idx in terminal or idx in in_flight:
+                    continue
+                if any(dep not in terminal for dep in deps[idx]):
+                    continue
+                if any(
+                    pos not in anchor_evaluated
+                    for pos in anchors
+                    if pos <= idx
+                ):
+                    continue
+                return idx
+            return None
+
+        def dispatch_entry(idx: int) -> tuple[str, Any]:
+            """Run a ready entry's dispatch phase; submit its execution.
+
+            Returns ``("dispatched", future)``, ``("skipped", None)`` for
+            a conditional whose condition is false, or
+            ``("run_failed", result)`` when the dispatch itself failed
+            the run through the standard atomic path.
+            """
+            entry = plan[idx]
+            statement = entry.invocation
+            call = entry.call
+            instruction_id = (
+                call.protocol if call is not None else statement.step_id
+            )
+            invocation_id = f"inv-{idx + 1}"
+            if entry.condition is not None:
+                try:
+                    fired = evaluate_condition(entry.condition, values)
+                except ValueError as exc:
+                    records = cancel_all_unsettled()
+                    records.append(_Record(
+                        event_type=EventType.RUN_FINISHED,
+                        payload={"status": "failed", "error": str(exc)},
+                        store=self.store,
+                    ))
+                    self.store.append_batch(run_id, records)
+                    return (
+                        "run_failed",
+                        {
+                            "run_id": run_id,
+                            "status": "failed",
+                            "error": str(exc),
+                            "outputs": {},
+                        },
+                    )
+                if not fired:
+                    return ("skipped", None)
+                task_id = statement_to_task.get(idx)
+                if task_id is None:
+                    task_id = self._create_single_plan_task(run_id, entry)
+                    statement_to_task[idx] = task_id
+            else:
+                task_id = statement_to_task[idx]
+
+            # Resume guard: an in-flight (crashed mid-dispatch) step keeps
+            # its committed lifecycle events; the worker call re-runs.
+            prior_types: set[EventType] = set()
+            ledger = self.store.task_ledger(run_id)
+            task = ledger.tasks.get(task_id)
+            if task is not None and task.status is TaskStatus.IN_PROGRESS:
+                prior_types = {
+                    event.event_type
+                    for event in self.store.events(run_id)
+                    if event.invocation_id == invocation_id
+                }
+            elif task is not None and task.status is not TaskStatus.PENDING:
+                raise TaskLedgerError(
+                    f"task {task_id} for non-terminal step"
+                    f" {instruction_id} is {task.status.value};"
+                    " cannot resume"
+                )
+            ready_command = (
+                f"CALL {call.protocol}" if call is not None else statement.command
+            )
+            if EventType.INVOCATION_READY not in prior_types:
+                if task is not None and task.status is TaskStatus.IN_PROGRESS:
+                    self.store.append(
+                        run_id,
+                        EventType.INVOCATION_READY,
+                        instruction_id=instruction_id,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        payload={"command": ready_command},
+                    )
+                else:
+                    ledger.start_task(task_id)
+                    self.store.append_batch(run_id, [
+                        _Record(
+                            event_type=EventType.TASK_UPDATED,
+                            task_id=task_id,
+                            payload={"kind": "task_started", "id": task_id},
+                            store=self.store,
+                        ),
+                        _Record(
+                            event_type=EventType.INVOCATION_READY,
+                            instruction_id=instruction_id,
+                            invocation_id=invocation_id,
+                            task_id=task_id,
+                            payload={"command": ready_command},
+                            store=self.store,
+                        ),
+                    ])
+
+            if call is not None:
+                child_run_id = f"{run_id}:{invocation_id}"
+                # Issue #22: child-depth cap, checked before dispatch.
+                if gate is not None and gate.depth_exceeded(child_run_id):
+                    return (
+                        "run_failed",
+                        finish_failed_invocation(
+                            idx,
+                            call.protocol,
+                            invocation_id,
+                            task_id,
+                            f"child run {child_run_id} depth"
+                            f" {gate.depth_of(child_run_id)} exceeds budget"
+                            f" max_child_depth"
+                            f" {gate.budget.max_child_depth}",
+                        ),
+                    )
+                try:
+                    resolved_call_args = self._resolve_call_arguments(
+                        call, values
+                    )
+                except Exception as exc:
+                    return (
+                        "run_failed",
+                        finish_failed_invocation(
+                            idx, call.protocol, invocation_id, task_id, str(exc)
+                        ),
+                    )
+                if EventType.INVOCATION_DISPATCHED not in prior_types:
+                    self.store.append(
+                        run_id,
+                        EventType.INVOCATION_DISPATCHED,
+                        instruction_id=call.protocol,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        payload={
+                            "args": resolved_call_args,
+                            "idempotency_key": f"{run_id}:{invocation_id}",
+                            "child_run_id": child_run_id,
+                        },
+                    )
+                assert executor is not None
+                future: concurrent.futures.Future = executor.submit(
+                    self._execute_call_child,
+                    call,
+                    resolved_call_args,
+                    run_id,
+                    invocation_id,
+                    gate,
+                )
+                return ("dispatched", future)
+
+            try:
+                resolved_kwargs: dict[str, Any] = {}
+                for arg in statement.args:
+                    self._reject_unresolved_refs(arg.value, values)
+                    if isinstance(arg.value, str) and arg.value in values:
+                        resolved_kwargs[arg.name] = values[arg.value]
+                    elif isinstance(arg.value, str) and arg.value.startswith("KB."):
+                        resolved_kwargs[arg.name] = self._resolve_kb_ref(arg.value)
+                    elif isinstance(arg.value, list):
+                        resolved_kwargs[arg.name] = [
+                            values[item] if isinstance(item, str) and item in values
+                            else self._resolve_kb_ref(item)
+                            if isinstance(item, str) and item.startswith("KB.")
+                            else item
+                            for item in arg.value
+                        ]
+                    else:
+                        resolved_kwargs[arg.name] = arg.value
+            except Exception as exc:
+                return (
+                    "run_failed",
+                    finish_failed_invocation(
+                        idx, statement.step_id, invocation_id, task_id, str(exc)
+                    ),
+                )
+
+            if (
+                self.workspace_root is not None
+                and statement.command in _effectful_commands()
+            ):
+                resolved_kwargs["_workspace_root"] = self.workspace_root
+
+            if EventType.INVOCATION_DISPATCHED not in prior_types:
+                self.store.append(
+                    run_id,
+                    EventType.INVOCATION_DISPATCHED,
+                    instruction_id=statement.step_id,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    payload={
+                        "args": resolved_kwargs,
+                        "idempotency_key": f"{run_id}:{invocation_id}",
+                    },
+                )
+
+            assert executor is not None
+            future = executor.submit(
+                self._dispatch_worker_call,
+                statement.command,
+                resolved_kwargs,
+                gate,
+            )
+            return ("dispatched", future)
+
+        def process_completion(
+            idx: int, future: concurrent.futures.Future
+        ) -> dict[str, Any] | None:
+            """Commit one completed invocation (single-writer path)."""
+            entry = plan[idx]
+            statement = entry.invocation
+            call = entry.call
+            instruction_id = (
+                call.protocol if call is not None else statement.step_id
+            )
+            invocation_id = f"inv-{idx + 1}"
+            task_id = statement_to_task[idx]
+
+            try:
+                outcome = future.result()
+            except Exception as exc:
+                return finish_failed_invocation(
+                    idx, instruction_id, invocation_id, task_id, str(exc)
+                )
+
+            if call is not None:
+                child_run_id = f"{run_id}:{invocation_id}"
+                child_status = outcome.get("status", "unknown")
+                if child_status != "succeeded":
+                    child_error = outcome.get("error")
+                    error_msg = (
+                        f"child run {child_run_id} for {call.protocol}"
+                        f" finished with status {child_status!r}; the CALL"
+                        " cannot adopt its outputs"
+                    )
+                    if child_error:
+                        error_msg = f"{error_msg}: {child_error}"
+                    return finish_failed_invocation(
+                        idx, call.protocol, invocation_id, task_id, error_msg
+                    )
+                self.store.append(
+                    run_id,
+                    EventType.RESULT_RECEIVED,
+                    instruction_id=call.protocol,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    payload={
+                        "child_run_id": child_run_id,
+                        "status": child_status,
+                    },
+                )
+                try:
+                    adopted_nodes, adopted_map = self._adopt_child_result(
+                        call, outcome
+                    )
+                except Exception as exc:
+                    return finish_failed_invocation(
+                        idx, call.protocol, invocation_id, task_id, str(exc)
+                    )
+                if crash_hook is not None:
+                    # Same crash window as the sequential loop: after the
+                    # child is terminal, before the parent adopts.
+                    crash_hook(idx)
+                self.store.append(
+                    run_id,
+                    EventType.VALIDATION_PASSED,
+                    instruction_id=call.protocol,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    payload={},
+                )
+                for node in adopted_nodes:
+                    values[node["id"]] = node["value"]
+                delta = StateDelta(add_nodes=tuple(adopted_nodes))
+                expected_sv = self.store._current_state_version(run_id)
+                self.store.append_batch(run_id, [
+                    _Record(
+                        event_type=EventType.CHILD_ADOPTED,
+                        instruction_id=call.protocol,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        payload={
+                            "child_run_id": child_run_id,
+                            "adopted": adopted_map,
+                            "child_status": child_status,
+                        },
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.SUCCEEDED,
+                        instruction_id=call.protocol,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        expected_state_version=expected_sv,
+                        payload={"delta": delta},
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={
+                            "kind": "invocation_recorded", "id": task_id,
+                            "tokens": 0, "cost": 0.0, "retries": 0,
+                            "elapsed_seconds": 0.0,
+                        },
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={
+                            "kind": "task_completed", "id": task_id,
+                            "evidence": (
+                                f"CALL {call.protocol} ({child_run_id})"
+                                f" -> {list(call.targets)}"
+                            ),
+                        },
+                        store=self.store,
+                    ),
+                ])
+                terminal.add(idx)
+                return None
+
+            result = outcome
+            self.store.append(
+                run_id,
+                EventType.RESULT_RECEIVED,
+                instruction_id=statement.step_id,
+                invocation_id=invocation_id,
+                task_id=task_id,
+                payload={"result": result},
+            )
+
+            target_values, validation_error = map_results_to_targets(
+                statement.targets, result
+            )
+            if validation_error is not None:
+                if validation_error == "handler returned non-mapping for multiple targets":
+                    validation_error = (
+                        f"handler {statement.command} returned non-mapping"
+                        " for multiple targets"
+                    )
+                return finish_failed_invocation(
+                    idx, statement.step_id, invocation_id, task_id,
+                    validation_error,
+                )
+
+            if statement.done is not None:
+                passed, detail = evaluate_done_predicate(
+                    statement.done, target_values
+                )
+                if not passed:
+                    validation_payload = {
+                        "step_id": statement.step_id,
+                        "predicate": {
+                            "op": statement.done.op,
+                            "ref": statement.done.ref,
+                            "value": statement.done.value,
+                        },
+                        "detail": detail,
+                    }
+                    return finish_failed_invocation(
+                        idx, statement.step_id, invocation_id, task_id,
+                        f"DONE predicate failed for {statement.step_id}:"
+                        f" {detail}",
+                        validation=validation_payload,
+                    )
+
+            revision_nodes: list[dict[str, Any]] = []
+            retired_nodes: list[str] = []
+            try:
+                if statement.revisions:
+                    if len(statement.targets) != 1 or (
+                        statement.targets[0] not in target_values
+                    ):
+                        raise ValueError(
+                            f"REVISE on {statement.step_id} requires the"
+                            " step's single target value"
+                        )
+                    revised_value = target_values[statement.targets[0]]
+                    revision_nodes = [
+                        {"id": ref, "value": revised_value}
+                        for ref in statement.revisions
+                    ]
+                retired_nodes = list(statement.retirements)
+            except Exception as exc:
+                return finish_failed_invocation(
+                    idx, statement.step_id, invocation_id, task_id, str(exc)
+                )
+
+            if crash_hook is not None:
+                # Same crash window as the sequential loop (issue #10):
+                # outside every try/except, so the exception propagates
+                # uncaught and the committed prefix stays untouched.
+                crash_hook(idx)
+
+            self.store.append(
+                run_id,
+                EventType.VALIDATION_PASSED,
+                instruction_id=statement.step_id,
+                invocation_id=invocation_id,
+                task_id=task_id,
+                payload={},
+            )
+
+            for target, val in target_values.items():
+                values[target] = val
+            for node in revision_nodes:
+                values[node["id"]] = node["value"]
+            for ref in retired_nodes:
+                values.pop(ref, None)
+
+            delta = StateDelta(
+                add_nodes=tuple(
+                    {"id": target, "value": value}
+                    for target, value in target_values.items()
+                ),
+                revise_nodes=tuple(revision_nodes),
+                retire_nodes=tuple(retired_nodes),
+            )
+            expected_sv = self.store._current_state_version(run_id)
+            self.store.append_batch(run_id, [
+                _Record(
+                    event_type=EventType.SUCCEEDED,
+                    instruction_id=statement.step_id,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    expected_state_version=expected_sv,
+                    payload={"delta": delta},
+                    store=self.store,
+                ),
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=task_id,
+                    payload={
+                        "kind": "invocation_recorded", "id": task_id,
+                        "tokens": 0, "cost": 0.0, "retries": 0,
+                        "elapsed_seconds": 0.0,
+                    },
+                    store=self.store,
+                ),
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=task_id,
+                    payload={
+                        "kind": "task_completed", "id": task_id,
+                        "evidence": (
+                            f"{statement.command} -> {statement.targets}"
+                        ),
+                    },
+                    store=self.store,
+                ),
+            ])
+            terminal.add(idx)
+            return None
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_workers
+        ) as pool:
+            executor = pool
+            while True:
+                # Issue #22: the global deadline is checked before each
+                # dispatch cycle; work remaining + expired deadline fails
+                # the run coherently.  An all-terminal run finishes
+                # normally — the deadline limits work, not completion.
+                if gate is not None and gate.global_expired() and not all(
+                    idx in terminal for idx in range(len(plan))
+                ):
+                    # record the failure (marking in-flight invocations
+                    # cancelled) BEFORE draining the pool work
+                    result = fail_global_deadline(next_ready())
+                    drain_in_flight()
+                    return result
+
+                anchor_result = evaluate_reached_anchors()
+                if anchor_result is not None:
+                    drain_in_flight()
+                    return anchor_result
+
+                while len(in_flight) < max_workers:
+                    idx = next_ready()
+                    if idx is None:
+                        break
+                    kind, payload = dispatch_entry(idx)
+                    if kind == "run_failed":
+                        drain_in_flight()
+                        return payload
+                    if kind == "skipped":
+                        terminal.add(idx)
+                        anchor_result = evaluate_reached_anchors()
+                        if anchor_result is not None:
+                            drain_in_flight()
+                            return anchor_result
+                        continue
+                    in_flight[idx] = payload
+                    dispatched_at[idx] = _monotonic()
+
+                if not in_flight:
+                    if all(idx in terminal for idx in range(len(plan))):
+                        break
+                    raise RuntimeError(
+                        f"frontier stalled on run {run_id!r}: ready and"
+                        " in-flight sets are empty with entries remaining"
+                    )
+
+                owner = {future: idx for idx, future in in_flight.items()}
+                done, _ = concurrent.futures.wait(
+                    in_flight.values(),
+                    timeout=self._frontier_wait_timeout(gate, in_flight, dispatched_at),
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in done:
+                    idx = owner[future]
+                    del in_flight[idx]
+                    del dispatched_at[idx]
+                    # Issue #22: a completion arriving after the global
+                    # deadline is discarded uncommitted (a cancellation
+                    # request is never mistaken for confirmed
+                    # termination — the pool work is drained, not joined
+                    # into the run's outcome).
+                    if gate is not None and gate.global_expired():
+                        result = fail_global_deadline()
+                        drain_in_flight()
+                        return result
+                    failure = process_completion(idx, future)
+                    if failure is not None:
+                        drain_in_flight()
+                        return failure
+
+                # Issue #22: per-invocation deadlines of still-running
+                # futures — an overrunning invocation fails through the
+                # standard atomic path; its late result is discarded.
+                if (
+                    gate is not None
+                    and in_flight
+                    and gate.budget.per_invocation_deadline_seconds
+                    is not None
+                ):
+                    now = _monotonic()
+                    per_invocation = (
+                        gate.budget.per_invocation_deadline_seconds
+                    )
+                    expired = [
+                        idx
+                        for idx in in_flight
+                        if now - dispatched_at[idx] >= per_invocation
+                    ]
+                    if expired:
+                        idx = expired[0]
+                        entry = plan[idx]
+                        instruction_id = (
+                            entry.call.protocol
+                            if entry.call is not None
+                            else entry.invocation.step_id
+                        )
+                        in_flight.pop(idx)
+                        del dispatched_at[idx]
+                        drain_in_flight()
+                        return finish_failed_invocation(
+                            idx,
+                            instruction_id,
+                            f"inv-{idx + 1}",
+                            statement_to_task[idx],
+                            "deadline exceeded",
+                        )
+
+        for statement in program.statements:
+            if isinstance(statement, Return):
+                return self._terminal_return(run_id, statement.refs, values)
+            if isinstance(statement, Stop):
+                return self._terminal_stop(run_id, statement, values)
+
+        self.store.append(
+            run_id,
+            EventType.RUN_FINISHED,
+            payload={"status": "succeeded"},
+        )
+        return {"run_id": run_id, "status": "succeeded", "outputs": {}}

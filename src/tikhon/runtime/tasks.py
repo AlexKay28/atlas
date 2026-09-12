@@ -41,14 +41,31 @@ _METRIC_ZERO: dict[str, Any] = {
 
 
 class TaskLedger:
-    def __init__(self) -> None:
+    """Event-sourced task ledger.
+
+    Issue #21: ``allow_concurrent`` deliberately relaxes the strict
+    single-IN_PROGRESS invariant for runs executing a concurrent
+    frontier — multiple tasks of one run may be IN_PROGRESS at once.
+    The default stays strict so sequential runs and replay of
+    sequential runs are unchanged; concurrent runs reconstruct their
+    multi-IN_PROGRESS intermediate states by replaying with the flag
+    set (the flag rides on the run, see ``EventStore.task_ledger``).
+    """
+
+    def __init__(self, *, allow_concurrent: bool = False) -> None:
+        self._allow_concurrent = bool(allow_concurrent)
         self._events: list[dict[str, Any]] = []
         self._tasks: dict[str, Task] = {}
         self._metrics: dict[str, dict[str, Any]] = {}
 
     @classmethod
-    def from_events(cls, events: Iterable[Mapping[str, Any]]) -> "TaskLedger":
-        ledger = cls()
+    def from_events(
+        cls,
+        events: Iterable[Mapping[str, Any]],
+        *,
+        allow_concurrent: bool = False,
+    ) -> "TaskLedger":
+        ledger = cls(allow_concurrent=allow_concurrent)
         for event in events:
             ledger._commit(dict(event))
         return ledger
@@ -139,7 +156,7 @@ class TaskLedger:
             for other in self._tasks.values()
             if other.status is TaskStatus.IN_PROGRESS
         ]
-        if in_progress:
+        if in_progress and not self._allow_concurrent:
             raise TaskLedgerError(f"task {in_progress[0]} is already in progress")
         incomplete = [
             dep
@@ -285,7 +302,7 @@ class TaskLedger:
                 for other in self._tasks.values()
                 if other.status is TaskStatus.IN_PROGRESS
             ]
-            if in_progress:
+            if in_progress and not self._allow_concurrent:
                 raise TaskLedgerError(f"task {in_progress[0]} is already in progress")
             incomplete = [
                 dep

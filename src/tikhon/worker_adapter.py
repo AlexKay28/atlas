@@ -37,6 +37,7 @@ into a coherent failed run.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any, Callable, Mapping, Sequence
 
@@ -116,6 +117,7 @@ class ModelWorker:
         tier_models: Mapping[str | RoutingTier, str] | None = None,
         default_model: str | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        deadline_seconds: float | None = None,
     ):
         self._registry = registry
         self._transport = transport
@@ -124,6 +126,11 @@ class ModelWorker:
         # Retained for callers that build transports around this worker;
         # the transport itself owns all I/O details including its deadline.
         self.timeout_seconds = timeout_seconds
+        # Issue #22: the execution budget's per-invocation deadline,
+        # carried on every rendered TaskEnvelope.  When both the command
+        # contract's budget and this deadline are set, the tighter (min)
+        # wins; ``None`` leaves the envelope's contract deadline untouched.
+        self._deadline_seconds = deadline_seconds
         # Issue #18 diagnostics: the envelope the last dispatch rendered
         # and the result envelope its reply was parsed into.
         self.last_task_envelope: TaskEnvelope | None = None
@@ -163,6 +170,19 @@ class ModelWorker:
             arguments=dict(resolved_kwargs),
             targets=target_refs,
         )
+        if self._deadline_seconds is not None:
+            # Issue #22: bind the execution budget's deadline into the
+            # envelope — min with the command contract's own budget so
+            # the worker sees the effective dispatch deadline.
+            contract_deadline = task_envelope.deadline_seconds
+            effective = (
+                float(self._deadline_seconds)
+                if contract_deadline is None
+                else min(float(contract_deadline), float(self._deadline_seconds))
+            )
+            task_envelope = dataclasses.replace(
+                task_envelope, deadline_seconds=effective
+            )
         self.last_task_envelope = task_envelope
         prompt = self._build_prompt(task_envelope)
         raw = self._transport(model, prompt)

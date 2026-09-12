@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -175,17 +176,29 @@ class EventStore:
     inserts atomically. ``state_version`` is the run's projected state
     version *after* the event applies; it increments only for SUCCEEDED
     events carrying a delta.
+
+    Thread-safety (issue #21): a single connection guarded by one
+    reentrant lock serializes every access, so concurrent frontier
+    workers and child runs executing on pool threads share the store
+    without corrupting the connection or the gapless sequence. The
+    coordinator owner remains the single writer for a run's own event
+    stream; the lock only makes the shared connection safe.
     """
 
     def __init__(self, path: str):
         self.path = path
-        self._conn = sqlite3.connect(path, isolation_level=None)
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.executescript(_SCHEMA)
-        self._migrate_task_id()
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(
+            path, isolation_level=None, check_same_thread=False
+        )
+        with self._lock:
+            self._conn.execute("PRAGMA foreign_keys = ON")
+            self._conn.executescript(_SCHEMA)
+            self._migrate_task_id()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def __enter__(self) -> "EventStore":
         return self
@@ -202,32 +215,36 @@ class EventStore:
         metadata: Optional[dict] = None,
     ) -> None:
         try:
-            self._conn.execute(
-                "INSERT INTO runs (run_id, program_version, metadata, created_at)"
-                " VALUES (?, ?, ?, ?)",
-                (run_id, program_version, canonical_json(metadata or {}),
-                 _utcnow().isoformat()),
-            )
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO runs (run_id, program_version, metadata, created_at)"
+                    " VALUES (?, ?, ?, ?)",
+                    (run_id, program_version, canonical_json(metadata or {}),
+                     _utcnow().isoformat()),
+                )
         except sqlite3.IntegrityError as exc:
             raise ValueError(f"run already exists: {run_id!r}") from exc
 
     def run(self, run_id: str) -> dict:
-        row = self._conn.execute(
-            "SELECT run_id, program_version, metadata, created_at FROM runs"
-            " WHERE run_id = ?",
-            (run_id,),
-        ).fetchone()
-        if row is None:
-            raise KeyError(f"unknown run: {run_id!r}")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT run_id, program_version, metadata, created_at FROM runs"
+                " WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"unknown run: {run_id!r}")
+            state_version = self._current_state_version(run_id)
+            event_count = self._conn.execute(
+                "SELECT COUNT(*) FROM events WHERE run_id = ?", (run_id,)
+            ).fetchone()[0]
         return {
             "run_id": row[0],
             "program_version": row[1],
             "metadata": json.loads(row[2]),
             "created_at": datetime.fromisoformat(row[3]),
-            "state_version": self._current_state_version(run_id),
-            "event_count": self._conn.execute(
-                "SELECT COUNT(*) FROM events WHERE run_id = ?", (run_id,)
-            ).fetchone()[0],
+            "state_version": state_version,
+            "event_count": event_count,
         }
 
     # -- events -------------------------------------------------------
@@ -293,6 +310,18 @@ class EventStore:
         if not records:
             return ()
 
+        # Single-writer guard (issue #21): the whole transaction — seq
+        # allocation, CAS check, ledger validation, inserts, commit —
+        # holds the store lock, so concurrent completions and child runs
+        # serialize their batches and the gapless sequence is preserved.
+        with self._lock:
+            return self._append_batch_locked(run_id, records)
+
+    def _append_batch_locked(
+        self,
+        run_id: str,
+        records: Sequence["_Record"],
+    ) -> tuple[Event, ...]:
         self._conn.execute("BEGIN IMMEDIATE")
         try:
             run_row = self._conn.execute(
@@ -426,13 +455,14 @@ class EventStore:
 
     def events(self, run_id: str) -> tuple[Event, ...]:
         """Return the run's full history in gapless seq order."""
-        rows = self._conn.execute(
-            "SELECT seq, program_version, event_type, instruction_id, invocation_id,"
-            " task_id, causation_seq, correlation_id, attempt, state_version,"
-            " payload_ref, payload, occurred_at"
-            " FROM events WHERE run_id = ? ORDER BY seq ASC",
-            (run_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT seq, program_version, event_type, instruction_id, invocation_id,"
+                " task_id, causation_seq, correlation_id, attempt, state_version,"
+                " payload_ref, payload, occurred_at"
+                " FROM events WHERE run_id = ? ORDER BY seq ASC",
+                (run_id,),
+            ).fetchall()
         return tuple(
             Event(
                 seq=row[0],
@@ -466,11 +496,12 @@ class EventStore:
             "nodes": {},
             "artifacts": {},
         }
-        rows = self._conn.execute(
-            "SELECT event_type, payload, state_version FROM events"
-            " WHERE run_id = ? ORDER BY seq ASC",
-            (run_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT event_type, payload, state_version FROM events"
+                " WHERE run_id = ? ORDER BY seq ASC",
+                (run_id,),
+            ).fetchall()
         for event_type, payload_json, state_version in rows:
             if EventType(event_type) is EventType.SUCCEEDED and payload_json is not None:
                 payload = json.loads(payload_json)
@@ -535,14 +566,45 @@ class EventStore:
         events = self.append_batch(run_id, [record])
         return events[0]
 
-    def task_ledger(self, run_id: str) -> "TaskLedger":
-        """Rebuild a :class:`TaskLedger` from stored TASK_UPDATED payloads."""
+    def task_ledger(
+        self,
+        run_id: str,
+        *,
+        allow_concurrent: "bool | None" = None,
+    ) -> "TaskLedger":
+        """Rebuild a :class:`TaskLedger` from stored TASK_UPDATED payloads.
+
+        Issue #21: when ``allow_concurrent`` is left unset it is
+        auto-detected from the run metadata — a run the coordinator
+        started in concurrent mode (``concurrent: true``) replays with a
+        ledger that permits multiple IN_PROGRESS tasks, so both live
+        validation inside ``append_batch`` and later replay reconstruct
+        the same multi-IN_PROGRESS intermediate states.  An explicit
+        ``False`` keeps the default strict single-in-progress rule.
+        """
         if not _TASK_LEDGER_AVAILABLE:
             raise RuntimeError("TaskLedger is not available")
-        rows = self._conn.execute(
-            "SELECT payload FROM events"
-            " WHERE run_id = ? AND event_type = ? ORDER BY seq ASC",
-            (run_id, EventType.TASK_UPDATED.value),
-        ).fetchall()
+        if allow_concurrent is None:
+            allow_concurrent = self._run_allows_concurrent(run_id)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT payload FROM events"
+                " WHERE run_id = ? AND event_type = ? ORDER BY seq ASC",
+                (run_id, EventType.TASK_UPDATED.value),
+            ).fetchall()
         payloads = [json.loads(row[0]) for row in rows if row[0] is not None]
-        return TaskLedger.from_events(payloads)
+        return TaskLedger.from_events(payloads, allow_concurrent=allow_concurrent)
+
+    def _run_allows_concurrent(self, run_id: str) -> bool:
+        """Whether the run was started in concurrent mode (issue #21)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT metadata FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        if row is None:
+            return False
+        try:
+            metadata = json.loads(row[0])
+        except ValueError:
+            return False
+        return isinstance(metadata, dict) and metadata.get("concurrent") is True

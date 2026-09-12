@@ -1,0 +1,95 @@
+{
+  "task": "GitHub issues #21 + #22 in one session: concurrent execution frontier (ready-task scheduling and single-writer commits) and execution-tree budgets (global concurrency, deadlines and nested cancellation) — epic #27 step 3, #21 implemented first, #22 layered on top",
+  "run_id": "issue-21-22-frontier",
+  "seal": "62ab60638dcbec16c28b94431f98846d195eb73fc692476e58d435ab37392b31",
+  "terminal_status": "succeeded",
+  "steps_planned": 23,
+  "steps_executed": 23,
+  "acceptance": [
+    {
+      "criterion": "#21: Sealed program created before any source edit (Tikhon protocol steps 1-2)",
+      "passed": true,
+      "evidence": "demo/runs/issue-21-22-frontier/program.think (plain DO steps over all 22 registered commands plus a standalone CALL protocol.framing line) linted valid and sealed to 62ab60638dcbec16... at 2026-09-12T16:58Z; re-sealed after every source edit with the identical digest recorded in seal.txt"
+    },
+    {
+      "criterion": "#21: Dependency DAG from ref usage gates dispatch; dependent work never starts before its inputs are committed",
+      "passed": true,
+      "evidence": "tests/test_frontier.py::test_dependency_dag_orders_producers_before_consumers (consumer b dispatches only after producer a's SUCCEEDED; ref-disjoint c dispatches while a is in flight; d waits for b's P.b), ::test_conditional_and_call_entries_serialize_behind_their_refs (IF conditionals and CALLs execute only when all their refs are terminal)"
+    },
+    {
+      "criterion": "#21: Overlapping execution of independent ready invocations proven without timing-only assertions",
+      "passed": true,
+      "evidence": "tests/test_frontier.py::test_barrier_handlers_prove_overlapping_execution: two ref-disjoint steps' handlers block on a threading.Barrier(2) that can only be met by simultaneous execution (max_concurrent == 2 asserted); ::test_barrier_times_out_sequentially_without_workers pins the sequential default's strict dispatch order"
+    },
+    {
+      "criterion": "#21: Single-writer commits: gapless seq, one atomic batch per state change, CAS versions, thread-safe store",
+      "passed": true,
+      "evidence": "events.py single connection guarded by a reentrant lock with check_same_thread=False; the frontier commits only on the coordinator thread through the existing append_batch path (per-invocation event shapes identical to the sequential loop); audit_run.ok asserted for every concurrent run in tests/test_frontier.py and tests/test_budgets.py"
+    },
+    {
+      "criterion": "#21: Permuted completion order yields identical final state; replay reproduces recorded events",
+      "passed": true,
+      "evidence": "tests/test_frontier.py::test_concurrent_final_state_equals_sequential_final_state (identical projected nodes and state_version, clean audit, identical ledger accounting); ::test_store_replay_reconstructs_concurrent_intermediate_states (committed TASK_UPDATED stream replays to the same final profile with the concurrency flag)"
+    },
+    {
+      "criterion": "#21: Ledger allows multiple IN_PROGRESS only when concurrency is enabled; default strict; replay reconstructs multi-IN_PROGRESS states",
+      "passed": true,
+      "evidence": "tests/test_frontier.py::test_ledger_concurrency_flag_default_is_strict (strict raises, allow_concurrent permits and replays two IN_PROGRESS), ::test_concurrent_run_allows_multiple_in_progress_tasks (two tasks simultaneously IN_PROGRESS in a live concurrent run); tasks.py checks the flag in start_task and _apply; EventStore.task_ledger auto-detects via run metadata 'concurrent: true'"
+    },
+    {
+      "criterion": "#21: Failure/cancellation leaves no invalid active ledger state; late results cannot overwrite accepted outputs",
+      "passed": true,
+      "evidence": "tests/test_frontier.py::test_frontier_failure_is_atomic_and_cancels_in_flight (one FAILED, RUN_FINISHED failed, all tasks settled, audit clean, the blocked in-flight step commits no SUCCEEDED/RESULT_RECEIVED); drain_in_flight cancels not-started futures and discards started ones uncommitted"
+    },
+    {
+      "criterion": "#21: crash_hook still works; concurrent resume re-drives the frontier",
+      "passed": true,
+      "evidence": "tests/test_frontier.py::test_crash_hook_works_in_the_concurrent_frontier (KeyboardInterrupt propagates uncaught, true crash window, resume completes the run), ::test_resume_of_crashed_concurrent_run_redrives_the_frontier (non-prefix SUCCEEDED set {inv-2} accepted and re-driven, audit clean, 3/3 completed)"
+    },
+    {
+      "criterion": "#22: budget.max_concurrent_workers caps parent frontier workers AND simultaneous child runs through one shared semaphore",
+      "passed": true,
+      "evidence": "tests/test_budgets.py::test_concurrency_cap_observed_via_tracking_handler (4 dispatches, peak 2 observed), ::test_one_semaphore_caps_parent_and_child_executions (4 concurrent CALL children, child step executions peak at 2), ::test_parent_waiting_for_child_completes_with_one_worker (one-worker budget, parent awaits child, no deadlock)"
+    },
+    {
+      "criterion": "#22: per-invocation deadline fails the overrunning invocation atomically with error 'deadline exceeded'",
+      "passed": true,
+      "evidence": "tests/test_budgets.py::test_per_invocation_deadline_fails_invocation_atomically (frontier future timeout: exactly one FAILED 'deadline exceeded', all tasks settled, audit clean), ::test_sequential_per_invocation_deadline_discards_late_result (post-handler check; late result commits nothing)"
+    },
+    {
+      "criterion": "#22: global deadline fails the run coherently with in-flight work cancelled ('cancelled: <reason>') and no adoption from cancelled children",
+      "passed": true,
+      "evidence": "tests/test_budgets.py::test_global_deadline_fails_run_and_cancels_in_flight (RUN_FINISHED 'global deadline exceeded', in-flight FAILED 'cancelled: global deadline exceeded', no SUCCEEDED for the cancelled step, audit clean), ::test_sequential_global_deadline_checked_before_dispatch (check before each dispatch/before child start; second step never dispatches); failure batch commits BEFORE the pool drain"
+    },
+    {
+      "criterion": "#22: child depth cap enforced (budget.max_child_depth, default 8 matching the grammar cap)",
+      "passed": true,
+      "evidence": "tests/test_budgets.py::test_child_depth_cap_enforced_in_frontier (depth-2 grandchild never created or dispatched; inner CALL FAILED names max_child_depth 1; both runs audit clean), ::test_default_child_depth_admits_eight_levels (8-frame protocol chain succeeds under the default budget)"
+    },
+    {
+      "criterion": "#22: TaskEnvelope.deadline_seconds populated from the budget via the worker adapter",
+      "passed": true,
+      "evidence": "tests/test_budgets.py::test_model_worker_envelope_carries_budget_deadline (ModelWorker deadline_seconds=5.0 binds 5.0 into the rendered envelope, min with the command contract, canonical JSON still validates); envelope.py itself untouched — the field already existed"
+    },
+    {
+      "criterion": "Default behavior (max_workers=1, budget=None) keeps all 607 baseline tests passing unchanged",
+      "passed": true,
+      "evidence": "full suite: 607 baseline tests unmodified and passing + 24 new (11 test_frontier.py, 13 test_budgets.py) = 631 passed; tests/test_budgets.py::test_budget_none_keeps_behavior_identical proves budget=None produces byte-identical event streams to the no-argument call; every new parameter is keyword-with-default so resume.py/envelope.py call sites are untouched"
+    },
+    {
+      "criterion": "Hard-constraint scope respected and protocol artifacts complete",
+      "passed": true,
+      "evidence": "git status shows exactly: M coordinator.py, M events.py (thread-safety + ledger auto-detect), M tasks.py (flag only), M worker_adapter.py (deadline passthrough only), ?? budgets.py, ?? tests/test_frontier.py, ?? tests/test_budgets.py, ?? demo/runs/issue-21-22-frontier/; WORKLOG.md (per-step sections per issue), solution.md, evaluation.json, seal.txt, program.think present; nothing committed"
+    }
+  ],
+  "unresolved": [
+    "Issue #22 reservation accounting (atomic capacity reservation, measured-usage reconciliation, token/cost allocation, retry/cancellation races, budget re-anchoring on reopen/resume) is future work — this session delivers the shared concurrency semaphore, deadlines, depth cap and nested cancellation",
+    "Cancellation is cooperative: a started handler cannot be interrupted; its result is discarded uncommitted and the drain waits for it (a handler that never returns would stall the drain)",
+    "Budgets are not re-instated on resume; a resumed run continues without its original budget",
+    "Fairness (one child cannot monopolize the tree) is not scheduled; the shared semaphore is not FIFO"
+  ],
+  "protocol_deviations": [
+    "None in the sealing protocol: program.think was written, linted and sealed before the first source edit, never modified afterwards, and re-seals to the identical digest",
+    "The sealed program was executed through the runtime with stub handlers (recorded in run.sqlite) after implementation so the 23 plan steps — including the isolated CALL child run issue-21-22-frontier:inv-22 with CHILD_ADOPTED of E.context/V.analysis — have a real persisted execution record; the WORKLOG narrates the same 23 steps as the agent's engineering record, matching the dogfooding convention of prior issue runs"
+  ]
+}
