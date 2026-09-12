@@ -670,3 +670,237 @@ RETURN OUT.echo
         assert result["status"] == "succeeded"
         assert result["outputs"] == {"OUT.echo": "ok"}
         assert captured == {"tags": ["alpha", "beta"], "nums": [1, 2], "ref": 5}
+
+
+DONE_PASS_PROGRAM = """\
+PROGRAM gate VERSION 1.0
+INPUT
+    G.left = 5
+step.setup: DO define(goal = G.left) -> G.goal
+DONE G.goal == {"goal": "add two inputs", "observed": 5}
+step.total: DO calculate(left = G.left, right = G.left) -> OUT.total
+DONE OUT.total == 10
+RETURN G.goal, OUT.total
+"""
+
+DONE_FAIL_PROGRAM = """\
+PROGRAM gate VERSION 1.0
+INPUT
+    G.left = 5
+step.setup: DO define(goal = G.left) -> G.goal
+step.total: DO calculate(left = G.left, right = G.left) -> OUT.total
+DONE OUT.total == 11
+step.unreached: DO define(goal = G.left) -> E.unreached
+RETURN G.goal, OUT.total
+"""
+
+DONE_MATCHED_FAIL_PROGRAM = """\
+PROGRAM gate VERSION 1.0
+INPUT
+    G.left = 5
+step.setup: DO define(goal = G.left) -> E.status
+DONE matched(E.status, "ok-[0-9]+")
+RETURN E.status
+"""
+
+
+MATCHED_PASS_PROGRAM = """\
+PROGRAM gate VERSION 1.0
+INPUT
+    G.left = 5
+step.setup: DO define(goal = G.left) -> E.status
+DONE matched(E.status, "ok-[0-9]+")
+RETURN E.status
+"""
+
+
+def test_matched_passing_predicate_succeeds(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(handlers={"define": lambda goal: "ok-42"})
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(MATCHED_PASS_PROGRAM), run_id="run-matched-pass"
+        )
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"E.status": "ok-42"}
+        lifecycle = tuple(
+            event.event_type
+            for event in store.events("run-matched-pass")
+            if event.invocation_id == "inv-1"
+        )
+        assert lifecycle == LIFECYCLE
+
+
+def test_done_passing_predicate_keeps_existing_lifecycle(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store, make_worker()).execute(
+            parse_program(DONE_PASS_PROGRAM), run_id="run-done-pass"
+        )
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {
+            "G.goal": {"goal": "add two inputs", "observed": 5},
+            "OUT.total": 10,
+        }
+
+        history = store.events("run-done-pass")
+        grouped = events_by_invocation(history)
+        assert len(grouped) == 2
+        for events in grouped.values():
+            assert tuple(event.event_type for event in events) == LIFECYCLE
+
+        state = store.project_state("run-done-pass")
+        assert state["nodes"]["OUT.total"]["value"] == 10
+
+
+def test_failing_equals_predicate_fails_run_without_commit(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store, make_worker()).execute(
+            parse_program(DONE_FAIL_PROGRAM), run_id="run-done-fail"
+        )
+
+        assert result["status"] == "failed"
+        assert "DONE predicate failed" in result["error"]
+        assert result["outputs"] == {}
+
+        history = store.events("run-done-fail")
+        assert history[-1].event_type is EventType.RUN_FINISHED
+        assert history[-1].payload["status"] == "failed"
+
+        total_events = [
+            event.event_type for event in history if event.invocation_id == "inv-2"
+        ]
+        assert total_events == [
+            EventType.INVOCATION_READY,
+            EventType.INVOCATION_DISPATCHED,
+            EventType.RESULT_RECEIVED,
+            EventType.VALIDATION_FAILED,
+            EventType.FAILED,
+        ]
+
+        validation = [
+            event for event in history
+            if event.event_type is EventType.VALIDATION_FAILED
+        ]
+        assert len(validation) == 1
+        assert validation[0].instruction_id == "step.total"
+        assert validation[0].task_id
+        assert validation[0].payload["step_id"] == "step.total"
+        assert validation[0].payload["predicate"] == {
+            "op": "equals", "ref": "OUT.total", "value": 11,
+        }
+        assert "expected 11" in validation[0].payload["detail"]
+        assert "got 10" in validation[0].payload["detail"]
+
+        state = store.project_state("run-done-fail")
+        assert state["state_version"] == 1
+        assert set(state["nodes"]) == {"G.goal"}
+        assert "OUT.total" not in state["nodes"]
+
+        counts = store.task_ledger("run-done-fail").profile()["counts"]
+        assert counts == {
+            "total": 3,
+            "pending": 0,
+            "in_progress": 0,
+            "completed": 1,
+            "cancelled": 2,
+        }
+
+
+def test_failing_matched_predicate_fails_run_without_commit(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(handlers={"define": lambda goal: "failed-1"})
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(DONE_MATCHED_FAIL_PROGRAM), run_id="run-matched-fail"
+        )
+
+        assert result["status"] == "failed"
+        assert "DONE predicate failed" in result["error"]
+
+        history = store.events("run-matched-fail")
+        assert history[-1].event_type is EventType.RUN_FINISHED
+        assert history[-1].payload["status"] == "failed"
+
+        lifecycle = [
+            event.event_type for event in history if event.invocation_id == "inv-1"
+        ]
+        assert lifecycle == [
+            EventType.INVOCATION_READY,
+            EventType.INVOCATION_DISPATCHED,
+            EventType.RESULT_RECEIVED,
+            EventType.VALIDATION_FAILED,
+            EventType.FAILED,
+        ]
+
+        validation = next(
+            event for event in history
+            if event.event_type is EventType.VALIDATION_FAILED
+        )
+        assert validation.payload["predicate"] == {
+            "op": "matched", "ref": "E.status", "value": "ok-[0-9]+",
+        }
+        assert "does not match pattern" in validation.payload["detail"]
+
+        state = store.project_state("run-matched-fail")
+        assert state["nodes"] == {}
+
+        counts = store.task_ledger("run-matched-fail").profile()["counts"]
+        assert counts == {
+            "total": 1,
+            "pending": 0,
+            "in_progress": 0,
+            "completed": 0,
+            "cancelled": 1,
+        }
+
+
+def test_matched_predicate_rejects_non_string_value(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store, make_worker()).execute(
+            parse_program(DONE_MATCHED_FAIL_PROGRAM), run_id="run-matched-type"
+        )
+
+        assert result["status"] == "failed"
+        validation = next(
+            event for event in store.events("run-matched-type")
+            if event.event_type is EventType.VALIDATION_FAILED
+        )
+        assert "requires a string value, got dict" in validation.payload["detail"]
+
+
+def test_done_equality_is_json_strict_about_bools(tmp_path):
+    source = """\
+PROGRAM strict VERSION 1.0
+INPUT
+    G.left = 1
+step.setup: DO define(goal = G.left) -> E.count
+DONE E.count == true
+RETURN E.count
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(handlers={"define": lambda goal: 1})
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-strict"
+        )
+
+        assert result["status"] == "failed"
+        validation = next(
+            event for event in store.events("run-strict")
+            if event.event_type is EventType.VALIDATION_FAILED
+        )
+        assert "got 1" in validation.payload["detail"]
+
+
+def test_invocations_without_done_unchanged(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        result = run_canonical(store, run_id="run-plain")
+
+        assert result["status"] == "succeeded"
+        history = store.events("run-plain")
+        assert not [
+            event for event in history
+            if event.event_type is EventType.VALIDATION_FAILED
+        ]
+        grouped = events_by_invocation(history)
+        for events in grouped.values():
+            assert tuple(event.event_type for event in events) == LIFECYCLE

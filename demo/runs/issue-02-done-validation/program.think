@@ -1,0 +1,19 @@
+# Tikhon run for GitHub issue #2: truthful validation of DONE predicates.
+
+PROGRAM issue_02_done_validation VERSION 1.0
+
+INPUT
+    G.goal = "Evaluate the deterministic DONE predicate attached to an invocation after target mapping succeeds and emit invocation.validation_failed with an explanatory payload when it fails, reusing the existing atomic failure batch so no state commits, the run finishes failed, and the ledger ends with no pending or in-progress tasks"
+    C.scope = "src/tikhon/syntax/parser.py, src/tikhon/syntax/model.py, src/tikhon/runtime/coordinator.py, src/tikhon/runtime/events.py, tests/test_syntax.py, tests/test_coordinator.py, tests/test_event_store.py"
+    C.behavior = "DONE parses into a deterministic predicate on the invocation: equality against a JSON literal and set membership per docs/spec/01-language-and-state.md infix operators, plus the matched regex predicate; the predicate ref must be one of the step's targets and is validated at parse and validate time; unknown predicate names and malformed expressions are rejected; the coordinator evaluates the predicate purely over committed target values, emitting VALIDATION_PASSED on success, and on failure appends VALIDATION_FAILED then the standard failure batch with no delta commit and all unreached tasks cancelled; invocations without DONE behave exactly as before"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.spec: DO extract(artifact = ART.sources, schema = "deterministic_done_expressions") -> E.findings
+step.design: DO summarize(source_refs = E.findings, budget = 4000) -> P.design
+step.patch: DO report(committed_refs = P.design, format = "python_patch") -> ART.patch
+step.check: DO check(artifact = ART.patch, criteria = C.behavior) -> V.tests
+step.verify: DO verify(goal = G.goal, evidence = V.tests) -> V.result
+
+RETURN ART.patch, V.tests, V.result

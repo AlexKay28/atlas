@@ -9,7 +9,7 @@ Grammar under test (the API expected from tikhon.syntax):
     ...
 
     <step-id>: DO <command>(<name> = <json-or-ref>, ...) -> <event>
-    DONE <expression>
+    DONE <deterministic-predicate>
 
     RETURN <event>
     STOP <kind>(<ref>)
@@ -18,7 +18,10 @@ Grammar under test (the API expected from tikhon.syntax):
 - Step-produced events are E.<name>; STOP reasons use U.<ref>.
 - Argument values are JSON literals (number, string, boolean, array,
   object) or dotted refs; commas inside JSON never split arguments.
-- A DONE line attaches its expression to the immediately preceding step.
+- A DONE line attaches its deterministic predicate to the immediately
+  preceding step: ``<ref> == <json-literal>``, ``<ref> IN [literals]``,
+  or ``matched(<ref>, "<regex>")``; the ref must be one of the step's
+  targets.
 - RETURN and STOP are terminal; no statement may follow either.
 - '#' starts a comment; blank lines are ignored everywhere.
 """
@@ -28,6 +31,7 @@ import dataclasses
 import pytest
 
 from tikhon.syntax import (
+    DonePredicate,
     Invocation,
     ParseError,
     Program,
@@ -45,7 +49,7 @@ INPUT
   U.reason = "not enough evidence"
 
 step.one: DO define(value = G.goal, limit = 2) -> E.result
-DONE E.result.ok
+DONE E.result == {"ok": true, "limit": 2}
 
 RETURN E.result
 """
@@ -97,7 +101,9 @@ def test_one_line_step_and_done_expression():
         ("limit", 2),
     ]
     assert step.targets == ("E.result",)
-    assert step.done == "E.result.ok"
+    assert (step.done.op, step.done.ref, step.done.value) == (
+        "equals", "E.result", {"ok": True, "limit": 2},
+    )
 
 
 def test_return_statement_refs():
@@ -129,7 +135,7 @@ INPUT
 
 # one step
 step.one: DO define(value = G.goal, limit = 2) -> E.result
-DONE E.result.ok
+DONE E.result == {"ok": true, "limit": 2}
 
 RETURN E.result
 """
@@ -300,3 +306,135 @@ def test_reference_list_seal_digest_deterministic():
         "items = [G.left, G.right]", "items = [G.right, G.left]"
     )
     assert seal_digest(parse_program(swapped)) != base
+
+
+DONE_PROGRAM = """\
+PROGRAM validated VERSION 1.0
+
+INPUT
+  G.goal = "ship it"
+
+step.one: DO define(value = G.goal) -> E.result
+DONE E.result == "passed"
+
+RETURN E.result
+"""
+
+
+def test_done_equality_predicate_parses():
+    program = parse_program(DONE_PROGRAM)
+    step = program.statements[0]
+    assert (step.done.op, step.done.ref, step.done.value) == (
+        "equals", "E.result", "passed",
+    )
+    assert validate_program(program, known_commands={"define"}) is True
+
+
+def test_done_equality_accepts_all_json_literals():
+    source = DONE_PROGRAM.replace(
+        'DONE E.result == "passed"',
+        'DONE E.result == {"ok": [1, 2.5, null, false], "n": -3}',
+    )
+    step = parse_program(source).statements[0]
+    assert (step.done.op, step.done.ref, step.done.value) == (
+        "equals", "E.result", {"ok": [1, 2.5, None, False], "n": -3},
+    )
+
+
+def test_done_membership_predicate_parses():
+    source = DONE_PROGRAM.replace(
+        'DONE E.result == "passed"',
+        'DONE E.result IN ["accepted", "blocked"]',
+    )
+    step = parse_program(source).statements[0]
+    assert (step.done.op, step.done.ref, step.done.value) == (
+        "in", "E.result", ["accepted", "blocked"],
+    )
+
+
+def test_done_matched_predicate_parses_and_compiles_regex():
+    source = DONE_PROGRAM.replace(
+        'DONE E.result == "passed"',
+        'DONE matched(E.result, "ok-[0-9]+")',
+    )
+    step = parse_program(source).statements[0]
+    assert (step.done.op, step.done.ref, step.done.value) == (
+        "matched", "E.result", "ok-[0-9]+",
+    )
+
+
+def test_done_ref_must_be_one_of_the_steps_targets():
+    source = DONE_PROGRAM.replace("DONE E.result", "DONE G.goal")
+    with pytest.raises(ParseError, match="must be one of the step's targets"):
+        parse_program(source)
+
+
+def test_done_ref_inside_target_is_rejected():
+    source = DONE_PROGRAM.replace(
+        "DONE E.result == \"passed\"", "DONE E.result.extra == \"x\""
+    )
+    with pytest.raises(ParseError, match="must be one of the step's targets"):
+        parse_program(source)
+
+
+def test_validate_program_rejects_done_ref_outside_targets():
+    program = parse_program(DONE_PROGRAM)
+    tampered = dataclasses.replace(
+        program.statements[0],
+        done=DonePredicate("equals", "G.goal", "x"),
+    )
+    program = dataclasses.replace(program, statements=(tampered, program.statements[-1]))
+    with pytest.raises(ParseError, match="must be one of the step's targets"):
+        validate_program(program, known_commands={"define"})
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "equals(E.result, \"passed\")",
+        "schema(E.result, \"timeseries.v1\")",
+        "E.result > 2",
+        "exists(E.result)",
+        "E.result == \"a\" AND E.result == \"b\"",
+        "E.result",
+        "E.result ==",
+        "E.result == not json",
+        "E.result IN [E.other]",
+        "E.result IN \"passed\"",
+        "matched(E.result)",
+        "matched(E.result, 7)",
+        'matched(E.result, "[unclosed")',
+        "matched(G.goal, \"x\")",
+    ],
+)
+def test_unknown_or_malformed_done_expressions_rejected(expression):
+    source = DONE_PROGRAM.replace(
+        'DONE E.result == "passed"', f"DONE {expression}"
+    )
+    with pytest.raises(ParseError, match="DONE|matched predicate"):
+        parse_program(source)
+
+
+def test_done_must_reference_target_even_when_ref_defined_earlier():
+    source = DONE_PROGRAM.replace(
+        "step.one: DO define(value = G.goal) -> E.result\nDONE E.result == \"passed\"\n",
+        "step.zero: DO define(value = G.goal) -> E.other\n"
+        "step.one: DO define(value = G.goal) -> E.result\n"
+        "DONE E.other == \"passed\"\n",
+    )
+    with pytest.raises(ParseError, match="must be one of the step's targets"):
+        parse_program(source)
+
+
+def test_done_seal_digest_deterministic_and_sensitive():
+    base = seal_digest(parse_program(DONE_PROGRAM))
+    assert seal_digest(parse_program(DONE_PROGRAM)) == base
+    decorated = "# comment\n\n" + DONE_PROGRAM + "\n# trailing\n"
+    assert seal_digest(parse_program(decorated)) == base
+    changed_literal = DONE_PROGRAM.replace('"passed"', '"failed"')
+    assert seal_digest(parse_program(changed_literal)) != base
+    changed_op = DONE_PROGRAM.replace(
+        'DONE E.result == "passed"',
+        'DONE E.result IN ["passed"]',
+    )
+    assert seal_digest(parse_program(changed_op)) != base

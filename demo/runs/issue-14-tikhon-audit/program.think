@@ -1,0 +1,16 @@
+PROGRAM issue_14_tikhon_audit VERSION 1.0
+
+INPUT
+    G.goal = "Add tikhon audit: replay-based run verification - audit_run(store, run_id) checking gapless sequence numbers, event truthfulness, ledger invariants, and state projection determinism from the event store alone, plus a tikhon audit CLI subcommand that exits 0 clean and 1 on violations or unknown run"
+    C.scope = "src/tikhon/audit.py (new), src/tikhon/cli.py, tests/test_audit.py (new), demo/runs/issue-14-tikhon-audit/"
+    C.done = "audit_run enforces every invariant with seq-number findings; tikhon audit prints OK or each violation with seq refs; full pytest suite passes"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.patterns
+step.invariants: DO extract(artifact = E.patterns, schema = "audit_invariants") -> E.invariants
+step.implement: DO summarize(source_refs = E.invariants, budget = 8000) -> P.audit
+step.commit: DO report(committed_refs = P.audit, format = "python_source") -> ART.audit
+step.check: DO check(artifact = ART.audit, criteria = C.done) -> V.tests
+step.verify: DO verify(goal = G.goal, evidence = V.tests) -> V.result
+
+RETURN ART.audit, V.tests, V.result

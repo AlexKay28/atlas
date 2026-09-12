@@ -1,0 +1,67 @@
+{
+  "task": "GitHub issue #14: tikhon audit - replay-based run verification (audit_run(store, run_id) + tikhon audit CLI subcommand)",
+  "run_id": "issue-14-tikhon-audit",
+  "seal": "7bb111695c89d0fd7af57ddc247f12784d6ec409931f5276418c57cb68957308",
+  "terminal_status": "succeeded",
+  "steps_planned": 7,
+  "steps_executed": 7,
+  "acceptance": [
+    {
+      "criterion": "audit_run(store, run_id) checks gapless sequence numbers per run (seq == 0..n-1) from the event store alone",
+      "passed": true,
+      "evidence": "_check_gapless in src/tikhon/audit.py; store.run()+store.events() are its only inputs; finding gapless_sequence lists every out-of-place seq."
+    },
+    {
+      "criterion": "Event truthfulness: no VALIDATION_PASSED for an invocation that later receives FAILED; no SUCCEEDED after FAILED for the same invocation; at most one RUN_FINISHED; RUN_FINISHED status consistent with preceding terminal events",
+      "passed": true,
+      "evidence": "_check_truthfulness emits validation_passed_before_failed/validation_passed_after_failed (the issue's injection example is the after-case), succeeded_after_failed, multiple_run_finished, and run_finished_status_mismatch (succeeded requires no preceding FAILED; 'failed' requires one; 'blocked' without FAILED stays clean). Tests: test_audit_detects_validation_passed_after_failed, test_audit_detects_validation_passed_before_failed, test_audit_detects_succeeded_after_failed, test_audit_detects_second_run_finished, test_audit_detects_run_finished_claiming_success_after_failure."
+    },
+    {
+      "criterion": "Ledger invariants on a terminal run: no task PENDING or IN_PROGRESS; every COMPLETED task has nonempty evidence; every invocation-bound event carries nonempty task_id and instruction_id",
+      "passed": true,
+      "evidence": "_check_ledger + _check_invocation_ids emit unsettled_task_on_terminal_run, completed_task_missing_evidence, invocation_event_missing_ids (all 14 invocation.* types checked on every run). Tests: test_audit_detects_pending_task_on_terminal_run, test_audit_detects_in_progress_task_on_terminal_run, test_audit_detects_completed_task_without_evidence, test_audit_detects_stray_invocation_event_with_empty_ids."
+    },
+    {
+      "criterion": "State projection determinism: projecting events twice yields identical state",
+      "passed": true,
+      "evidence": "_check_projection_determinism compares two store.project_state runs via canonical_json; test_audit_detects_nondeterministic_projection flips the second projection and asserts the finding."
+    },
+    {
+      "criterion": "Each finding includes the offending event seq numbers",
+      "passed": true,
+      "evidence": "AuditFinding.seqs is populated by every check; tests assert injected seqs appear in finding.seqs; CLI prints them as '- code (seq: n, m): message'."
+    },
+    {
+      "criterion": "CLI tikhon audit --db PATH --run-id ID: human-readable report, exit 0 clean, 1 violations, 1 unknown run",
+      "passed": true,
+      "evidence": "_cmd_audit + audit subparser in src/tikhon/cli.py; tests test_cli_audit_clean_run_exits_zero (OK, rc 0), test_cli_audit_violated_run_exits_one_with_seq_refs (rc 1 with code and seqs in output), test_cli_audit_unknown_run_exits_one (rc 1, 'unknown run' on stderr). Dogfood: python3 -m tikhon audit exit codes 0/1/1 verified against a real db, incl. a tampered copy reporting 'violations: 1 - invocation_event_missing_ids (seq: 65)'."
+    },
+    {
+      "criterion": "Tests build runs via SequentialCoordinator + DeterministicWorker (succeed, failed, blocked, missing-key failure) and inject violations via EventStore.append",
+      "passed": true,
+      "evidence": "tests/test_audit.py has clean-run tests for all four scenarios plus append-injected violations; the one unproducible corruption (evidence-less task_completed, rejected by ledger validation by design) is simulated by a direct SQL UPDATE and documented in the test."
+    },
+    {
+      "criterion": "Full pytest suite passes at the end",
+      "passed": true,
+      "evidence": "python3 -m pytest -q -> 265 passed (216 baseline + 18 new audit tests + parallel in-repo work), zero failures."
+    },
+    {
+      "criterion": "Tikhon protocol honored: program.think sealed before source edits and never modified afterwards",
+      "passed": true,
+      "evidence": "seal.txt (7bb11169...68957308) written after lint 'valid' and before any edit; post-edit recompute matches; program.think sha256 a309f8f6...c622f3557 and mtime 18:35:47 unchanged."
+    },
+    {
+      "criterion": "Only allowed files touched (src/tikhon/audit.py, src/tikhon/cli.py, tests/test_audit.py, demo/runs/issue-14-tikhon-audit/; __main__.py only as explicitly permitted)",
+      "passed": true,
+      "evidence": "Edits confined to src/tikhon/audit.py (new), src/tikhon/cli.py, src/tikhon/__main__.py (exit-code propagation, permitted by the issue), tests/test_audit.py (new), and this run dir; no git commit made."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The installed 'tikhon' console script resolves a non-editable site-packages copy, so lint/seal/run/audit dogfooding ran via PYTHONPATH=src python3 -m tikhon against local source.",
+    "test_coordinator.py::test_matched_passing_predicate_succeeds failed transiently mid-session due to a concurrent agent's in-flight coordinator edit (none of my files import it); it was green again in the final suite run (265 passed).",
+    "The completed-task-without-evidence violation cannot be produced through EventStore.append (ledger validation rejects it by design), so its test tampers the committed payload via direct SQL UPDATE - the corruption class the audit exists to catch.",
+    "src/tikhon/__main__.py was touched (explicitly allowed): it swallowed main()'s return value, so 'python3 -m tikhon audit' exited 0 even on violations until changed to raise SystemExit(main())."
+  ]
+}

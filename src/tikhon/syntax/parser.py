@@ -8,7 +8,7 @@ import json
 import re
 from typing import Any, Iterable
 
-from .model import Argument, Declaration, Invocation, Program, Return, Stop
+from .model import Argument, Declaration, DonePredicate, Invocation, Program, Return, Stop
 
 _NAME = r"[a-z][a-z0-9_]*"
 _PREFIX = r"(?:G|Q|CTX|C|P|F|E|A|H|O|K|D|X|V|R|U|OUT|ART)"
@@ -27,6 +27,8 @@ _UNSUPPORTED = frozenset(
     {"IF", "FIRST", "SCATTER", "GATHER", "LOOP", "TRY", "CALL", "AWAIT", "APPROVE"}
 )
 _STOP_KINDS = frozenset({"completed", "failed", "blocked", "denied", "cancelled", "unresolved"})
+_DONE_OPS = frozenset({"equals", "in", "matched"})
+_DONE_MATCHED_RE = re.compile(r"^matched\((?P<inner>.*)\)$", re.DOTALL)
 
 
 class ParseError(Exception):
@@ -98,7 +100,15 @@ def parse_program(text: str) -> Program:
                 raise ParseError("DONE must follow an invocation", line_no, 1)
             if statements[-1].done is not None:
                 raise ParseError("invocation has more than one DONE expression", line_no, 1)
-            statements[-1] = dataclasses.replace(statements[-1], done=expression)
+            predicate = _parse_done_expression(expression, line_no)
+            if predicate.ref not in statements[-1].targets:
+                raise ParseError(
+                    f"DONE reference {predicate.ref} must be one of the step's"
+                    f" targets ({', '.join(statements[-1].targets)})",
+                    line_no,
+                    5,
+                )
+            statements[-1] = dataclasses.replace(statements[-1], done=predicate)
             continue
 
         if re.match(r"RETURN\b", line):
@@ -149,6 +159,166 @@ def _parse_argument(text: str, line_no: int) -> Argument:
         except json.JSONDecodeError as exc:
             raise ParseError(f"invalid argument value: {exc.msg}", line_no, exc.colno) from exc
     return Argument(name, value, line_no)
+
+
+def _parse_done_expression(expression: str, line_no: int) -> DonePredicate:
+    """Parse the deterministic DONE subset (docs/spec/01-language-and-state.md).
+
+    Supported forms:
+
+    - ``<ref> == <json-literal>``      (spec infix equality)
+    - ``<ref> IN [<json-literal>, ...]`` (spec infix set membership)
+    - ``matched(<ref>, "<regex>")``    (deterministic regex predicate; the
+      spec defines no regex operator, so the issue's suggested name stands)
+
+    The reference must still be validated against the owning step's
+    targets by the caller.
+    """
+    text = expression.strip()
+    if not text:
+        raise ParseError("DONE expression is empty", line_no, 5)
+
+    matched = _DONE_MATCHED_RE.fullmatch(text)
+    if matched is not None:
+        return _parse_matched_predicate(matched.group("inner"), line_no)
+
+    eq_index = _find_top_level(text, "==")
+    if eq_index != -1:
+        lhs = text[:eq_index].strip()
+        rhs = text[eq_index + 2:].strip()
+        if _REF_RE.fullmatch(lhs) is None:
+            raise ParseError(
+                "DONE equality requires a typed reference on the left", line_no, 5
+            )
+        if not rhs:
+            raise ParseError(
+                "DONE equality requires a JSON literal on the right", line_no, 5
+            )
+        try:
+            value = json.loads(rhs)
+        except json.JSONDecodeError as exc:
+            raise ParseError(
+                f"invalid JSON literal in DONE expression: {exc.msg}", line_no, exc.colno
+            ) from exc
+        return DonePredicate("equals", lhs, value, line_no)
+
+    in_index = _find_in_keyword(text)
+    if in_index != -1:
+        lhs = text[:in_index].strip()
+        rhs = text[in_index + 2:].strip()
+        if _REF_RE.fullmatch(lhs) is None:
+            raise ParseError(
+                "DONE membership requires a typed reference on the left", line_no, 5
+            )
+        try:
+            value = json.loads(rhs)
+        except json.JSONDecodeError as exc:
+            raise ParseError(
+                f"invalid JSON literal in DONE expression: {exc.msg}", line_no, exc.colno
+            ) from exc
+        if not isinstance(value, list):
+            raise ParseError(
+                "DONE membership requires a JSON array literal", line_no, 5
+            )
+        return DonePredicate("in", lhs, value, line_no)
+
+    raise ParseError(f"unsupported DONE expression: {expression}", line_no, 5)
+
+
+def _parse_matched_predicate(inner: str, line_no: int) -> DonePredicate:
+    try:
+        items = _split_top_level(inner)
+    except ParseError:
+        raise ParseError(
+            'matched predicate requires exactly (ref, "regex") arguments', line_no, 5
+        )
+    if len(items) != 2:
+        raise ParseError(
+            'matched predicate requires exactly (ref, "regex") arguments', line_no, 5
+        )
+    ref, pattern_text = items
+    if _REF_RE.fullmatch(ref) is None:
+        raise ParseError(
+            "matched predicate requires a typed reference as its first argument",
+            line_no,
+            5,
+        )
+    try:
+        pattern = json.loads(pattern_text)
+    except json.JSONDecodeError as exc:
+        raise ParseError(
+            f"invalid regex pattern in DONE matched predicate: {exc.msg}",
+            line_no,
+            exc.colno,
+        ) from exc
+    if not isinstance(pattern, str):
+        raise ParseError(
+            "matched predicate requires a quoted regex pattern string", line_no, 5
+        )
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise ParseError(
+            f"invalid regex in DONE matched predicate: {exc.msg}", line_no, 5
+        ) from exc
+    return DonePredicate("matched", ref, pattern, line_no)
+
+
+def _find_top_level(text: str, needle: str) -> int:
+    """Index of the first ``needle`` outside quotes and brackets, or -1."""
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    for index in range(len(text) - len(needle) + 1):
+        char = text[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+        elif char in "[({":
+            depth += 1
+        elif char in "])}":
+            depth -= 1
+        elif depth == 0 and text.startswith(needle, index):
+            return index
+    return -1
+
+
+def _find_in_keyword(text: str) -> int:
+    """Index of a standalone uppercase ``IN`` at top level, or -1."""
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    for index, char in enumerate(text):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+        elif char in "[({":
+            depth += 1
+        elif char in "])}":
+            depth -= 1
+        elif (
+            depth == 0
+            and text.startswith("IN", index)
+            and (index == 0 or text[index - 1].isspace())
+            and index + 2 < len(text)
+            and text[index + 2].isspace()
+        ):
+            return index
+    return -1
 
 
 def _parse_bracket_value(raw_value: str, line_no: int) -> Any:
@@ -285,6 +455,20 @@ def validate_program(program: Program, known_commands: Iterable[str] | None = No
                 if target in available:
                     raise ParseError(f"duplicate target {target}")
                 available.add(target)
+            if statement.done is not None:
+                if statement.done.op not in _DONE_OPS:
+                    raise ParseError(
+                        f"unknown DONE predicate {statement.done.op}",
+                        statement.done.line,
+                        5,
+                    )
+                if statement.done.ref not in statement.targets:
+                    raise ParseError(
+                        f"DONE reference {statement.done.ref} must be one of the"
+                        f" step's targets ({', '.join(statement.targets)})",
+                        statement.done.line,
+                        5,
+                    )
         elif isinstance(statement, Return):
             for ref in statement.refs:
                 if ref not in available:
@@ -340,7 +524,15 @@ def _statement_dict(statement: object) -> dict[str, Any]:
                 for argument in statement.args
             ],
             "targets": list(statement.targets),
-            "done": statement.done,
+            "done": (
+                {
+                    "op": statement.done.op,
+                    "ref": statement.done.ref,
+                    "value": statement.done.value,
+                }
+                if statement.done is not None
+                else None
+            ),
         }
     if isinstance(statement, Return):
         return {"kind": "return", **dataclasses.asdict(statement)}

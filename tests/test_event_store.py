@@ -239,3 +239,27 @@ def test_unknown_and_duplicate_runs(tmp_path):
         store.create_run("run-1", "prog@1")
         with pytest.raises(ValueError, match="already exists"):
             store.create_run("run-1", "prog@2")
+
+
+def test_validation_failed_event_roundtrip(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        store.create_run("run-1", "prog@1")
+        event = store.append(
+            "run-1",
+            EventType.VALIDATION_FAILED,
+            instruction_id="step.one",
+            invocation_id="inv-1",
+            task_id="task-1",
+            payload={
+                "step_id": "step.one",
+                "predicate": {"op": "equals", "ref": "E.result", "value": 11},
+                "detail": "expected 11, got 10",
+            },
+        )
+        assert event.state_version == 0
+
+        history = store.events("run-1")
+        assert [e.event_type for e in history] == [EventType.VALIDATION_FAILED]
+        assert history[0].payload["predicate"]["ref"] == "E.result"
+        assert history[0].instruction_id == "step.one"
+        assert history[0].task_id == "task-1"

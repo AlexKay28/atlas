@@ -1,6 +1,6 @@
 """tikhon.syntax — models, parser and sealing helpers for the minimal tikhon pseudo-language."""
 
-from .model import Argument, Declaration, Invocation, Program, Return, Stop
+from .model import Argument, Declaration, DonePredicate, Invocation, Program, Return, Stop
 from .parser import (
     ParseError,
     canonical_json,
@@ -12,6 +12,7 @@ from .parser import (
 __all__ = [
     "Argument",
     "Declaration",
+    "DonePredicate",
     "Invocation",
     "Program",
     "Return",

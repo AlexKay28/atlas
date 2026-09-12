@@ -8,7 +8,8 @@ completion.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping
+import re
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from tikhon.runtime.events import EventStore, EventType, _Record
 from tikhon.runtime.tasks import TaskLedger, TaskLedgerError
@@ -16,7 +17,15 @@ from tikhon.state import StateDelta
 from tikhon.syntax import validate_program
 from tikhon.syntax.model import Invocation, Program, Return, Stop
 
-__all__ = ["DeterministicWorker", "SequentialCoordinator", "map_results_to_targets"]
+if TYPE_CHECKING:
+    from tikhon.syntax.model import DonePredicate
+
+__all__ = [
+    "DeterministicWorker",
+    "SequentialCoordinator",
+    "evaluate_done_predicate",
+    "map_results_to_targets",
+]
 
 
 def map_results_to_targets(
@@ -67,6 +76,59 @@ def map_results_to_targets(
         return None, "; ".join(errors)
 
     return target_values, None
+
+
+def _json_equal(left: Any, right: Any) -> bool:
+    """JSON-strict equality: a bool never equals 0/1 (Python int/bool blur)."""
+    if isinstance(left, bool) != isinstance(right, bool):
+        return False
+    if isinstance(left, dict):
+        return (
+            isinstance(right, dict)
+            and set(left) == set(right)
+            and all(_json_equal(left[key], right[key]) for key in left)
+        )
+    if isinstance(left, list):
+        return (
+            isinstance(right, list)
+            and len(left) == len(right)
+            and all(_json_equal(item, other) for item, other in zip(left, right))
+        )
+    if isinstance(right, (dict, list)):
+        return False
+    return left == right
+
+
+def evaluate_done_predicate(
+    done: "DonePredicate",
+    target_values: Mapping[str, Any],
+) -> tuple[bool, str]:
+    """Purely and deterministically evaluate a DONE predicate.
+
+    Evaluates only over the committed ``target_values`` mapping: no worker
+    calls, no clocks, no randomness, no I/O.  Returns ``(passed, detail)``
+    where ``detail`` explains the failure and is empty on success.
+    """
+    actual = target_values.get(done.ref)
+    if done.op == "equals":
+        if _json_equal(actual, done.value):
+            return True, ""
+        return False, f"expected {done.value!r}, got {actual!r}"
+    if done.op == "in":
+        options = done.value if isinstance(done.value, list) else []
+        if any(_json_equal(actual, option) for option in options):
+            return True, ""
+        return False, f"value {actual!r} not in {options!r}"
+    if done.op == "matched":
+        if not isinstance(actual, str):
+            return False, (
+                f"matched predicate requires a string value,"
+                f" got {type(actual).__name__}"
+            )
+        if re.fullmatch(done.value, actual) is not None:
+            return True, ""
+        return False, f"value {actual!r} does not match pattern {done.value!r}"
+    raise ValueError(f"unknown DONE predicate {done.op!r}")
 
 
 class DeterministicWorker:
@@ -145,8 +207,21 @@ class SequentialCoordinator:
             invocation_id: str,
             task_id: str,
             error: str,
+            validation: dict[str, Any] | None = None,
         ) -> None:
-            records = [
+            records = []
+            if validation is not None:
+                records.append(
+                    _Record(
+                        event_type=EventType.VALIDATION_FAILED,
+                        instruction_id=statement.step_id,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        payload=validation,
+                        store=self.store,
+                    )
+                )
+            records.append(
                 _Record(
                     event_type=EventType.FAILED,
                     instruction_id=statement.step_id,
@@ -154,7 +229,9 @@ class SequentialCoordinator:
                     task_id=task_id,
                     payload={"error": error},
                     store=self.store,
-                ),
+                )
+            )
+            records.append(
                 _Record(
                     event_type=EventType.TASK_UPDATED,
                     task_id=task_id,
@@ -164,14 +241,16 @@ class SequentialCoordinator:
                         "elapsed_seconds": 0.0,
                     },
                     store=self.store,
-                ),
+                )
+            )
+            records.append(
                 _Record(
                     event_type=EventType.TASK_UPDATED,
                     task_id=task_id,
                     payload={"kind": "task_cancelled", "id": task_id},
                     store=self.store,
-                ),
-            ]
+                )
+            )
             records.extend(
                 _Record(
                     event_type=EventType.TASK_UPDATED,
@@ -279,6 +358,28 @@ class SequentialCoordinator:
                     idx, statement, invocation_id, task_id, validation_error
                 )
                 break
+
+            if statement.done is not None:
+                passed, detail = evaluate_done_predicate(statement.done, target_values)
+                if not passed:
+                    validation_payload = {
+                        "step_id": statement.step_id,
+                        "predicate": {
+                            "op": statement.done.op,
+                            "ref": statement.done.ref,
+                            "value": statement.done.value,
+                        },
+                        "detail": detail,
+                    }
+                    failed = True
+                    error_msg = (
+                        f"DONE predicate failed for {statement.step_id}: {detail}"
+                    )
+                    finish_failed_invocation(
+                        idx, statement, invocation_id, task_id, error_msg,
+                        validation=validation_payload,
+                    )
+                    break
 
             self.store.append(
                 run_id,

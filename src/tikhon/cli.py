@@ -1,6 +1,6 @@
 """Command-line interface for tikhon (docs/spec/02-command-catalog.md).
 
-Commands: lint, seal, run, status, events.
+Commands: lint, seal, run, status, events, audit.
 Uses argparse and the standard library only.
 """
 
@@ -12,6 +12,7 @@ import json
 import sys
 from typing import Any, Mapping
 
+from tikhon.audit import audit_run
 from tikhon.registry import builtin_registry
 from tikhon.runtime import DeterministicWorker, EventStore, EventType, SequentialCoordinator
 from tikhon.syntax import ParseError, parse_program, seal_digest, validate_program
@@ -227,6 +228,36 @@ def _cmd_events(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_audit(args: argparse.Namespace) -> int:
+    try:
+        store = EventStore(args.db)
+    except Exception as exc:
+        print(f"error: cannot open event store: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        report = audit_run(store, args.run_id)
+    except KeyError:
+        print(f"error: unknown run: {args.run_id}", file=sys.stderr)
+        store.close()
+        return 1
+    except Exception as exc:
+        print(f"error: audit failed: {exc}", file=sys.stderr)
+        store.close()
+        return 1
+    store.close()
+
+    if report.ok:
+        print("OK")
+        return 0
+
+    print(f"violations: {len(report.findings)}")
+    for finding in report.findings:
+        seqs = ", ".join(str(seq) for seq in finding.seqs)
+        print(f"- {finding.code} (seq: {seqs}): {finding.message}")
+    return 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tikhon",
@@ -259,6 +290,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_events.add_argument("--run-id", required=True, help="Run identifier")
     p_events.set_defaults(func=_cmd_events)
 
+    p_audit = sub.add_parser(
+        "audit", help="Verify a persisted run against audit invariants"
+    )
+    p_audit.add_argument("--db", required=True, help="Path to event store database")
+    p_audit.add_argument("--run-id", required=True, help="Run identifier")
+    p_audit.set_defaults(func=_cmd_audit)
+
     return parser
 
 
@@ -266,3 +304,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

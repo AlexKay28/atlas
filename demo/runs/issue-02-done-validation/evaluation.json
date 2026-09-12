@@ -1,0 +1,82 @@
+{
+  "task": "GitHub issue #2: Truthful validation - evaluate DONE predicates and emit VALIDATION_FAILED",
+  "run_id": "issue-02-done-validation",
+  "seal": "0c3260d3f351b32383f553917c99d06d51a662b6f86b3e130dc5ae5c96b92194",
+  "terminal_status": "succeeded",
+  "steps_planned": ["step.frame", "step.locate", "step.read", "step.spec", "step.design", "step.patch", "step.check", "step.verify"],
+  "steps_executed": ["step.frame", "step.locate", "step.read", "step.spec", "step.design", "step.patch", "step.check", "step.verify"],
+  "acceptance": [
+    {
+      "criterion": "DONE grammar implemented in src/tikhon/syntax/parser.py attached to invocations, names following the authoritative spec (infix == and IN per docs/spec/01-language-and-state.md; matched kept for regex since the spec defines no regex operator)",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_done_equality_predicate_parses, test_done_membership_predicate_parses, test_done_matched_predicate_parses_and_compiles_regex"
+    },
+    {
+      "criterion": "Predicate ref must be one of the step's targets; validated at parse time and in validate_program",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_done_ref_must_be_one_of_the_steps_targets, test_validate_program_rejects_done_ref_outside_targets, test_done_ref_inside_target_is_rejected, test_done_must_reference_target_even_when_ref_defined_earlier"
+    },
+    {
+      "criterion": "Unknown predicate names and malformed DONE expressions rejected",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_unknown_or_malformed_done_expressions_rejected[14 cases: equals(...), schema(...), exists(...), >, AND, bare ref, bad JSON, IN with refs, matched arity/type/regex]"
+    },
+    {
+      "criterion": "Seal digest deterministic and covers the DONE predicate",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_done_seal_digest_deterministic_and_sensitive; demo seal.txt digest reproduced after all edits"
+    },
+    {
+      "criterion": "EventType.VALIDATION_FAILED with value invocation.validation_failed exists and is emitted",
+      "passed": true,
+      "evidence": "src/tikhon/runtime/events.py (pre-existing member, now emitted); tests/test_event_store.py::test_validation_failed_event_roundtrip"
+    },
+    {
+      "criterion": "Coordinator evaluates DONE after target mapping succeeds, purely and deterministically (no worker calls)",
+      "passed": true,
+      "evidence": "src/tikhon/runtime/coordinator.py::evaluate_done_predicate (pure function over committed target values); tests/test_coordinator.py::test_done_passing_predicate_keeps_existing_lifecycle"
+    },
+    {
+      "criterion": "Passing predicate keeps existing lifecycle: VALIDATION_PASSED then SUCCEEDED, state commits",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_done_passing_predicate_keeps_existing_lifecycle, test_matched_passing_predicate_succeeds (LIFECYCLE asserted per invocation)"
+    },
+    {
+      "criterion": "Failing equals predicate: VALIDATION_FAILED (payload names the failing predicate) + FAILED, no state commit, run failed, ledger clean (no pending/in_progress, unreached tasks cancelled)",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_failing_equals_predicate_fails_run_without_commit (exact event order, payload {step_id, predicate{op,ref,value}, detail}, state_version==1 with only earlier nodes, ledger counts total 3 / cancelled 2 / completed 1)"
+    },
+    {
+      "criterion": "Failing matched predicate: same failure semantics",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_failing_matched_predicate_fails_run_without_commit (state nodes == {}, ledger total 1 / cancelled 1)"
+    },
+    {
+      "criterion": "Invocations without DONE behave exactly as before",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_invocations_without_done_unchanged plus all pre-existing coordinator tests unchanged and green"
+    },
+    {
+      "criterion": "Predicate evaluation is JSON-strict (bool != 1) and matched rejects non-string values without crashing",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_done_equality_is_json_strict_about_bools, test_matched_predicate_rejects_non_string_value"
+    },
+    {
+      "criterion": "Full pytest suite passes",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: 265 passed (baseline 216 + 49 new)"
+    },
+    {
+      "criterion": "Hard constraints respected: only allowed files touched; cli.py/registry/docs/other demo runs untouched; no git commit",
+      "passed": true,
+      "evidence": "git status shows edits only in src/tikhon/syntax/{model,parser,__init__}.py, src/tikhon/runtime/coordinator.py, tests/{test_syntax,test_coordinator,test_event_store}.py, demo/runs/issue-02-done-validation/; src/tikhon/cli.py diff belongs to the concurrent issue-#14 work"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "DONE predicate names follow the spec's infix operators (== and IN) instead of the issue's suggested named forms equals(ref=...)/matched(ref=...); the issue delegates naming to the spec, which defines no such predicate names. matched(<ref>, \"<regex>\") keeps the issue's name (spec has no regex operator) with positional arguments.",
+    "Minimal subset only: spec's full deterministic expression language (AND/OR, exists, count, schema, covers, ordered comparison, field selection) is out of scope and rejected with ParseError.",
+    "The tikhon binary on PATH is a stale site-packages install; end-to-end smoke checks were run against repo sources via PYTHONPATH=src.",
+    "tests/test_audit.py (concurrent issue-#14 work) failed transiently mid-session and is green in the final run; no #14 file was touched by this run."
+  ]
+}

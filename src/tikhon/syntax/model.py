@@ -17,12 +17,29 @@ class Argument:
 
 
 @dataclass(frozen=True)
+class DonePredicate:
+    """Deterministic DONE predicate attached to an invocation.
+
+    ``op`` is one of ``equals`` (``<ref> == <json-literal>``), ``in``
+    (``<ref> IN [<json-literal>, ...]``), or ``matched``
+    (``matched(<ref>, "<regex>")``); ``ref`` must be one of the owning
+    invocation's targets; ``value`` is the JSON literal (or the list of
+    JSON literals for ``in``, or the pattern string for ``matched``).
+    """
+
+    op: str
+    ref: str
+    value: object
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Invocation:
     step_id: str
     command: str
     args: tuple[Argument, ...]
     targets: tuple[str, ...]
-    done: str | None = None
+    done: DonePredicate | None = None
 
 
 @dataclass(frozen=True)
