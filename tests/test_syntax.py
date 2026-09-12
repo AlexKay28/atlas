@@ -39,6 +39,7 @@ from tahoe.syntax import (
     ParseError,
     Program,
     Return,
+    Scatter,
     Stop,
     canonical_json,
     canonical_json_v2,
@@ -377,12 +378,16 @@ def test_done_ref_must_be_one_of_the_steps_targets():
         parse_program(source)
 
 
-def test_done_ref_inside_target_is_rejected():
+def test_done_field_path_ref_accepted():
+    # Issue #36: field-path DONE refs (e.g. E.result.extra) are now
+    # accepted when the longest prefix matches a step target.
     source = DONE_PROGRAM.replace(
-        "DONE E.result == \"passed\"", "DONE E.result.extra == \"x\""
+        'DONE E.result == "passed"', 'DONE E.result.extra == "x"'
     )
-    with pytest.raises(ParseError, match="must be one of the step's targets"):
-        parse_program(source)
+    step = parse_program(source).statements[0]
+    assert step.done.op == "equals"
+    assert step.done.ref == "E.result.extra"
+    assert step.done.value == "x"
 
 
 def test_validate_program_rejects_done_ref_outside_targets():
@@ -1465,8 +1470,6 @@ def test_if_malformed_conditions_rejected():
         # Ordering comparison on a bare reference.
         "IF V.flag > 1 STOP completed()",
         "IF V.flag <= 1 STOP completed()",
-        # Ref-vs-ref comparison (right side must be a JSON literal).
-        "IF V.flag == V.other STOP completed()",
         # Invalid JSON literal.
         'IF V.flag == passed STOP completed()',
         # THEN is not part of the grammar.
@@ -1704,3 +1707,384 @@ def test_v2_re_derives_condition_ast_from_raw_text():
     assert cond[0] == "and"
     assert cond[1] == ["eq", "V.flag", "go"]
     assert cond[2] == ["count", "E.items", ">=", 2]
+
+
+# --------------------------------------------------------------------------
+# Issue #36: DONE parity with IF conditions, attachment to IF/SCATTER steps,
+#           ref-to-ref comparison, indexed-target error.
+# --------------------------------------------------------------------------
+
+FIELD_PATH_DONE_PROGRAM = """\
+PROGRAM quality VERSION 1.0
+
+INPUT
+  G.goal = "ship it"
+
+step.review: DO review(artifact = ART.report) -> V.quality
+DONE V.quality.status == "passed"
+
+RETURN V.quality
+"""
+
+
+def test_done_field_path_spec_example_parses():
+    # Issue #36 acceptance (3): the spec example DONE V.quality.status == "passed"
+    program = parse_program(FIELD_PATH_DONE_PROGRAM)
+    step = program.statements[0]
+    assert isinstance(step, Invocation)
+    assert step.done.op == "equals"
+    assert step.done.ref == "V.quality.status"
+    assert step.done.value == "passed"
+
+
+def test_done_not_equals_operator_parses():
+    source = DONE_PROGRAM.replace(
+        'DONE E.result == "passed"',
+        'DONE E.result != "failed"',
+    )
+    step = parse_program(source).statements[0]
+    assert step.done.op == "ne"
+    assert step.done.ref == "E.result"
+    assert step.done.value == "failed"
+
+
+def test_done_count_operator_parses():
+    source = DONE_PROGRAM.replace(
+        'DONE E.result == "passed"',
+        'DONE count(E.result) >= 2',
+    )
+    step = parse_program(source).statements[0]
+    assert step.done.op == "count"
+    assert step.done.ref == "E.result"
+    assert step.done.value == (">=", 2)
+
+
+def test_done_attaches_after_if_do_conditional():
+    # Issue #36 acceptance (1): DONE after a conditional invocation
+    # attaches to the embedded step.
+    source = """\
+PROGRAM gated_done VERSION 1.0
+
+INPUT
+  V.flag = "go"
+
+step.one: DO define(value = V.flag) -> E.base
+IF V.flag == "go" step.two: DO calculate(left = 1, right = 2) -> OUT.total
+DONE OUT.total == 3
+RETURN E.base
+"""
+    program = parse_program(source)
+    conditional = program.statements[1]
+    assert isinstance(conditional, Conditional)
+    assert isinstance(conditional.statement, Invocation)
+    assert conditional.statement.done is not None
+    assert conditional.statement.done.op == "equals"
+    assert conditional.statement.done.ref == "OUT.total"
+    assert conditional.statement.done.value == 3
+
+
+def test_done_attaches_after_scatter_body():
+    # Issue #36 acceptance (1): DONE after a SCATTER body step attaches
+    # to the body invocation.
+    source = """\
+PROGRAM scatter_done VERSION 1.0
+
+INPUT
+  Q.parts = ["a", "b"]
+
+SCATTER X.part IN Q.parts MAX 2
+  step.draft: DO define(goal = X.part) -> E.draft
+DONE E.draft == "ok"
+GATHER draft AS E.all USING all
+RETURN E.all
+"""
+    program = parse_program(source)
+    scatter = program.statements[0]
+    assert isinstance(scatter, Scatter)
+    assert scatter.body.done is not None
+    assert scatter.body.done.op == "equals"
+    assert scatter.body.done.ref == "E.draft"
+    assert scatter.body.done.value == "ok"
+
+
+def test_if_ref_to_ref_comparison_parses():
+    # Issue #36 acceptance (4): IF V.a == V.b parses
+    source = """\
+PROGRAM refcmp VERSION 1.0
+
+INPUT
+  V.a = "x"
+  V.b = "y"
+
+IF V.a == V.b STOP completed()
+IF V.a != V.b RETURN V.a
+RETURN V.a
+"""
+    program = parse_program(source)
+    conditionals = _conditionals(program)
+    assert len(conditionals) == 2
+    assert conditionals[0].condition == "V.a == V.b"
+    assert conditionals[1].condition == "V.a != V.b"
+    ast = parse_condition("V.a == V.b")
+    assert ast == ("eq_ref", "V.a", "V.b")
+    ast = parse_condition("V.a != V.b")
+    assert ast == ("ne_ref", "V.a", "V.b")
+
+
+def test_if_ref_to_ref_comparison_validates():
+    source = """\
+PROGRAM refcmp VERSION 1.0
+
+INPUT
+  V.a = "x"
+  V.b = "y"
+
+step.one: DO define(value = V.a) -> E.a
+IF V.a == E.a STOP completed()
+RETURN V.a
+"""
+    program = parse_program(source)
+    assert validate_program(program, known_commands={"define"}) is True
+
+
+def test_if_ref_to_ref_comparison_undefined_rejected():
+    source = """\
+PROGRAM refcmp VERSION 1.0
+
+INPUT
+  V.a = "x"
+
+IF V.a == V.missing STOP completed()
+RETURN V.a
+"""
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="V.missing.*used before definition"):
+        validate_program(program, known_commands=set())
+
+
+def test_done_ref_to_ref_comparison_parses():
+    source = """\
+PROGRAM done_ref VERSION 1.0
+
+INPUT
+  V.a = "x"
+  V.b = "y"
+
+step.one: DO define(value = V.a) -> E.result
+DONE E.result == V.b
+RETURN E.result
+"""
+    program = parse_program(source)
+    step = program.statements[0]
+    assert step.done.op == "eq_ref"
+    assert step.done.ref == "E.result"
+    assert step.done.value == "V.b"
+
+
+def test_done_ref_to_ref_comparison_validates():
+    source = """\
+PROGRAM done_ref VERSION 1.0
+
+INPUT
+  V.a = "x"
+  V.b = "y"
+
+step.one: DO define(value = V.a) -> E.result
+DONE E.result == V.b
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert validate_program(program, known_commands={"define"}) is True
+
+
+def test_done_ref_to_ref_comparison_undefined_rejected():
+    source = """\
+PROGRAM done_ref VERSION 1.0
+
+INPUT
+  V.a = "x"
+
+step.one: DO define(value = V.a) -> E.result
+DONE E.result == V.missing
+RETURN E.result
+"""
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="V.missing.*used before definition"):
+        validate_program(program, known_commands={"define"})
+
+
+def test_indexed_target_gives_precise_error():
+    # Issue #36: indexed element access is not implemented; give a
+    # precise error naming the index and the workaround.
+    source = CANONICAL.replace(
+        "-> E.result", "-> E.items[0]"
+    )
+    with pytest.raises(ParseError, match="indexed element access.*SCATTER"):
+        parse_program(source)
+
+
+def test_done_not_equals_with_field_path():
+    source = FIELD_PATH_DONE_PROGRAM.replace(
+        'DONE V.quality.status == "passed"',
+        'DONE V.quality.status != "failed"',
+    )
+    step = parse_program(source).statements[0]
+    assert step.done.op == "ne"
+    assert step.done.ref == "V.quality.status"
+    assert step.done.value == "failed"
+
+
+def test_done_count_with_field_path():
+    source = FIELD_PATH_DONE_PROGRAM.replace(
+        'DONE V.quality.status == "passed"',
+        'DONE count(V.quality) >= 1',
+    )
+    step = parse_program(source).statements[0]
+    assert step.done.op == "count"
+    assert step.done.ref == "V.quality"
+
+
+# --------------------------------------------------------------------------
+# Issue #37: trailing comments, single quotes, multi-line INPUT, located errors
+# --------------------------------------------------------------------------
+
+TRAILING_COMMENT_PROGRAM = """\
+PROGRAM demo VERSION 0.1
+
+INPUT
+  G.goal = {"request": "ship"}  # the goal
+  U.reason = "not enough evidence"  # reason
+
+step.one: DO define(value = G.goal, limit = 2) -> E.result  # step one
+DONE E.result == {"ok": true, "limit": 2}  # done check
+
+RETURN E.result  # final
+"""
+
+
+def test_trailing_comment_strips_and_seals_identically():
+    # Issue #37 acceptance (1): trailing comment parses and seals
+    # identically to comment-free program.
+    base = seal_digest(parse_program(CANONICAL))
+    assert seal_digest(parse_program(TRAILING_COMMENT_PROGRAM)) == base
+
+
+def test_trailing_comment_in_target_line():
+    source = CANONICAL.replace(
+        "-> E.result",
+        "-> E.result  # note",
+    )
+    program = parse_program(source)
+    step = program.statements[0]
+    assert step.targets == ("E.result",)
+
+
+def test_trailing_comment_after_done():
+    source = CANONICAL.replace(
+        'DONE E.result == {"ok": true, "limit": 2}',
+        'DONE E.result == {"ok": true, "limit": 2}  # validation',
+    )
+    program = parse_program(source)
+    step = program.statements[0]
+    assert step.done is not None
+    assert step.done.value == {"ok": True, "limit": 2}
+
+
+def test_trailing_comment_with_hash_in_string_preserved():
+    source = CANONICAL.replace(
+        '"not enough evidence"',
+        '"has # in it"  # real comment',
+    )
+    program = parse_program(source)
+    assert program.declarations[1].value == "has # in it"
+
+
+def test_single_quoted_string_rejected_with_use_double_quotes():
+    # Issue #37: single-quoted strings are rejected with a precise message.
+    source = CANONICAL.replace(
+        '"not enough evidence"',
+        "'not enough evidence'",
+    )
+    with pytest.raises(ParseError, match="single-quoted.*use double quotes"):
+        parse_program(source)
+
+
+def test_single_quoted_string_in_argument_rejected():
+    source = CANONICAL.replace(
+        'DO define(value = G.goal, limit = 2)',
+        "DO define(value = G.goal, label = 'a, b')",
+    )
+    with pytest.raises(ParseError, match="single-quoted.*use double quotes"):
+        parse_program(source)
+
+
+def test_single_quoted_string_in_done_rejected():
+    source = DONE_PROGRAM.replace(
+        'DONE E.result == "passed"',
+        "DONE E.result == 'passed'",
+    )
+    with pytest.raises(ParseError, match="single-quoted.*use double quotes"):
+        parse_program(source)
+
+
+MULTILINE_INPUT_PROGRAM = """\
+PROGRAM multiline VERSION 1.0
+
+INPUT
+  G.goal = {
+    "request": "ship",
+    "nested": [1, 2, 3]
+  }
+  U.reason = "not enough evidence"
+
+step.one: DO define(value = G.goal, limit = 2) -> E.result
+RETURN E.result
+"""
+
+
+def test_multiline_input_parses():
+    # Issue #37 acceptance (2): multi-line bracketed INPUT parses.
+    program = parse_program(MULTILINE_INPUT_PROGRAM)
+    assert program.declarations[0].ref == "G.goal"
+    assert program.declarations[0].value == {
+        "request": "ship",
+        "nested": [1, 2, 3],
+    }
+
+
+def test_multiline_input_seal_deterministic():
+    single_line = """\
+PROGRAM multiline VERSION 1.0
+
+INPUT
+  G.goal = {"request": "ship", "nested": [1, 2, 3]}
+  U.reason = "not enough evidence"
+
+step.one: DO define(value = G.goal, limit = 2) -> E.result
+RETURN E.result
+"""
+    assert (
+        seal_digest(parse_program(MULTILINE_INPUT_PROGRAM))
+        == seal_digest(parse_program(single_line))
+    )
+
+
+def test_split_top_level_unbalanced_error_has_line():
+    # Issue #37 acceptance (3): unbalanced-arg errors carry line and column.
+    source = CANONICAL.replace(
+        'DO define(value = G.goal, limit = 2)',
+        'DO define(value = [1, 2, 3) -> E.result',
+    )
+    with pytest.raises(ParseError) as excinfo:
+        parse_program(source)
+    assert excinfo.value.line > 0
+
+
+def test_split_top_level_unbalanced_closing_error_has_line():
+    source = CANONICAL.replace(
+        'DO define(value = G.goal, limit = 2)',
+        'DO define(value = G.goal, limit = 2) -> E.result, E.extra]',
+    )
+    with pytest.raises(ParseError) as excinfo:
+        parse_program(source)
+    assert excinfo.value.line > 0

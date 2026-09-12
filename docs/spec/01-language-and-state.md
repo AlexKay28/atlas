@@ -132,6 +132,29 @@ DONE V.quality.status == "passed"
 
 Natural-language `DONE WHEN` clauses are documentation, not executable source.
 
+### DONE Predicate Grammar (issue #36)
+
+The `DONE` predicate supports the same comparison operators as `IF` conditions:
+
+- `<ref> == <json-literal-or-ref>` — equality (field paths like `V.q.status` accepted; ref-to-ref via `eq_ref`)
+- `<ref> != <json-literal-or-ref>` — not-equality (ref-to-ref via `ne_ref`)
+- `<ref> IN [<json-literal>, ...]` — set membership
+- `matched(<ref>, "<regex>")` — deterministic regex predicate
+- `count(<ref>) <op> <int>` — count comparison (`op` in `== != < <= > >=`)
+
+DONE may attach after an `IF ... step.x: DO ...` conditional (attaching to the
+embedded invocation) or after a `SCATTER` body step. Indexed element access
+(`V.items[0]`) is not implemented; use a `SCATTER` to iterate over collections.
+
+### Comment and Quote Handling (issue #37)
+
+Trailing `#` comments are stripped outside quotes, so `-> E.result  # note`
+parses identically to `-> E.result`. Single-quoted strings (`'value'`) are
+rejected with a "use double quotes" message; only JSON double-quoted strings
+are supported. Multi-line bracket-balanced `INPUT` values are accumulated
+until brackets close. `ParseError` carries line and column information from
+`_split_top_level`.
+
 ## Value and Artifact Types
 
 Scalar values are `string`, `boolean`, `integer`, `number`, `decimal`, `date`, `time`,
