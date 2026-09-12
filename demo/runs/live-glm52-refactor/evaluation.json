@@ -1,0 +1,37 @@
+{
+  "task": "demo/runs/live-glm52-refactor/TASK.md",
+  "run_id": "live-glm52-refactor",
+  "seal": "2a4bfabd19bedac6e6eb1ba3d338213d289fedbed2322f81f4f80bc31123eec6",
+  "terminal_status": "succeeded",
+  "steps_planned": 7,
+  "steps_executed": 7,
+  "acceptance": [
+    {
+      "criterion": "map_results_to_targets is a module-level function in coordinator.py",
+      "passed": true,
+      "evidence": "Function defined at coordinator.py:22, exported in __all__"
+    },
+    {
+      "criterion": "execute calls map_results_to_targets instead of inline block",
+      "passed": true,
+      "evidence": "coordinator.py:257-258: target_values, validation_error = map_results_to_targets(statement.targets, result)"
+    },
+    {
+      "criterion": "All existing coordinator tests pass unchanged",
+      "passed": true,
+      "evidence": "16 existing tests pass: 22 total in test_coordinator.py (16 existing + 6 new)"
+    },
+    {
+      "criterion": "New focused tests cover single-target, multi-target-by-full-key, multi-target-by-leaf, non-mapping failure, ambiguous leaf failure, missing-key failure",
+      "passed": true,
+      "evidence": "6 new tests: test_single_target_accepts_any_type, test_multi_target_by_full_key, test_multi_target_by_leaf_name, test_non_mapping_result_for_multi_target_fails, test_ambiguous_duplicate_leaf_fails, test_missing_key_fails"
+    },
+    {
+      "criterion": "python3 -m pytest -q exits 0",
+      "passed": true,
+      "evidence": "163 passed in 0.44s"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": []
+}

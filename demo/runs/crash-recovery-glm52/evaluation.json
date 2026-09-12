@@ -1,0 +1,62 @@
+{
+  "task": "demo/tasks/01-crash-recovery.md",
+  "run_id": "crash-recovery-glm52",
+  "seal": "11cfbeddc088c08e366905350a88b24ecc738c5b22ba13d9d2689cab0ccf9913",
+  "terminal_status": "succeeded",
+  "steps_planned": 6,
+  "steps_executed": 6,
+  "acceptance": [
+    {
+      "criterion": "Every persisted crash boundary has one unambiguous resume action",
+      "passed": true,
+      "evidence": "Section 1 table covers W0a, W0b, W1-W12 (14 boundaries). Each row has exactly one resume action column. Terminal states (W4, W10, W11, W12) explicitly state 'No resume'."
+    },
+    {
+      "criterion": "The algorithm cannot commit a partial multi-target delta",
+      "passed": true,
+      "evidence": "Section 2 algorithm commits SUCCEEDED in a single append_batch call (events.py:264-419). Section 5 item 4: 'This delta is committed in a single SUCCEEDED event inside one atomic batch. A partial multi-target delta cannot commit -- either all targets are applied or none.'"
+    },
+    {
+      "criterion": "External side-effect duplication is addressed with a concrete protocol, not an unsupported exactly-once claim",
+      "passed": true,
+      "evidence": "Section 3 'Externally effectful workers' describes the idempotency key protocol with query-adopt-retry-block logic. Section 5 'At-least-once' item 3 explicitly states the runtime can only guarantee at-least-once dispatch without external cooperation. References spec lines 102-104 and 107-108."
+    },
+    {
+      "criterion": "Proposed tests are mechanically implementable against the current APIs",
+      "passed": true,
+      "evidence": "Section 4 lists 6 tests. Each test uses EventStore, SequentialCoordinator, DeterministicWorker, TaskLedger, and StateDelta -- all existing APIs. Test 6 uses store._conn.execute to delete RUN_FINISHED, which is a direct SQLite operation on the existing connection. Test 5 uses a mock external_system dict."
+    },
+    {
+      "criterion": "Cite exact source paths and relevant symbols from the current repository",
+      "passed": true,
+      "evidence": "All sections cite specific files (coordinator.py, events.py, tasks.py, delta.py, docs/spec/03-runtime-and-events.md) with line numbers. Section 1 references coordinator.py:103-118, 127-134, 143-173, 177-184, 186-193, 264-293, 321-325. Section 2 references events.py:300-303, 264-419, 342-348, 335-339. Section 3 references events.py:69-89, coordinator.py:96, 133, 22-34."
+    },
+    {
+      "criterion": "Preserve append-only event history and gapless per-run sequence numbers",
+      "passed": true,
+      "evidence": "Section 2 algorithm key properties: 'Append-only: Never modifies or deletes existing events.' Test 2 verifies 'seqs == list(range(len(seqs))) -- gapless'. Section 5 item 2: 'Gapless per run, guaranteed by MAX(seq)+1 inside the transaction.'"
+    },
+    {
+      "criterion": "Never infer success merely because a task was dispatched",
+      "passed": true,
+      "evidence": "Section 2 algorithm step 2 checks for SUCCEEDED terminal events, not INVOCATION_DISPATCHED. Key properties: 'Never infers success from dispatch: The algorithm checks for SUCCEEDED terminal events, not INVOCATION_DISPATCHED.' W2/W3 resume action explicitly calls worker rather than assuming success."
+    },
+    {
+      "criterion": "Clearly separate behavior that exists now from behavior you propose",
+      "passed": true,
+      "evidence": "Section 3 'Externally effectful workers' states 'all proposed -- not yet in the current codebase'. Section 5 'Existing vs proposed behavior' table explicitly lists each aspect as 'Existing' or 'Proposed'. Section 3 'What exists now' paragraph describes current INVOCATION_DISPATCHED payload limitations."
+    },
+    {
+      "criterion": "Do not edit src/, tests/, or this task file",
+      "passed": true,
+      "evidence": "No files under src/, tests/, or demo/tasks/ were modified. All artifacts written under demo/runs/crash-recovery-glm52/."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    {
+      "description": "Prior attempt used /home/alexkay instead of /home/alexkay28 as the base path, causing file operations to fail. The correct absolute path is /home/alexkay28/projects/pseudolanguage. This attempt uses the correct path throughout.",
+      "corrective_action": "All file operations use /home/alexkay28/projects/pseudolanguage/ as the base directory. No reference to /home/alexkay appears in any artifact."
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tikhon"
+version = "0.1.0"
+description = "Executable text harness for durable AI thinking programs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+keywords = ["agents", "dsl", "event-sourcing", "llm", "workflow"]
+
+[project.urls]
+Homepage = "https://github.com/AlexKay28/tikhon"
+Repository = "https://github.com/AlexKay28/tikhon"
+Documentation = "https://github.com/AlexKay28/tikhon/tree/main/docs"
+
+[project.scripts]
+tikhon = "tikhon.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,0 +1,36 @@
+{
+  "task": "demo/tasks/02-routing-optimization.md",
+  "run_id": "routing-optimization-glm52",
+  "seal": "5215a00d87ba7c2adf03866712ba1da1c7d8b531fb28147b0d39d0dd8fd9ae63",
+  "terminal_status": "succeeded",
+  "steps_planned": 10,
+  "steps_executed": 10,
+  "acceptance": [
+    {
+      "criterion": "Every reported assignment is independently reproducible",
+      "passed": true,
+      "evidence": "calculate.py enumerates all 81 assignments deterministically; running it twice produces identical output saved in calculation_output.txt. The optimum @ 0.90 (A=heavy, B=focused, C=heavy, D=heavy, cost=6.40, prob=0.907475) and optimum @ 0.85 (A=focused, B=focused, C=heavy, D=heavy, cost=5.20, prob=0.870809) are confirmed by re-execution."
+    },
+    {
+      "criterion": "Feasibility uses the product of all four selected success probabilities",
+      "passed": true,
+      "evidence": "calculate.py line 'joint_prob *= p' computes the product of 4 success probabilities. solution.md section 2 shows the explicit multiplication: 0.990 × 0.940 × 0.990 × 0.985 = 0.90747459."
+    },
+    {
+      "criterion": "Optimality is established against all cheaper assignments, not asserted",
+      "passed": true,
+      "evidence": "solution.md section 3 lists all 76 assignments cheaper than 6.40, each with joint probability shown and marked INFEASIBLE (none >= 0.90). The maximum joint probability among cheaper assignments is 0.893828 at cost 5.65."
+    },
+    {
+      "criterion": "Sensitivity reasoning includes a numerical break point or margin",
+      "passed": true,
+      "evidence": "solution.md section 5 provides absolute break margins, break ratios, and break point values for all 4 probability estimates. Most sensitive: Job B (focused, p=0.940) with break margin 0.007742 and break point p=0.932258."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The program.think file uses 10 steps (frame, locate, read, analyze, calc, optimize90, optimize85, sensitivity, write, verify) rather than the 6-step canonical template from the skill. This was necessary because the task requires multiple distinct calculations (exhaustive enumeration, two threshold optimizations, and sensitivity analysis) that map to separate calculate invocations. The skill says 'Adapt the steps to the task, but keep every operation atomic.'",
+    "The report step (step.write) only passes E.optimum90 as committed_refs rather than all four findings, because the Thinklang parser does not support array-of-refs syntax in arguments (the parser tries json.loads on non-ref values). The other findings are consumed implicitly through the WORKLOG.md and solution.md.",
+    "The program name uses underscore (routing_optimization) instead of hyphen (routing-optimization) because the Thinklang grammar only allows [a-z][a-z0-9_]* in program names."
+  ]
+}

@@ -1,0 +1,207 @@
+=== FULL ENUMERATION (81 assignments, sorted by cost) ===
+  #        A        B        C        D     cost      joint_p  feasible@0.90  feasible@0.85
+  1    small    small    small    small     0.80     0.378840             no             no
+  2    small    small  focused    small     1.30     0.413280             no             no
+  3    small    small    small  focused     1.35     0.469762             no             no
+  4  focused    small    small    small     1.40     0.438900             no             no
+  5    small  focused    small    small     1.50     0.508728             no             no
+  6    small    small  focused  focused     1.85     0.512467             no             no
+  7  focused    small  focused    small     1.90     0.478800             no             no
+  8  focused    small    small  focused     1.95     0.544236             no             no
+  9    small  focused  focused    small     2.00     0.554976             no             no
+ 10    small  focused    small  focused     2.05     0.630823             no             no
+ 11  focused  focused    small    small     2.10     0.589380             no             no
+ 12    small    small    small    heavy     2.35     0.497543             no             no
+ 13    small    small    heavy    small     2.35     0.426195             no             no
+ 14  focused    small  focused  focused     2.45     0.593712             no             no
+ 15    small  focused  focused  focused     2.55     0.688170             no             no
+ 16  focused  focused  focused    small     2.60     0.642960             no             no
+ 17    heavy    small    small    small     2.60     0.457380             no             no
+ 18  focused  focused    small  focused     2.65     0.730831             no             no
+ 19    small    small  focused    heavy     2.85     0.542774             no             no
+ 20    small    small    heavy  focused     2.90     0.528482             no             no
+ 21  focused    small    heavy    small     2.95     0.493762             no             no
+ 22  focused    small    small    heavy     2.95     0.576422             no             no
+ 23    small    heavy    small    small     3.00     0.538494             no             no
+ 24    small  focused    small    heavy     3.05     0.668129             no             no
+ 25    small  focused    heavy    small     3.05     0.572319             no             no
+ 26    heavy    small  focused    small     3.10     0.498960             no             no
+ 27  focused  focused  focused  focused     3.15     0.797270             no             no
+ 28    heavy    small    small  focused     3.15     0.567151             no             no
+ 29    heavy  focused    small    small     3.30     0.614196             no             no
+ 30  focused    small  focused    heavy     3.45     0.628824             no             no
+ 31    small    heavy  focused    small     3.50     0.587448             no             no
+ 32  focused    small    heavy  focused     3.50     0.612265             no             no
+ 33    small  focused  focused    heavy     3.55     0.728868             no             no
+ 34    small    heavy    small  focused     3.55     0.667733             no             no
+ 35  focused    heavy    small    small     3.60     0.623865             no             no
+ 36    small  focused    heavy  focused     3.60     0.709676             no             no
+ 37  focused  focused    heavy    small     3.65     0.663052             no             no
+ 38  focused  focused    small    heavy     3.65     0.774052             no             no
+ 39    heavy    small  focused  focused     3.65     0.618710             no             no
+ 40    heavy  focused  focused    small     3.80     0.670032             no             no
+ 41    heavy  focused    small  focused     3.85     0.761603             no             no
+ 42    small    small    heavy    heavy     3.90     0.559736             no             no
+ 43    small    heavy  focused  focused     4.05     0.728436             no             no
+ 44  focused    heavy  focused    small     4.10     0.680580             no             no
+ 45  focused  focused  focused    heavy     4.15     0.844421             no             no
+ 46  focused    heavy    small  focused     4.15     0.773593             no             no
+ 47    heavy    small    small    heavy     4.15     0.600692             no             no
+ 48    heavy    small    heavy    small     4.15     0.514552             no             no
+ 49  focused  focused    heavy  focused     4.20     0.822185             no             no
+ 50    heavy  focused  focused  focused     4.35     0.830840             no             no
+ 51  focused    small    heavy    heavy     4.50     0.648475             no             no
+ 52    small    heavy    small    heavy     4.55     0.707222             no             no
+ 53    small    heavy    heavy    small     4.55     0.605806             no             no
+ 54    small  focused    heavy    heavy     4.60     0.751646             no             no
+ 55  focused    heavy  focused  focused     4.65     0.843919             no             no
+ 56    heavy    small  focused    heavy     4.65     0.655301             no             no
+ 57    heavy    small    heavy  focused     4.70     0.638045             no             no
+ 58    heavy    heavy    small    small     4.80     0.650133             no             no
+ 59    heavy  focused    small    heavy     4.85     0.806644             no             no
+ 60    heavy  focused    heavy    small     4.85     0.690970             no             no
+ 61    small    heavy  focused    heavy     5.05     0.771515             no             no
+ 62    small    heavy    heavy  focused     5.10     0.751199             no             no
+ 63  focused    heavy    small    heavy     5.15     0.819343             no             no
+ 64  focused    heavy    heavy    small     5.15     0.701848             no             no
+ 65  focused  focused    heavy    heavy     5.20     0.870809             no            YES
+ 66    heavy    heavy  focused    small     5.30     0.709236             no             no
+ 67    heavy  focused  focused    heavy     5.35     0.879975             no            YES
+ 68    heavy    heavy    small  focused     5.35     0.806165             no             no
+ 69    heavy  focused    heavy  focused     5.40     0.856803             no            YES
+ 70  focused    heavy  focused    heavy     5.65     0.893828             no            YES
+ 71  focused    heavy    heavy  focused     5.70     0.870292             no            YES
+ 72    heavy    small    heavy    heavy     5.70     0.675779             no             no
+ 73    heavy    heavy  focused  focused     5.85     0.879453             no            YES
+ 74    small    heavy    heavy    heavy     6.10     0.795625             no             no
+ 75    heavy    heavy    small    heavy     6.35     0.853841             no            YES
+ 76    heavy    heavy    heavy    small     6.35     0.731400             no             no
+ 77    heavy  focused    heavy    heavy     6.40     0.907475            YES            YES
+ 78  focused    heavy    heavy    heavy     6.70     0.921761            YES            YES
+ 79    heavy    heavy  focused    heavy     6.85     0.931463            YES            YES
+ 80    heavy    heavy    heavy  focused     6.90     0.906936            YES            YES
+ 81    heavy    heavy    heavy    heavy     7.90     0.960572            YES            YES
+
+=== OPTIMUM @ 0.90 ===
+{
+  "assignment": {
+    "A": "heavy",
+    "B": "focused",
+    "C": "heavy",
+    "D": "heavy"
+  },
+  "total_cost": 6.4,
+  "joint_prob": 0.90747459
+}
+
+=== OPTIMUM @ 0.85 ===
+{
+  "assignment": {
+    "A": "focused",
+    "B": "focused",
+    "C": "heavy",
+    "D": "heavy"
+  },
+  "total_cost": 5.2,
+  "joint_prob": 0.8708089499999999
+}
+
+=== OPTIMALITY PROOF @ 0.90: all cheaper assignments ===
+  cost=0.80 prob=0.378840 INFEASIBLE assignment={'A': 'small', 'B': 'small', 'C': 'small', 'D': 'small'}
+  cost=1.30 prob=0.413280 INFEASIBLE assignment={'A': 'small', 'B': 'small', 'C': 'focused', 'D': 'small'}
+  cost=1.35 prob=0.469762 INFEASIBLE assignment={'A': 'small', 'B': 'small', 'C': 'small', 'D': 'focused'}
+  cost=1.40 prob=0.438900 INFEASIBLE assignment={'A': 'focused', 'B': 'small', 'C': 'small', 'D': 'small'}
+  cost=1.50 prob=0.508728 INFEASIBLE assignment={'A': 'small', 'B': 'focused', 'C': 'small', 'D': 'small'}
+  cost=1.85 prob=0.512467 INFEASIBLE assignment={'A': 'small', 'B': 'small', 'C': 'focused', 'D': 'focused'}
+  cost=1.90 prob=0.478800 INFEASIBLE assignment={'A': 'focused', 'B': 'small', 'C': 'focused', 'D': 'small'}
+  cost=1.95 prob=0.544236 INFEASIBLE assignment={'A': 'focused', 'B': 'small', 'C': 'small', 'D': 'focused'}
+  cost=2.00 prob=0.554976 INFEASIBLE assignment={'A': 'small', 'B': 'focused', 'C': 'focused', 'D': 'small'}
+  cost=2.05 prob=0.630823 INFEASIBLE assignment={'A': 'small', 'B': 'focused', 'C': 'small', 'D': 'focused'}
+  cost=2.10 prob=0.589380 INFEASIBLE assignment={'A': 'focused', 'B': 'focused', 'C': 'small', 'D': 'small'}
+  cost=2.35 prob=0.497543 INFEASIBLE assignment={'A': 'small', 'B': 'small', 'C': 'small', 'D': 'heavy'}
+  cost=2.35 prob=0.426195 INFEASIBLE assignment={'A': 'small', 'B': 'small', 'C': 'heavy', 'D': 'small'}
+  cost=2.45 prob=0.593712 INFEASIBLE assignment={'A': 'focused', 'B': 'small', 'C': 'focused', 'D': 'focused'}
+  cost=2.55 prob=0.688170 INFEASIBLE assignment={'A': 'small', 'B': 'focused', 'C': 'focused', 'D': 'focused'}
+  cost=2.60 prob=0.642960 INFEASIBLE assignment={'A': 'focused', 'B': 'focused', 'C': 'focused', 'D': 'small'}
+  cost=2.60 prob=0.457380 INFEASIBLE assignment={'A': 'heavy', 'B': 'small', 'C': 'small', 'D': 'small'}
+  cost=2.65 prob=0.730831 INFEASIBLE assignment={'A': 'focused', 'B': 'focused', 'C': 'small', 'D': 'focused'}
+  cost=2.85 prob=0.542774 INFEASIBLE assignment={'A': 'small', 'B': 'small', 'C': 'focused', 'D': 'heavy'}
+  cost=2.90 prob=0.528482 INFEASIBLE assignment={'A': 'small', 'B': 'small', 'C': 'heavy', 'D': 'focused'}
+  cost=2.95 prob=0.493762 INFEASIBLE assignment={'A': 'focused', 'B': 'small', 'C': 'heavy', 'D': 'small'}
+  cost=2.95 prob=0.576422 INFEASIBLE assignment={'A': 'focused', 'B': 'small', 'C': 'small', 'D': 'heavy'}
+  cost=3.00 prob=0.538494 INFEASIBLE assignment={'A': 'small', 'B': 'heavy', 'C': 'small', 'D': 'small'}
+  cost=3.05 prob=0.668129 INFEASIBLE assignment={'A': 'small', 'B': 'focused', 'C': 'small', 'D': 'heavy'}
+  cost=3.05 prob=0.572319 INFEASIBLE assignment={'A': 'small', 'B': 'focused', 'C': 'heavy', 'D': 'small'}
+  cost=3.10 prob=0.498960 INFEASIBLE assignment={'A': 'heavy', 'B': 'small', 'C': 'focused', 'D': 'small'}
+  cost=3.15 prob=0.797270 INFEASIBLE assignment={'A': 'focused', 'B': 'focused', 'C': 'focused', 'D': 'focused'}
+  cost=3.15 prob=0.567151 INFEASIBLE assignment={'A': 'heavy', 'B': 'small', 'C': 'small', 'D': 'focused'}
+  cost=3.30 prob=0.614196 INFEASIBLE assignment={'A': 'heavy', 'B': 'focused', 'C': 'small', 'D': 'small'}
+  cost=3.45 prob=0.628824 INFEASIBLE assignment={'A': 'focused', 'B': 'small', 'C': 'focused', 'D': 'heavy'}
+  cost=3.50 prob=0.587448 INFEASIBLE assignment={'A': 'small', 'B': 'heavy', 'C': 'focused', 'D': 'small'}
+  cost=3.50 prob=0.612265 INFEASIBLE assignment={'A': 'focused', 'B': 'small', 'C': 'heavy', 'D': 'focused'}
+  cost=3.55 prob=0.728868 INFEASIBLE assignment={'A': 'small', 'B': 'focused', 'C': 'focused', 'D': 'heavy'}
+  cost=3.55 prob=0.667733 INFEASIBLE assignment={'A': 'small', 'B': 'heavy', 'C': 'small', 'D': 'focused'}
+  cost=3.60 prob=0.623865 INFEASIBLE assignment={'A': 'focused', 'B': 'heavy', 'C': 'small', 'D': 'small'}
+  cost=3.60 prob=0.709676 INFEASIBLE assignment={'A': 'small', 'B': 'focused', 'C': 'heavy', 'D': 'focused'}
+  cost=3.65 prob=0.663052 INFEASIBLE assignment={'A': 'focused', 'B': 'focused', 'C': 'heavy', 'D': 'small'}
+  cost=3.65 prob=0.774052 INFEASIBLE assignment={'A': 'focused', 'B': 'focused', 'C': 'small', 'D': 'heavy'}
+  cost=3.65 prob=0.618710 INFEASIBLE assignment={'A': 'heavy', 'B': 'small', 'C': 'focused', 'D': 'focused'}
+  cost=3.80 prob=0.670032 INFEASIBLE assignment={'A': 'heavy', 'B': 'focused', 'C': 'focused', 'D': 'small'}
+  cost=3.85 prob=0.761603 INFEASIBLE assignment={'A': 'heavy', 'B': 'focused', 'C': 'small', 'D': 'focused'}
+  cost=3.90 prob=0.559736 INFEASIBLE assignment={'A': 'small', 'B': 'small', 'C': 'heavy', 'D': 'heavy'}
+  cost=4.05 prob=0.728436 INFEASIBLE assignment={'A': 'small', 'B': 'heavy', 'C': 'focused', 'D': 'focused'}
+  cost=4.10 prob=0.680580 INFEASIBLE assignment={'A': 'focused', 'B': 'heavy', 'C': 'focused', 'D': 'small'}
+  cost=4.15 prob=0.844421 INFEASIBLE assignment={'A': 'focused', 'B': 'focused', 'C': 'focused', 'D': 'heavy'}
+  cost=4.15 prob=0.773593 INFEASIBLE assignment={'A': 'focused', 'B': 'heavy', 'C': 'small', 'D': 'focused'}
+  cost=4.15 prob=0.600692 INFEASIBLE assignment={'A': 'heavy', 'B': 'small', 'C': 'small', 'D': 'heavy'}
+  cost=4.15 prob=0.514552 INFEASIBLE assignment={'A': 'heavy', 'B': 'small', 'C': 'heavy', 'D': 'small'}
+  cost=4.20 prob=0.822185 INFEASIBLE assignment={'A': 'focused', 'B': 'focused', 'C': 'heavy', 'D': 'focused'}
+  cost=4.35 prob=0.830840 INFEASIBLE assignment={'A': 'heavy', 'B': 'focused', 'C': 'focused', 'D': 'focused'}
+  cost=4.50 prob=0.648475 INFEASIBLE assignment={'A': 'focused', 'B': 'small', 'C': 'heavy', 'D': 'heavy'}
+  cost=4.55 prob=0.707222 INFEASIBLE assignment={'A': 'small', 'B': 'heavy', 'C': 'small', 'D': 'heavy'}
+  cost=4.55 prob=0.605806 INFEASIBLE assignment={'A': 'small', 'B': 'heavy', 'C': 'heavy', 'D': 'small'}
+  cost=4.60 prob=0.751646 INFEASIBLE assignment={'A': 'small', 'B': 'focused', 'C': 'heavy', 'D': 'heavy'}
+  cost=4.65 prob=0.843919 INFEASIBLE assignment={'A': 'focused', 'B': 'heavy', 'C': 'focused', 'D': 'focused'}
+  cost=4.65 prob=0.655301 INFEASIBLE assignment={'A': 'heavy', 'B': 'small', 'C': 'focused', 'D': 'heavy'}
+  cost=4.70 prob=0.638045 INFEASIBLE assignment={'A': 'heavy', 'B': 'small', 'C': 'heavy', 'D': 'focused'}
+  cost=4.80 prob=0.650133 INFEASIBLE assignment={'A': 'heavy', 'B': 'heavy', 'C': 'small', 'D': 'small'}
+  cost=4.85 prob=0.806644 INFEASIBLE assignment={'A': 'heavy', 'B': 'focused', 'C': 'small', 'D': 'heavy'}
+  cost=4.85 prob=0.690970 INFEASIBLE assignment={'A': 'heavy', 'B': 'focused', 'C': 'heavy', 'D': 'small'}
+  cost=5.05 prob=0.771515 INFEASIBLE assignment={'A': 'small', 'B': 'heavy', 'C': 'focused', 'D': 'heavy'}
+  cost=5.10 prob=0.751199 INFEASIBLE assignment={'A': 'small', 'B': 'heavy', 'C': 'heavy', 'D': 'focused'}
+  cost=5.15 prob=0.819343 INFEASIBLE assignment={'A': 'focused', 'B': 'heavy', 'C': 'small', 'D': 'heavy'}
+  cost=5.15 prob=0.701848 INFEASIBLE assignment={'A': 'focused', 'B': 'heavy', 'C': 'heavy', 'D': 'small'}
+  cost=5.20 prob=0.870809 INFEASIBLE assignment={'A': 'focused', 'B': 'focused', 'C': 'heavy', 'D': 'heavy'}
+  cost=5.30 prob=0.709236 INFEASIBLE assignment={'A': 'heavy', 'B': 'heavy', 'C': 'focused', 'D': 'small'}
+  cost=5.35 prob=0.879975 INFEASIBLE assignment={'A': 'heavy', 'B': 'focused', 'C': 'focused', 'D': 'heavy'}
+  cost=5.35 prob=0.806165 INFEASIBLE assignment={'A': 'heavy', 'B': 'heavy', 'C': 'small', 'D': 'focused'}
+  cost=5.40 prob=0.856803 INFEASIBLE assignment={'A': 'heavy', 'B': 'focused', 'C': 'heavy', 'D': 'focused'}
+  cost=5.65 prob=0.893828 INFEASIBLE assignment={'A': 'focused', 'B': 'heavy', 'C': 'focused', 'D': 'heavy'}
+  cost=5.70 prob=0.870292 INFEASIBLE assignment={'A': 'focused', 'B': 'heavy', 'C': 'heavy', 'D': 'focused'}
+  cost=5.70 prob=0.675779 INFEASIBLE assignment={'A': 'heavy', 'B': 'small', 'C': 'heavy', 'D': 'heavy'}
+  cost=5.85 prob=0.879453 INFEASIBLE assignment={'A': 'heavy', 'B': 'heavy', 'C': 'focused', 'D': 'focused'}
+  cost=6.10 prob=0.795625 INFEASIBLE assignment={'A': 'small', 'B': 'heavy', 'C': 'heavy', 'D': 'heavy'}
+  cost=6.35 prob=0.853841 INFEASIBLE assignment={'A': 'heavy', 'B': 'heavy', 'C': 'small', 'D': 'heavy'}
+  cost=6.35 prob=0.731400 INFEASIBLE assignment={'A': 'heavy', 'B': 'heavy', 'C': 'heavy', 'D': 'small'}
+
+=== Equal-cost assignments to optimum90 ===
+  cost=6.40 prob=0.907475 assignment={'A': 'heavy', 'B': 'focused', 'C': 'heavy', 'D': 'heavy'}
+
+=== SENSITIVITY ANALYSIS ===
+Current optimum joint prob = 0.907475, margin above 0.90 = 0.007475
+  Job A (tier=heavy, p=0.990): max decrease = 0.008154 (absolute), break ratio = 0.008237 (0.82%), break point p = 0.981846
+  Job B (tier=focused, p=0.940): max decrease = 0.007742 (absolute), break ratio = 0.008237 (0.82%), break point p = 0.932258
+  Job C (tier=heavy, p=0.990): max decrease = 0.008154 (absolute), break ratio = 0.008237 (0.82%), break point p = 0.981846
+  Job D (tier=heavy, p=0.985): max decrease = 0.008113 (absolute), break ratio = 0.008237 (0.82%), break point p = 0.976887
+
+=== SENSITIVITY: which single estimate decrease most likely changes optimum? ===
+Sorted by absolute break margin (smallest = most sensitive):
+  Job B (tier=focused, p=0.940): break at delta=0.007742 (0.82%), break point p=0.932258
+  Job D (tier=heavy, p=0.985): break at delta=0.008113 (0.82%), break point p=0.976887
+  Job A (tier=heavy, p=0.990): break at delta=0.008154 (0.82%), break point p=0.981846
+  Job C (tier=heavy, p=0.990): break at delta=0.008154 (0.82%), break point p=0.981846
+
+Most sensitive: Job B (tier=focused, p=0.940), break margin = 0.007742
+
+Second cheapest feasible @ 0.90: cost=6.70, prob=0.921761, assignment={'A': 'focused', 'B': 'heavy', 'C': 'heavy', 'D': 'heavy'}
+Cost difference from optimum: 0.30

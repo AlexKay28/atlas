@@ -1,0 +1,15 @@
+PROGRAM routing_optimization VERSION 1.0
+INPUT
+    G.task = "Choose a static model tier for each of four independent atomic jobs, minimizing total cost while keeping the probability that all jobs succeed at or above 0.90"
+    C.scope = "demo/tasks/02-routing-optimization.md"
+step.frame: DO define(request = G.task) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.candidates
+step.read: DO fetch(resource_refs = E.candidates) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "findings") -> E.findings
+step.calc: DO calculate(artifact = E.findings, schema = "exhaustive") -> E.enumeration
+step.optimize90: DO calculate(artifact = E.enumeration, schema = "min-cost-threshold-0.90") -> E.optimum90
+step.optimize85: DO calculate(artifact = E.enumeration, schema = "min-cost-threshold-0.85") -> E.optimum85
+step.sensitivity: DO calculate(artifact = E.optimum90, schema = "break-points") -> E.sensitivity
+step.write: DO report(committed_refs = E.optimum90, format = "markdown") -> OUT.solution
+step.verify: DO verify(goal = G.task, evidence = OUT.solution) -> V.result
+RETURN OUT.solution, V.result

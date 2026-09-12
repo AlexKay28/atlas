@@ -1,0 +1,11 @@
+PROGRAM crash_recovery VERSION 1.0
+INPUT
+    G.task = "Design a minimal recovery protocol for Thinklang when the coordinator process can crash after any persisted event and the same run is resumed later"
+    C.scope = "src/thinklang/runtime/"
+step.frame: DO define(request = G.task) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.candidates
+step.read: DO fetch(resource_refs = E.candidates) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "findings") -> E.findings
+step.write: DO report(committed_refs = E.findings, format = "markdown") -> OUT.solution
+step.verify: DO verify(goal = G.task, evidence = OUT.solution) -> V.result
+RETURN OUT.solution, V.result

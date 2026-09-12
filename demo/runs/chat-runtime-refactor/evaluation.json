@@ -1,0 +1,34 @@
+{
+  "task": "chat demonstration: refactor coordinator failure handling",
+  "run_id": "chat-runtime-refactor",
+  "seal": "35ad1d3c2bbdd61dae4bcc0a38af6ca96c8898e1dfc875a0d3eaf81cae6cfc5e",
+  "terminal_status": "succeeded",
+  "steps_planned": 8,
+  "steps_executed": 8,
+  "acceptance": [
+    {
+      "criterion": "All runtime failures terminate atomically",
+      "passed": true,
+      "evidence": "Non-mapping and missing-key results return failed with RUN_FINISHED and no active or pending tasks."
+    },
+    {
+      "criterion": "Validation events are truthful",
+      "passed": true,
+      "evidence": "Failed result-shape validation no longer emits VALIDATION_PASSED."
+    },
+    {
+      "criterion": "Target mapping is unambiguous",
+      "passed": true,
+      "evidence": "Exact full keys disambiguate duplicate leaves; a bare duplicate leaf fails."
+    },
+    {
+      "criterion": "Successful behavior remains compatible",
+      "passed": true,
+      "evidence": "The complete suite passes: 157 tests."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The executable catalog has no edit or test command, so report and check are used as the closest artifact-production and verification operations while ordinary repository tools perform the implementation."
+  ]
+}

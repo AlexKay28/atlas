@@ -1,0 +1,10 @@
+PROGRAM demo VERSION 1.0
+
+INPUT
+    G.left = 5
+    G.right = 7
+
+step.define: DO define(goal = G.left) -> G.goal
+step.calculate: DO calculate(left = G.left, right = G.right) -> OUT.total
+
+RETURN G.goal, OUT.total
