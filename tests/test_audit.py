@@ -421,3 +421,38 @@ def test_audit_clean_on_legacy_run_without_registry_digest(tmp_path):
             finding for finding in report.findings
             if "registry_digest" in finding.code or "registry_digest" in finding.message
         ]
+
+
+# -- payload integrity (issue #39) -------------------------------------
+
+
+def test_audit_detects_payload_digest_mismatch(tmp_path):
+    """audit_run flags a payload that was mutated after insertion — the
+    stored payload_ref no longer matches the sha256 of the payload."""
+    with EventStore(str(tmp_path / "events.db")) as store:
+        _execute(store, SUCCEED_PROGRAM)
+
+        target = next(
+            ev for ev in store.events(RUN_ID)
+            if ev.payload is not None and ev.payload_ref is not None
+        )
+        tampered_payload = canonical_json({"mutated": True})
+        store._conn.execute(
+            "UPDATE events SET payload = ? WHERE run_id = ? AND seq = ?",
+            (tampered_payload, RUN_ID, target.seq),
+        )
+
+        report = audit_run(store, RUN_ID)
+        assert not report.ok
+        finding = _finding(report, "payload_digest_mismatch")
+        assert target.seq in finding.seqs
+        assert "mutated" in finding.message.lower() or "mismatch" in finding.message.lower()
+
+
+def test_audit_clean_on_unmutated_payloads(tmp_path):
+    """A clean run has no payload_digest_mismatch findings."""
+    with EventStore(str(tmp_path / "events.db")) as store:
+        _execute(store, SUCCEED_PROGRAM)
+        report = audit_run(store, RUN_ID)
+        assert report.ok
+        assert not any(f.code == "payload_digest_mismatch" for f in report.findings)

@@ -148,7 +148,20 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_invocation_idx
     ON events (run_id, invocation_id, event_type);
+CREATE INDEX IF NOT EXISTS events_run_type_idx
+    ON events (run_id, event_type);
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL,
+    description TEXT NOT NULL
+);
 """
+
+_SCHEMA_VERSION = 2  # v1: initial + task_id column; v2: events_run_type_idx
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class _Record:
@@ -217,10 +230,53 @@ class EventStore:
         self._conn = sqlite3.connect(
             path, isolation_level=None, check_same_thread=False
         )
+        self._succeeded_cache: dict[str, set[str]] = {}
+        self._ledger_cache: dict[str, tuple["TaskLedger", int]] = {}
         with self._lock:
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.executescript(_SCHEMA)
-            self._migrate_task_id()
+            self._run_migrations()
+
+    def _run_migrations(self) -> None:
+        """Versioned schema migrations via PRAGMA user_version.
+
+        v1 (implicit for old DBs): the task_id column added by the
+        legacy ``_migrate_task_id`` ALTER.  v2: the events_run_type_idx
+        index (already in _SCHEMA for fresh DBs, added here for old ones).
+        """
+        current = self._conn.execute("PRAGMA user_version").fetchone()[0]
+
+        if current < 1:
+            cols = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(events)").fetchall()
+            }
+            if "task_id" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE events ADD COLUMN task_id TEXT NOT NULL DEFAULT ''"
+                )
+            self._conn.execute("PRAGMA user_version = 1")
+            current = 1
+
+        if current < 2:
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS events_run_type_idx"
+                " ON events (run_id, event_type)"
+            )
+            self._conn.execute("PRAGMA user_version = 2")
+            current = 2
+
+        for version, desc in [(1, "task_id column"), (2, "events_run_type_idx")]:
+            row = self._conn.execute(
+                "SELECT version FROM schema_migrations WHERE version = ?",
+                (version,),
+            ).fetchone()
+            if row is None:
+                self._conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at, description)"
+                    " VALUES (?, ?, ?)",
+                    (version, _utcnow().isoformat(), desc),
+                )
 
     def close(self) -> None:
         with self._lock:
@@ -369,19 +425,10 @@ class EventStore:
             # old append_task_event).
             batch_ledger: Optional["TaskLedger"] = None
             if _TASK_LEDGER_AVAILABLE:
-                batch_ledger = self.task_ledger(run_id)
+                batch_ledger = self._task_ledger_cached(run_id)
 
             results: list[Event] = []
-            succeeded_invocations: set[str] = set()
-
-            # Collect committed SUCCEEDED invocation_ids for dup check
-            committed_succeeded = self._conn.execute(
-                "SELECT DISTINCT invocation_id FROM events"
-                " WHERE run_id = ? AND event_type = ? AND invocation_id != ''",
-                (run_id, EventType.SUCCEEDED.value),
-            ).fetchall()
-            for row in committed_succeeded:
-                succeeded_invocations.add(row[0])
+            succeeded_invocations: set[str] = self._succeeded_invocations(run_id)
 
             for record in records:
                 event_type = record.event_type
@@ -475,7 +522,12 @@ class EventStore:
                 self._conn.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+            self._succeeded_cache.pop(run_id, None)
+            self._ledger_cache.pop(run_id, None)
             raise
+
+        self._succeeded_cache.pop(run_id, None)
+        self._ledger_cache.pop(run_id, None)
 
         return tuple(results)
 
@@ -538,6 +590,60 @@ class EventStore:
 
     # -- internals ----------------------------------------------------
 
+    def _succeeded_invocations(self, run_id: str) -> set[str]:
+        """Return the set of invocation_ids that already have a SUCCEEDED
+        event, using an in-memory cache invalidated on each successful
+        batch commit."""
+        if run_id in self._succeeded_cache:
+            return set(self._succeeded_cache[run_id])
+        rows = self._conn.execute(
+            "SELECT DISTINCT invocation_id FROM events"
+            " WHERE run_id = ? AND event_type = ? AND invocation_id != ''",
+            (run_id, EventType.SUCCEEDED.value),
+        ).fetchall()
+        result = {row[0] for row in rows}
+        self._succeeded_cache[run_id] = result
+        return set(result)
+
+    def _task_ledger_cached(self, run_id: str) -> "TaskLedger":
+        """Rebuild the TaskLedger incrementally, caching by max
+        TASK_UPDATED seq.  On a cache hit, only events after the cached
+        seq are replayed.  Returns a *copy* so callers may mutate it
+        (e.g. append_batch validation) without corrupting the cache.
+        """
+        if not _TASK_LEDGER_AVAILABLE:
+            raise RuntimeError("TaskLedger is not available")
+        allow_concurrent = self._run_allows_concurrent(run_id)
+        cached = self._ledger_cache.get(run_id)
+        if cached is not None:
+            ledger, cached_max_seq = cached
+            rows = self._conn.execute(
+                "SELECT payload, seq FROM events"
+                " WHERE run_id = ? AND event_type = ? AND seq > ?"
+                " ORDER BY seq ASC",
+                (run_id, EventType.TASK_UPDATED.value, cached_max_seq),
+            ).fetchall()
+            for row in rows:
+                if row[0] is not None:
+                    ledger._commit(json.loads(row[0]))
+            new_max = rows[-1][1] if rows else cached_max_seq
+            self._ledger_cache[run_id] = (ledger, new_max)
+            return TaskLedger.from_events(
+                list(ledger.events), allow_concurrent=allow_concurrent
+            )
+        rows = self._conn.execute(
+            "SELECT payload, seq FROM events"
+            " WHERE run_id = ? AND event_type = ? ORDER BY seq ASC",
+            (run_id, EventType.TASK_UPDATED.value),
+        ).fetchall()
+        payloads = [json.loads(row[0]) for row in rows if row[0] is not None]
+        max_seq = rows[-1][1] if rows else -1
+        ledger = TaskLedger.from_events(payloads, allow_concurrent=allow_concurrent)
+        self._ledger_cache[run_id] = (ledger, max_seq)
+        return TaskLedger.from_events(
+            list(ledger.events), allow_concurrent=allow_concurrent
+        )
+
     def _current_state_version(self, run_id: str) -> int:
         row = self._conn.execute(
             "SELECT state_version FROM events WHERE run_id = ?"
@@ -560,17 +666,6 @@ class EventStore:
         return payload
 
     # -- task ledger integration --------------------------------------
-
-    def _migrate_task_id(self) -> None:
-        """Add task_id column to the events table if it is missing."""
-        cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(events)").fetchall()
-        }
-        if "task_id" not in cols:
-            self._conn.execute(
-                "ALTER TABLE events ADD COLUMN task_id TEXT NOT NULL DEFAULT ''"
-            )
 
     def append_task_event(self, run_id: str, event: dict) -> Event:
         """Validate a proposed ledger event by replay, then persist it.
@@ -607,11 +702,14 @@ class EventStore:
         validation inside ``append_batch`` and later replay reconstruct
         the same multi-IN_PROGRESS intermediate states.  An explicit
         ``False`` keeps the default strict single-in-progress rule.
+
+        Issue #39: uses an incremental cache keyed by max TASK_UPDATED
+        seq to avoid full rebuild per batch.
         """
         if not _TASK_LEDGER_AVAILABLE:
             raise RuntimeError("TaskLedger is not available")
         if allow_concurrent is None:
-            allow_concurrent = self._run_allows_concurrent(run_id)
+            return self._task_ledger_cached(run_id)
         with self._lock:
             rows = self._conn.execute(
                 "SELECT payload FROM events"

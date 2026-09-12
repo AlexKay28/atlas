@@ -15,11 +15,15 @@ offending event sequence numbers, per docs/spec/03-runtime-and-events.md:
    evidence, and every invocation-bound event carries nonempty task_id
    and instruction_id;
 4. state projection determinism: projecting the run's events twice
-   yields identical state.
+   yields identical state;
+5. payload integrity (issue #39): every event's ``payload_ref`` (sha256
+   of canonical JSON) must match the stored payload — a mutated row
+   under a fixed ref is flagged.
 """
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,6 +108,7 @@ def audit_run(store: EventStore, run_id: str) -> AuditReport:
         *_check_truthfulness(events),
         *_check_invocation_ids(events),
         *_check_ledger(events, run_finished),
+        *_check_payload_integrity(events),
         *_check_projection_determinism(store, run_id, events),
     ]
     return AuditReport(
@@ -346,3 +351,32 @@ def _check_projection_determinism(
         ),
         seqs=tuple(ev.seq for ev in events),
     )]
+
+
+def _check_payload_integrity(events: tuple[Event, ...]) -> list[AuditFinding]:
+    """Verify every event's payload_ref matches the stored payload (issue #39).
+
+    payload_ref is the sha256 of the canonical JSON of the payload.  If a
+    row's payload was mutated after insertion, the ref will not match.
+    """
+    findings: list[AuditFinding] = []
+    for ev in events:
+        if ev.payload_ref is None:
+            continue
+        payload_json = canonical_json(ev.payload) if ev.payload is not None else None
+        expected_ref = (
+            hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+            if payload_json is not None
+            else None
+        )
+        if expected_ref != ev.payload_ref:
+            findings.append(AuditFinding(
+                code="payload_digest_mismatch",
+                message=(
+                    f"event at seq {ev.seq} has payload_ref {ev.payload_ref!r}"
+                    f" but the stored payload hashes to {expected_ref!r}"
+                    " — payload was mutated after insertion"
+                ),
+                seqs=(ev.seq,),
+            ))
+    return findings
