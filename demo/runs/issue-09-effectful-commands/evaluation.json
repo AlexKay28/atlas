@@ -1,0 +1,63 @@
+{
+  "task": "GitHub issue #9: effectful commands — edit, test, review with idempotency keys",
+  "run_id": "issue-09-effectful-commands",
+  "seal": "b37f564cdf29fff23e88b7f57559fc05b871c15c3e78894a764b7f0c1010a970",
+  "terminal_status": "succeeded",
+  "steps_planned": 8,
+  "steps_executed": 8,
+  "acceptance": [
+    {
+      "criterion": "edit, test and review CommandSpecs registered with complete contracts in the existing spec style; edit uses a durable-write class (IRREVERSIBLE_WRITE already in the enum, no new value needed) with a non-placeholder compensation note; test and review are READ_ONLY",
+      "passed": true,
+      "evidence": "tests/test_registry.py parametrized EFFECTFUL_COMMANDS contract/presence/effect-class/input-shape tests plus test_edit_compensation_is_not_a_placeholder all pass; catalog grew to 20 sorted names."
+    },
+    {
+      "criterion": "Every INVOCATION_DISPATCHED payload carries idempotency_key == f\"{run_id}:{invocation_id}\", on success and failure paths alike",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py: test_every_dispatched_payload_carries_the_idempotency_key, test_idempotency_key_uses_the_explicit_run_id, test_failed_invocation_still_dispatched_with_idempotency_key; tests/test_effectful.py asserts the keys on a real CLI run's three dispatched events."
+    },
+    {
+      "criterion": "WorkspacePolicy: workspace_root constructor param on SequentialCoordinator; effectful (durable-write, registry-resolved) dispatches inject _workspace_root into the resolved args and the DISPATCHED payload; None means no injection and dispatch is unchanged",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py: test_workspace_root_injected_only_for_effectful_commands (edit gets the root, define does not) and test_no_workspace_root_means_no_injection; CLI run events show _workspace_root only on the edit dispatch."
+    },
+    {
+      "criterion": "CLI handlers: edit writes under the workspace root refusing absolute paths and .. escapes before any bytes are written; test runs python3 -m pytest -q with a timeout returning {exit_code, tail<=40 lines}; review returns the artifact refs; --workspace argument added to tikhon run defaulting to the db's directory",
+      "passed": true,
+      "evidence": "tests/test_effectful.py end-to-end (edit→test→review run succeeds with DONE OUT.exit_code == 0; run without --workspace writes next to events.db; test handler returns exit_code 0/1 with bounded tail; review returns refs) all pass."
+    },
+    {
+      "criterion": "Traversal attempts fail the run coherently: FAILED + RUN_FINISHED, no partial state, following steps cancelled, nothing written inside or outside the workspace",
+      "passed": true,
+      "evidence": "tests/test_effectful.py::test_edit_traversal_fails_the_run_coherently (absolute-path and dotdot-escape) and test_traversal_failure_cancels_following_steps pass: zero committed state nodes, all ledger tasks cancelled, escaped file never created."
+    },
+    {
+      "criterion": "Path-traversal security unit-tested directly against the handler",
+      "passed": true,
+      "evidence": "tests/test_effectful.py: test_edit_handler_rejects_traversal_paths (six shapes incl. nested a/../../ and symlink-realpath escapes via _resolve_workspace_path), test_edit_handler_rejects_malformed_inputs, test_edit_handler_requires_a_workspace_root, test_test_handler_rejects_traversal_paths all pass with an empty workspace asserted after each refusal."
+    },
+    {
+      "criterion": "Full test suite passes",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: 363 passed (baseline 314 before edits; +49 new or extended tests)."
+    },
+    {
+      "criterion": "Tikhon protocol honored: program.think sealed before source edits and never modified afterwards; WORKLOG.md maintained; scratch program linted and executed through the real CLI",
+      "passed": true,
+      "evidence": "seal.txt (b37f564cdf29fff23e88b7f57559fc05b871c15c3e78894a764b7f0c1010a970) written before the first source edit; recomputed digest after all edits matches; scratch-edit-test-review.think lints valid and its CLI run prints succeeded/100% with tikhon audit OK."
+    },
+    {
+      "criterion": "Only allowed files touched",
+      "passed": true,
+      "evidence": "Changes confined to src/tikhon/registry/builtins.py, src/tikhon/runtime/coordinator.py, src/tikhon/cli.py, tests/test_registry.py, tests/test_coordinator.py, tests/test_effectful.py (new), and demo/runs/issue-09-effectful-commands/; syntax/, events.py, tasks.py, audit.py, other demo runs, .opencode/, docs/ untouched (git status attributes the syntax/ diffs to the concurrent issue-12 agent)."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The issue offered REVERSIBLE_WRITE-or-IRREVERSIBLE for edit; enums.py already declared IRREVERSIBLE_WRITE, so the stronger and more accurate class was chosen with the required compensation note ('restore the previous file content from the pre-write backup; a refused path leaves nothing to compensate').",
+    "The coordinator still dispatches effectful commands when workspace_root is None (per the issue: edit-style commands still work, no root provided), but the CLI edit/test handlers treat an undeclared workspace as a precondition failure; tikhon run always declares a root (default: the --db directory), so CLI behavior is unaffected.",
+    "The test handler invokes sys.executable -m pytest instead of the literal python3 token so the run's interpreter (e.g. inside a venv) executes the suite; identical behavior in this environment.",
+    "Bare python3 -m tikhon resolves to a stale site-packages copy rather than src/ (pytest uses pythonpath=src); live CLI evidence was therefore produced with PYTHONPATH=src. No repo change was needed or made.",
+    "Issue #12 ran concurrently on src/tikhon/syntax/; no edits were made in that tree and the combined suite is green."
+  ]
+}

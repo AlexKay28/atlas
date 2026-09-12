@@ -1,0 +1,15 @@
+# Scratch program for issue #9 — exercises edit, test and review end to end
+# through the real CLI handlers. Unsealed scratch: the canonical program.think
+# (pre-existing commands only) was sealed before any source edit.
+PROGRAM issue_09_scratch VERSION 1.0
+
+INPUT
+    G.path = "scratch/test_scratch.py"
+    G.content = "def test_scratch():\n    assert 2 + 2 == 4\n"
+
+step.write: DO edit(path = G.path, content = G.content) -> E.written
+step.test: DO test(path = E.written, timeout_seconds = 60) -> OUT.exit_code, OUT.tail
+  DONE OUT.exit_code == 0
+step.review: DO review(artifact_refs = [E.written], focus = "effectful smoke check") -> OUT.findings
+
+RETURN E.written, OUT.exit_code, OUT.findings

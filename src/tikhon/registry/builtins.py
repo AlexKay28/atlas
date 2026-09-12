@@ -908,6 +908,190 @@ def _recall() -> CommandSpec:
     )
 
 
+def _edit() -> CommandSpec:
+    return CommandSpec(
+        name="edit",
+        version=_VERSION,
+        purpose="Apply a bounded file write inside the declared workspace root",
+        inputs=("path:workspace_relative", "content:text"),
+        parameters=("create_parents:bool", "encoding:descriptor"),
+        preconditions=(
+            "path_relative_and_within_workspace_root",
+            "content_string_valued",
+            "workspace_policy_declared",
+        ),
+        outputs=("written_path:artifact", "write_receipt:artifact"),
+        effects=("workspace_file_write",),
+        done="file_content_written_under_workspace_root_with_receipt_recorded",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery=(
+                    "reject and report the absolute path or traversal escape;"
+                    " no bytes are written"
+                ),
+            ),
+            FailureSpec(
+                kind=FailureKind.PERMISSION,
+                retryable=False,
+                recovery=(
+                    "report the unwritable or undeclared workspace;"
+                    " no retry without a declared root or granted access"
+                ),
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts after the filesystem error clears",
+            ),
+        ),
+        # IRREVERSIBLE_WRITE: a filesystem write is a durable mutation with no
+        # transactional rollback; the compensation below is the recovery path,
+        # not an undo guarantee.
+        effect_class=EffectClass.IRREVERSIBLE_WRITE,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("workspace_file_write",),
+        evidence=("written_path", "bytes_written", "content_digest"),
+        budget=Budget(
+            max_seconds=5.0,
+            max_tokens=0,
+            max_cost=0.0,
+            max_attempts=1,
+            max_output_bytes=65536,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation=(
+            "restore the previous file content from the pre-write backup;"
+            " a refused path leaves nothing to compensate"
+        ),
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2),
+            preferred_tier=RoutingTier.T1,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="none",
+            escalation_on=(),
+            fallback_chain=(),
+        ),
+    )
+
+
+def _test() -> CommandSpec:
+    return CommandSpec(
+        name="test",
+        version=_VERSION,
+        purpose=(
+            "Execute the declared test cases against the produced artifacts"
+            " and record the outcome"
+        ),
+        inputs=("path:workspace_relative",),
+        parameters=("timeout_seconds:int>0", "selection:descriptor"),
+        preconditions=("path_within_workspace_root", "test_runner_available"),
+        outputs=("exit_code:int", "tail:log"),
+        effects=("none",),
+        done="exit_code_and_bounded_tail_recorded_for_the_executed_tests",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report the missing or escaping test path",
+            ),
+            FailureSpec(
+                kind=FailureKind.TIMEOUT,
+                retryable=True,
+                recovery="retry with a smaller selection or a longer deadline",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.READ_ONLY,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("test_runner",),
+        evidence=("exit_code", "bounded_tail"),
+        budget=Budget(
+            max_seconds=120.0,
+            max_tokens=0,
+            max_cost=0.0,
+            max_attempts=2,
+            max_output_bytes=65536,
+        ),
+        idempotency=IdempotencyMode.NONE,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T0,
+            permitted_tiers=(RoutingTier.T0, RoutingTier.T1),
+            preferred_tier=RoutingTier.T0,
+            validator_tier=RoutingTier.T0,
+            confidence_policy="none",
+            escalation_on=(),
+            fallback_chain=(),
+        ),
+    )
+
+
+def _review() -> CommandSpec:
+    return CommandSpec(
+        name="review",
+        version=_VERSION,
+        purpose=(
+            "Inspect the declared artifacts against the goal and record"
+            " structured review findings"
+        ),
+        inputs=("artifact_refs:refs", "focus:descriptor"),
+        parameters=("depth:enum", "max_findings:int>0"),
+        preconditions=("refs_addressable", "focus_bounded"),
+        outputs=("findings:ranked_manifest", "reviewed_refs:refs"),
+        effects=("none",),
+        done=(
+            "every_reviewed_ref_carries_recorded_findings"
+            "_or_an_explicit_clean_verdict"
+        ),
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report the unaddressable refs or unbounded focus",
+            ),
+            FailureSpec(
+                kind=FailureKind.INSUFFICIENT_EVIDENCE,
+                retryable=True,
+                recovery="retry only after the missing artifacts are collected",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.READ_ONLY,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("artifact_review",),
+        evidence=("findings_manifest", "reviewed_ref_list"),
+        budget=Budget(
+            max_seconds=45.0,
+            max_tokens=6000,
+            max_cost=0.05,
+            max_attempts=2,
+            max_output_bytes=131072,
+        ),
+        idempotency=IdempotencyMode.NONE,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="calibrated_review",
+            escalation_on=(FailureKind.INSUFFICIENT_EVIDENCE,),
+            fallback_chain=(),
+        ),
+    )
+
+
 BUILTIN_FACTORIES = (
     _define,
     _search,
@@ -926,6 +1110,9 @@ BUILTIN_FACTORIES = (
     _choose,
     _remember,
     _recall,
+    _edit,
+    _test,
+    _review,
 )
 
 

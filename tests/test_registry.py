@@ -32,6 +32,7 @@ BUILTIN_NAMES = (
     "compare",
     "decompose",
     "define",
+    "edit",
     "extract",
     "fetch",
     "hypothesize",
@@ -39,8 +40,10 @@ BUILTIN_NAMES = (
     "recall",
     "remember",
     "report",
+    "review",
     "search",
     "summarize",
+    "test",
     "verify",
 )
 
@@ -56,6 +59,12 @@ DECISION_COMMANDS = (
 MEMORY_COMMANDS = (
     "remember",
     "recall",
+)
+
+EFFECTFUL_COMMANDS = (
+    "edit",
+    "test",
+    "review",
 )
 
 CONTRACT_FIELDS = (
@@ -220,7 +229,9 @@ def test_decision_commands_extend_the_nine_originals():
     original = {"calculate", "check", "define", "extract", "fetch", "report", "search", "summarize", "verify"}
     names = set(builtin_registry().names())
     assert original < names
-    assert names - original == set(DECISION_COMMANDS) | set(MEMORY_COMMANDS)
+    assert names - original == (
+        set(DECISION_COMMANDS) | set(MEMORY_COMMANDS) | set(EFFECTFUL_COMMANDS)
+    )
 
 
 # --- memory commands (issue #5) ------------------------------------------------
@@ -258,6 +269,57 @@ def test_memory_command_effect_class_matches_contract_intent(registry, name):
         assert spec.effect_class is EffectClass.REVERSIBLE_WRITE
     else:
         assert spec.effect_class is EffectClass.READ_ONLY
+
+
+# --- effectful commands (issue #9) ---------------------------------------------
+
+
+@pytest.mark.parametrize("name", EFFECTFUL_COMMANDS)
+def test_effectful_command_resolves_with_complete_contract(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    assert spec.name == name
+    assert spec.version == "1.0.0"
+    for value in (spec.purpose, spec.done, spec.compensation):
+        assert isinstance(value, str) and value.strip()
+    for field in (spec.inputs, spec.outputs, spec.effects):
+        assert field and all(isinstance(entry, str) and entry.strip() for entry in field)
+    assert spec.effect_class in EffectClass
+    assert spec.execution in ExecutionMode
+    assert spec.idempotency in IdempotencyMode
+    assert spec.failures
+    for failure in spec.failures:
+        assert failure.kind in FailureKind
+        assert isinstance(failure.retryable, bool)
+        assert failure.recovery.strip()
+
+
+@pytest.mark.parametrize("name", EFFECTFUL_COMMANDS)
+def test_effectful_command_is_registered_under_its_name(registry, name):
+    assert name in builtin_registry().names()
+    assert name in registry.names()
+
+
+@pytest.mark.parametrize("name", EFFECTFUL_COMMANDS)
+def test_effectful_command_effect_class_matches_contract_intent(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    if name == "edit":
+        assert spec.effect_class is EffectClass.IRREVERSIBLE_WRITE
+    else:
+        assert spec.effect_class is EffectClass.READ_ONLY
+
+
+@pytest.mark.parametrize("name", ("edit", "test", "review"))
+def test_effectful_command_declares_workspace_inputs(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    if name == "review":
+        assert any("refs" in entry for entry in spec.inputs)
+    else:
+        assert any("path" in entry for entry in spec.inputs)
+
+
+def test_edit_compensation_is_not_a_placeholder():
+    spec = builtin_registry().resolve("edit", "1.0.0")
+    assert spec.compensation.strip() not in {"", "none"}
 
 
 # --- resolve and version pinning --------------------------------------------

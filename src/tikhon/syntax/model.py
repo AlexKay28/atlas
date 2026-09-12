@@ -43,6 +43,24 @@ class Invocation:
 
 
 @dataclass(frozen=True)
+class Call:
+    """Protocol call statement (issue #12): ``CALL protocol.name(...) -> targets``.
+
+    ``protocol`` is the full protocol reference — the required ``protocol.``
+    prefix followed by dot-separated ``[a-z][a-z0-9_]*`` segments; the
+    segments after the prefix select the protocol file (``protocol.framing``
+    loads ``protocols/framing.think``).  ``args`` are named like invocation
+    arguments and bind the protocol's INPUT declarations; ``targets`` must
+    be a subset of the protocol's RETURN refs.
+    """
+
+    protocol: str
+    args: tuple[Argument, ...]
+    targets: tuple[str, ...]
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Return:
     refs: tuple[str, ...]
 

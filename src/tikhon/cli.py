@@ -29,7 +29,39 @@ def _builtin_command_names() -> set[str]:
     return set(builtin_registry().names())
 
 
-def _deterministic_handlers(memory: Any = None, run_id: str = "") -> dict[str, Any]:
+def _resolve_workspace_path(
+    root: str, path: Any, *, what: str
+) -> str:
+    """Resolve ``path`` under workspace ``root``, refusing escapes.
+
+    Rejects non-string, empty, absolute, and ``..``-traversal paths with a
+    ``ValueError`` naming the defect (issue #9 security rule).  Returns the
+    absolute, symlink-resolved candidate path.
+    """
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError(f"{what} requires a nonempty string path, got {path!r}")
+    if os.path.isabs(path):
+        raise ValueError(
+            f"{what} refuses absolute paths: {path!r} is not relative"
+            " to the workspace root"
+        )
+    normalized = os.path.normpath(path)
+    if normalized == "." or normalized.startswith(".." + os.sep) or normalized == "..":
+        raise ValueError(
+            f"{what} refuses path traversal outside the workspace root: {path!r}"
+        )
+    root_real = os.path.realpath(root)
+    candidate = os.path.realpath(os.path.join(root_real, normalized))
+    if candidate != root_real and not candidate.startswith(root_real + os.sep):
+        raise ValueError(
+            f"{what} refuses path traversal outside the workspace root: {path!r}"
+        )
+    return candidate
+
+
+def _deterministic_handlers(
+    memory: Any = None, run_id: str = "", workspace_root: str | None = None
+) -> dict[str, Any]:
     def _define(**kwargs: Any) -> Any:
         if "value" in kwargs:
             return kwargs["value"]
@@ -92,6 +124,60 @@ def _deterministic_handlers(memory: Any = None, run_id: str = "") -> dict[str, A
             return {query: kb.get(query)}
         return {key: kb.get(key) for key in kb.keys(prefix=query)}
 
+    def _workspace_for(**kwargs: Any) -> str:
+        root = kwargs.get("_workspace_root") or workspace_root
+        if not isinstance(root, str) or not root:
+            raise ValueError(
+                "edit/test require a workspace root: pass --workspace to"
+                " tikhon run (default: the --db directory)"
+            )
+        return root
+
+    def _edit(**kwargs: Any) -> Any:
+        root = _workspace_for(**kwargs)
+        path = kwargs.get("path")
+        content = kwargs.get("content")
+        if not isinstance(content, str):
+            raise ValueError(
+                f"edit requires string content, got {type(content).__name__}"
+            )
+        target = _resolve_workspace_path(root, path, what="edit")
+        parent = os.path.dirname(target)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(target, "w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
+        return os.path.relpath(target, os.path.realpath(root))
+
+    def _test(**kwargs: Any) -> Any:
+        import subprocess
+
+        root = _workspace_for(**kwargs)
+        target = _resolve_workspace_path(root, kwargs.get("path"), what="test")
+        timeout = kwargs.get("timeout_seconds", 120)
+        if not isinstance(timeout, (int, float)) or timeout <= 0:
+            raise ValueError(
+                f"test requires a positive timeout_seconds, got {timeout!r}"
+            )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", target],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(
+                f"test exceeded its {timeout}s deadline on {kwargs.get('path')!r}"
+            ) from exc
+        output = (proc.stdout or "") + (proc.stderr or "")
+        tail = "\n".join(output.splitlines()[-40:])
+        return {"exit_code": proc.returncode, "tail": tail}
+
+    def _review(**kwargs: Any) -> Any:
+        return kwargs.get("artifact_refs", dict(kwargs))
+
     return {
         "define": _define,
         "search": _search,
@@ -104,6 +190,9 @@ def _deterministic_handlers(memory: Any = None, run_id: str = "") -> dict[str, A
         "check": _check,
         "remember": _remember,
         "recall": _recall,
+        "edit": _edit,
+        "test": _test,
+        "review": _review,
     }
 
 
@@ -169,10 +258,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
         os.path.join(os.path.dirname(os.path.abspath(args.db)), "kb.sqlite")
     )
 
-    worker = DeterministicWorker(
-        _deterministic_handlers(memory=memory, run_id=args.run_id)
+    workspace = (
+        os.path.abspath(args.workspace)
+        if args.workspace
+        else os.path.dirname(os.path.abspath(args.db))
     )
-    coordinator = SequentialCoordinator(store, worker, memory=memory)
+
+    worker = DeterministicWorker(
+        _deterministic_handlers(
+            memory=memory, run_id=args.run_id, workspace_root=workspace
+        )
+    )
+    coordinator = SequentialCoordinator(
+        store, worker, memory=memory, workspace_root=workspace
+    )
 
     try:
         result = coordinator.execute(program, run_id=args.run_id)
@@ -313,6 +412,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--db", required=True, help="Path to event store database")
     p_run.add_argument("--run-id", required=True, help="Unique run identifier")
     p_run.add_argument("--seal", default=None, help="Sealed digest required before run")
+    p_run.add_argument(
+        "--workspace",
+        default=None,
+        help=(
+            "Workspace root for effectful commands like edit"
+            " (default: the --db directory)"
+        ),
+    )
     p_run.set_defaults(func=_cmd_run)
 
     p_status = sub.add_parser("status", help="Print run status")

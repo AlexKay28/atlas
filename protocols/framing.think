@@ -1,0 +1,30 @@
+# protocols/framing.think — example sealed protocol (issue #12).
+#
+# A protocol is a normal tikhon program (PROGRAM header, INPUT
+# declarations for its parameters, invocation steps, RETURN) that lives
+# in a protocols/ directory and is invoked with
+#   CALL protocol.framing(request = ..., scope = ...) -> G.plan, ...
+# Protocol names map to files deterministically: the name after the
+# "protocol." prefix is the file stem, so protocol.framing loads
+# protocols/framing.think.
+#
+# Sealing: this file is sealed exactly like a program. A caller's seal
+# composition changes when this protocol changes — recomposite and re-seal
+# callers after editing a protocol (composite seal hashing is NOT
+# implemented; loading is deterministic).
+#
+# Recursion: this protocol must not CALL itself directly or transitively;
+# nested protocol-call chains are bounded at depth 8 during validation.
+
+PROGRAM framing VERSION 1.0
+
+INPUT
+    G.request = "frame the problem"
+    C.scope = "repository working tree"
+
+step.frame: DO define(request = G.request) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.context
+step.read: DO fetch(resource_refs = E.context) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "frame_analysis") -> V.analysis
+
+RETURN G.plan, E.context, ART.sources, V.analysis

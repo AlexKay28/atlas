@@ -1,0 +1,78 @@
+{
+  "task": "GitHub issue #12: Protocol calls — CALL protocol.name with sealed protocol files",
+  "run_id": "issue-12-protocol-calls",
+  "seal": "bd4df5450292ac433cd8069773022123e70106a20d7c950671f50dc4a5db013f",
+  "terminal_status": "succeeded",
+  "steps_planned": 6,
+  "steps_executed": 6,
+  "acceptance": [
+    {
+      "criterion": "Sealed protocol program created before any source edit (Tikhon protocol steps 1-2)",
+      "passed": true,
+      "evidence": "demo/runs/issue-12-protocol-calls/program.think linted valid and sealed to bd4df5450292ac433cd8069773022123e70106a20d7c950671f50dc4a5db013f (seal.txt) before parser/coordinator edits; re-sealed with the final code it reproduces the same digest; CALL deliberately absent from the sealed program because it did not exist at seal time"
+    },
+    {
+      "criterion": "protocols/ at repo root contains one example protocol that lints and seals",
+      "passed": true,
+      "evidence": "protocols/framing.think (frame/locate/read/analyze over registered commands define/search/fetch/extract) lints valid and seals to 5bbf9fbab5b863199794ddc5c86152153fb60bacd89f931a6feaf4906412bf80; documents the seal-composition caveat and recursion bound"
+    },
+    {
+      "criterion": "CALL grammar parses: protocol name dot-separated segments, args like invocations, targets like invocations",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_call_statement_parses_with_args_and_targets, ::test_call_ast_node_is_frozen_dataclass, ::test_call_seal_digest_deterministic_and_sensitive, ::test_malformed_call_rejected (6 parametrized malformed forms); Call exported from tikhon.syntax"
+    },
+    {
+      "criterion": "Unknown protocol rejected at validation",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_unknown_protocol_rejected, ::test_call_without_protocols_dir_uses_default_and_reports_missing; tests/test_coordinator.py::test_missing_protocol_rejected_before_run_creation (no run created, no events)"
+    },
+    {
+      "criterion": "Arity/target contract enforced: CALL args resolve like invocation args and exactly cover protocol INPUT leaf names; CALL targets must be a subset of the protocol RETURN refs",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_call_missing_argument_for_protocol_input_rejected, ::test_call_unknown_argument_rejected, ::test_call_duplicate_argument_rejected, ::test_call_argument_reference_must_resolve_like_invocation_args, ::test_call_target_outside_protocol_return_rejected, ::test_kb_ref_as_call_target_rejected"
+    },
+    {
+      "criterion": "Bounded recursion: direct and transitive self-calls rejected via dependency graph during validation; depth limit 8 enforced",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_direct_self_call_rejected, ::test_transitive_self_call_rejected (framing->inner->framing cycle), ::test_protocol_call_chain_beyond_depth_limit_rejected (9-protocol chain rejected at the a8->a9 edge), ::test_nested_protocol_chain_within_depth_limit_validates (legal nesting still validates)"
+    },
+    {
+      "criterion": "Coordinator executes a program calling a framing-like protocol: protocol steps run inline, ledger contains protocol tasks with text prefixed protocol.name:, invocation ids continue the parent sequence",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_program_calling_protocol_executes_with_protocol_tasks (task texts ['step.ask: DO define', 'protocol.framing: step.frame: DO define', ...]), ::test_protocol_invocation_ids_continue_parent_sequence (inv-1..inv-6 across the protocol boundary, full lifecycle per invocation, every event task-bound)"
+    },
+    {
+      "criterion": "Caller targets receive the protocol's RETURN values; protocol INPUT declarations bind from resolved CALL args",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_program_calling_protocol_executes_with_protocol_tasks (G.plan and V.analysis state nodes carry the protocol-produced values; protocol-internal E.context/ART.sources nodes exist); tests/test_syntax.py arity tests pin the INPUT-binding contract"
+    },
+    {
+      "criterion": "Events replay identically after reopen; run-level invariants preserved (every event binds task_id/invocation_id, RUN_FINISHED once)",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_protocol_call_events_replay_identically_after_reopen, ::test_protocol_call_run_audits_clean (tikhon audit_run returns ok); live CLI check: tikhon run call-demo.think succeeded 100% 6/6, tikhon audit OK"
+    },
+    {
+      "criterion": "A failing protocol step fails the caller's run through the standard atomic failure path",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_failing_protocol_step_fails_caller_atomically (FAILED on protocol.framing step.analyze at inv-5, RUN_FINISHED failed, 4 completed / 2 cancelled tasks, no OUT.brief committed, no false completion)"
+    },
+    {
+      "criterion": "Deterministic protocol loading documented; composite seal hashing not implemented (per issue)",
+      "passed": true,
+      "evidence": "tikhon.syntax.load_protocol/protocol_file_path docstrings and protocols/framing.think header comment state that a caller's seal composition changes when a protocol changes and callers must re-seal; loading itself is deterministic"
+    },
+    {
+      "criterion": "Full pytest suite passes; only allowed files touched; concurrent agent #9 work preserved",
+      "passed": true,
+      "evidence": "python3 -m pytest -q -> 397 passed (baseline 314; +26 from this issue, remainder from the concurrent issue-#9 agent, all green); git status shows only parser.py, model.py, syntax/__init__.py, coordinator.py, test_syntax.py, test_coordinator.py modified plus new protocols/ and demo/runs/issue-12-protocol-calls/; cli.py/registry/events.py/tasks.py/audit.py changes present in the tree belong to agent #9 and were not reverted"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The default protocols directory is protocols/ under the current working directory (repo root for CLI usage and pytest) rather than a git-anchored project root: Python cannot locate a repo root without extra machinery, and cwd matches how tikhon lint/seal/run are already invoked.",
+    "Protocol steps execute inline in the caller's shared state namespace (per the issue's chosen simplest-correct design): protocol-internal refs (its INPUT bindings and step targets) land in run state alongside caller refs, so a protocol whose internal refs collide with caller refs could overwrite them; the declared CALL targets remain the only static contract. Namespaced child state was deliberately not built.",
+    "CALL targets are pinned to a subset of the protocol RETURN refs by exact ref-string equality (the issue's 'simplest sound rule'), so caller targets cannot rename protocol outputs; positional or leaf-name renaming was considered and rejected as beyond the stated rule.",
+    "A protocol must end with RETURN (not STOP) and contain at least one invocation — a STOP-terminated protocol has no defined value to commit to the caller's targets, so validation rejects it with a clear message rather than propagating child stop states.",
+    "Nested protocol-call task texts carry only the immediate protocol name prefix (protocol.inner: step.deep: ...) rather than the full call chain; the issue specifies only 'text prefixed protocol.name:'."
+  ]
+}

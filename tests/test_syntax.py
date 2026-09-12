@@ -31,12 +31,14 @@ import dataclasses
 import pytest
 
 from tikhon.syntax import (
+    Call,
     DonePredicate,
     Invocation,
     ParseError,
     Program,
     Return,
     parse_program,
+    protocol_file_path,
     seal_digest,
     validate_program,
 )
@@ -565,3 +567,411 @@ RETURN ART.record
 """
     with pytest.raises(ParseError, match="must be one of the step's targets"):
         parse_program(source)
+
+
+# -- protocol calls: CALL protocol.name(...) -> targets (issue #12) ------
+
+
+def write_protocol(root, name, text):
+    protocols = root / "protocols"
+    protocols.mkdir(exist_ok=True)
+    path = protocols / f"{name}.think"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+FRAMING_PROTOCOL = """\
+PROGRAM framing VERSION 1.0
+
+INPUT
+  G.request = "frame the problem"
+  C.scope = "repository working tree"
+
+step.frame: DO define(request = G.request) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.context
+step.read: DO fetch(resource_refs = E.context) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "frame_analysis") -> V.analysis
+
+RETURN G.plan, E.context, ART.sources, V.analysis
+"""
+
+CALL_PROGRAM = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.request = "frame the kb issue"
+
+step.ask: DO define(request = G.request) -> G.probe
+CALL protocol.framing(request = G.probe, scope = "src/tikhon") -> G.plan, V.analysis
+step.wrap: DO summarize(source_refs = V.analysis, budget = 100) -> OUT.brief
+
+RETURN G.plan, V.analysis, OUT.brief
+"""
+
+INNER_PROTOCOL = """\
+PROGRAM inner VERSION 1.0
+
+INPUT
+  G.request = "x"
+  C.scope = "y"
+
+step.deep: DO define(request = G.request) -> E.deep1
+step.deeper: DO extract(artifact = E.deep1, schema = "deep") -> E.deep2
+
+RETURN E.deep1, E.deep2
+"""
+
+SELF_LOOP_PROTOCOL = """\
+PROGRAM loop VERSION 1.0
+
+INPUT
+  G.request = "x"
+  C.scope = "y"
+
+step.frame: DO define(request = G.request) -> G.plan
+CALL protocol.loop(request = G.request, scope = C.scope) -> E.context
+
+RETURN G.plan, E.context
+"""
+
+CALL_KNOWN_COMMANDS = {"define", "search", "fetch", "extract", "summarize"}
+
+
+def test_call_statement_parses_with_args_and_targets():
+    program = parse_program(CALL_PROGRAM)
+    call = program.statements[1]
+    assert isinstance(call, Call)
+    assert call.protocol == "protocol.framing"
+    assert [(arg.name, arg.value) for arg in call.args] == [
+        ("request", "G.probe"),
+        ("scope", "src/tikhon"),
+    ]
+    assert call.targets == ("G.plan", "V.analysis")
+
+
+def test_call_ast_node_is_frozen_dataclass():
+    call = parse_program(CALL_PROGRAM).statements[1]
+    assert dataclasses.is_dataclass(call)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        call.protocol = "protocol.other"
+
+
+def test_call_target_refs_become_available_for_later_steps(tmp_path):
+    write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
+    program = parse_program(CALL_PROGRAM)
+    assert (
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+        is True
+    )
+
+
+def test_call_seal_digest_deterministic_and_sensitive():
+    base = seal_digest(parse_program(CALL_PROGRAM))
+    assert seal_digest(parse_program(CALL_PROGRAM)) == base
+    retargeted = CALL_PROGRAM.replace(
+        "-> G.plan, V.analysis", "-> G.plan, E.context"
+    )
+    assert seal_digest(parse_program(retargeted)) != base
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "CALL framing(request = G.probe) -> G.plan",
+        "CALL protocol.(x = 1) -> G.plan",
+        "CALL protocol.Framing(x = 1) -> G.plan",
+        "CALL protocol.framing(request = G.probe)",
+        "CALL protocol.framing(request = G.probe) ->",
+        "CALL protocol.framing(request = G.probe) -> not.a-ref",
+    ],
+)
+def test_malformed_call_rejected(line):
+    source = CALL_PROGRAM.replace(
+        "CALL protocol.framing(request = G.probe, scope = \"src/tikhon\") -> G.plan, V.analysis",
+        line,
+    )
+    with pytest.raises(ParseError, match="CALL|target"):
+        parse_program(source)
+
+
+def test_done_after_call_rejected():
+    source = CALL_PROGRAM.replace(
+        "step.wrap: DO summarize(source_refs = V.analysis, budget = 100) -> OUT.brief",
+        "DONE V.analysis == 1\nstep.wrap: DO summarize(source_refs = V.analysis, budget = 100) -> OUT.brief",
+    )
+    with pytest.raises(ParseError, match="DONE must follow an invocation"):
+        parse_program(source)
+
+
+def test_unknown_protocol_rejected(tmp_path):
+    write_protocol(tmp_path, "other", FRAMING_PROTOCOL)
+    program = parse_program(CALL_PROGRAM)
+    with pytest.raises(ParseError, match="protocol protocol.framing not found"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_call_without_protocols_dir_uses_default_and_reports_missing(tmp_path):
+    program = parse_program(CALL_PROGRAM)
+    monkey_free_cwd = tmp_path / "cwd"
+    monkey_free_cwd.mkdir()
+    import os
+
+    old = os.getcwd()
+    os.chdir(monkey_free_cwd)
+    try:
+        with pytest.raises(ParseError, match="protocol protocol.framing not found"):
+            validate_program(program, known_commands=CALL_KNOWN_COMMANDS)
+    finally:
+        os.chdir(old)
+
+
+def test_call_target_outside_protocol_return_rejected(tmp_path):
+    write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
+    source = CALL_PROGRAM.replace(
+        "-> G.plan, V.analysis", "-> G.plan, E.ghost"
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="must be a subset of the protocol RETURN refs"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_call_missing_argument_for_protocol_input_rejected(tmp_path):
+    write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
+    source = CALL_PROGRAM.replace(
+        "CALL protocol.framing(request = G.probe, scope = \"src/tikhon\") -> G.plan, V.analysis",
+        "CALL protocol.framing(request = G.probe) -> G.plan, V.analysis",
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="missing arguments for protocol INPUT"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_call_unknown_argument_rejected(tmp_path):
+    write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
+    source = CALL_PROGRAM.replace(
+        "CALL protocol.framing(request = G.probe, scope = \"src/tikhon\")",
+        "CALL protocol.framing(request = G.probe, scope = \"s\", extra = 1)",
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="matching no protocol INPUT"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_call_duplicate_argument_rejected(tmp_path):
+    write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
+    source = CALL_PROGRAM.replace(
+        "CALL protocol.framing(request = G.probe, scope = \"src/tikhon\")",
+        "CALL protocol.framing(request = G.probe, request = G.probe, scope = \"s\")",
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="duplicate arguments"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_call_argument_reference_must_resolve_like_invocation_args(tmp_path):
+    write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
+    source = CALL_PROGRAM.replace(
+        "request = G.probe", "request = G.ghost"
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match=r"G\.ghost used before definition"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_protocol_file_must_parse(tmp_path):
+    write_protocol(tmp_path, "framing", "PROGRAM broken VERSION 1.0\nstep.x DO nope\n")
+    program = parse_program(CALL_PROGRAM)
+    with pytest.raises(ParseError, match="protocol protocol.framing failed to parse"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_protocol_must_end_with_return(tmp_path):
+    write_protocol(
+        tmp_path,
+        "framing",
+        FRAMING_PROTOCOL.replace(
+            "RETURN G.plan, E.context, ART.sources, V.analysis",
+            "STOP unresolved(V.analysis)",
+        ),
+    )
+    program = parse_program(CALL_PROGRAM)
+    with pytest.raises(ParseError, match="must end with RETURN"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_protocol_with_unknown_command_rejected(tmp_path):
+    write_protocol(
+        tmp_path,
+        "framing",
+        FRAMING_PROTOCOL.replace("DO search(", "DO teleport("),
+    )
+    program = parse_program(CALL_PROGRAM)
+    with pytest.raises(ParseError, match="protocol protocol.framing is invalid"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_direct_self_call_rejected(tmp_path):
+    write_protocol(
+        tmp_path,
+        "loop",
+        SELF_LOOP_PROTOCOL,
+    )
+    source = CALL_PROGRAM.replace(
+        "CALL protocol.framing(request = G.probe, scope = \"src/tikhon\") -> G.plan, V.analysis",
+        "CALL protocol.loop(request = G.probe, scope = \"src/tikhon\") -> G.plan, E.context",
+    ).replace(
+        "RETURN G.plan, V.analysis, OUT.brief",
+        "RETURN G.plan, E.context, OUT.brief",
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="calls itself directly"):
+        validate_program(
+            program,
+            known_commands={"define"},
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_transitive_self_call_rejected(tmp_path):
+    # framing -> inner -> framing: the cycle closes transitively.
+    write_protocol(tmp_path, "framing", FRAMING_PROTOCOL.replace(
+        "step.locate: DO search(query = G.plan, scope = C.scope) -> E.context",
+        "step.locate: DO search(query = G.plan, scope = C.scope) -> E.context\n"
+        "CALL protocol.inner(request = G.request, scope = C.scope) -> E.deep1, E.deep2",
+    ))
+    write_protocol(tmp_path, "inner", INNER_PROTOCOL.replace(
+        "step.deeper: DO extract(artifact = E.deep1, schema = \"deep\") -> E.deep2",
+        "step.deeper: DO extract(artifact = E.deep1, schema = \"deep\") -> E.deep2\n"
+        "CALL protocol.framing(request = G.request, scope = C.scope) -> G.plan, E.context",
+    ))
+    program = parse_program(CALL_PROGRAM)
+    with pytest.raises(ParseError, match="calls itself directly or transitively"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_nested_protocol_chain_within_depth_limit_validates(tmp_path):
+    # framing -> inner (one nested level) is allowed and validates cleanly.
+    write_protocol(tmp_path, "framing", FRAMING_PROTOCOL.replace(
+        "step.locate: DO search(query = G.plan, scope = C.scope) -> E.context",
+        "step.locate: DO search(query = G.plan, scope = C.scope) -> E.context\n"
+        "CALL protocol.inner(request = G.request, scope = C.scope) -> E.deep1, E.deep2",
+    ))
+    write_protocol(tmp_path, "inner", INNER_PROTOCOL)
+    program = parse_program(CALL_PROGRAM)
+    assert (
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+        is True
+    )
+
+
+def test_protocol_call_chain_beyond_depth_limit_rejected(tmp_path):
+    # Chain of 9 protocols a1 -> ... -> a9: the depth limit of 8 rejects
+    # the a8 -> a9 edge (the caller program itself is not a protocol level).
+    for index in range(1, 10):
+        if index < 9:
+            body = (
+                f"PROGRAM a{index} VERSION 1.0\n\n"
+                "INPUT\n"
+                '  G.request = "x"\n'
+                '  C.scope = "y"\n\n'
+                "step.frame: DO define(request = G.request) -> G.plan\n"
+                f"CALL protocol.a{index + 1}(request = G.request, scope = C.scope)"
+                " -> E.child\n\n"
+                "RETURN G.plan, E.child\n"
+            )
+        else:
+            body = (
+                f"PROGRAM a{index} VERSION 1.0\n\n"
+                "INPUT\n"
+                '  G.request = "x"\n'
+                '  C.scope = "y"\n\n'
+                "step.frame: DO define(request = G.request) -> E.child\n\n"
+                "RETURN E.child\n"
+            )
+        write_protocol(tmp_path, f"a{index}", body)
+    source = CALL_PROGRAM.replace(
+        "CALL protocol.framing(request = G.probe, scope = \"src/tikhon\") -> G.plan, V.analysis",
+        "CALL protocol.a1(request = G.probe, scope = \"src/tikhon\") -> G.plan, E.child",
+    ).replace(
+        "RETURN G.plan, V.analysis, OUT.brief",
+        "RETURN G.plan, E.child, OUT.brief",
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="depth exceeds limit 8"):
+        validate_program(
+            program,
+            known_commands={"define"},
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_kb_ref_as_call_target_rejected(tmp_path):
+    write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
+    source = CALL_PROGRAM.replace(
+        "-> G.plan, V.analysis", "-> KB.note"
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="cannot be a CALL target"):
+        validate_program(
+            program,
+            known_commands=CALL_KNOWN_COMMANDS,
+            protocols_dir=tmp_path / "protocols",
+        )
+
+
+def test_protocol_file_path_mapping():
+    assert protocol_file_path("protocol.framing").name == "framing.think"
+    assert protocol_file_path("protocol.ops.framing").name == "ops.framing.think"
+    assert protocol_file_path("protocol.framing", "custom").as_posix() == (
+        "custom/framing.think"
+    )
+    with pytest.raises(ParseError, match="must start with"):
+        protocol_file_path("framing")

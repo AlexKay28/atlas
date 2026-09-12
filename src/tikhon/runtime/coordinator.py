@@ -8,14 +8,16 @@ completion.
 
 from __future__ import annotations
 
+import dataclasses
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from tikhon.runtime.events import EventStore, EventType, _Record
 from tikhon.runtime.tasks import TaskLedger, TaskLedgerError
 from tikhon.state import StateDelta
-from tikhon.syntax import validate_program
-from tikhon.syntax.model import Invocation, Program, Return, Stop
+from tikhon.syntax import load_protocol, validate_program
+from tikhon.syntax.model import Argument, Call, Declaration, Invocation, Program, Return, Stop
 
 if TYPE_CHECKING:
     from tikhon.memory import KnowledgeBase
@@ -28,7 +30,29 @@ __all__ = [
     "map_results_to_targets",
 ]
 
+
+@dataclasses.dataclass(frozen=True)
+class _PlanEntry:
+    """One flattened execution-plan entry (issue #12 protocol calls).
+
+    ``task_prefix`` prefixes the ledger task text (``"protocol.name: "`` for
+    steps expanded from a protocol, ``""`` for the caller's own steps).
+    ``binds`` carry ``(protocol_name, call_args, declarations)`` triples
+    applied in order before the entry's own arguments resolve — the first
+    entry of a protocol expansion binds the protocol's INPUT declarations
+    from the resolved CALL arguments.  ``finalizes`` carry
+    ``(protocol_name, caller_targets)`` pairs applied in order after the
+    entry's own targets commit — the last entry of a protocol expansion
+    commits the protocol's RETURN refs to the caller's CALL targets.
+    """
+
+    invocation: Invocation
+    task_prefix: str = ""
+    binds: tuple[tuple[str, tuple[Argument, ...], tuple[Declaration, ...]], ...] = ()
+    finalizes: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
 _BUILTIN_REGISTRY_DIGEST: str | None = None
+_EFFECTFUL_COMMANDS: frozenset[str] | None = None
 
 
 def _builtin_registry_digest() -> str:
@@ -39,6 +63,28 @@ def _builtin_registry_digest() -> str:
 
         _BUILTIN_REGISTRY_DIGEST = registry_digest(builtin_registry())
     return _BUILTIN_REGISTRY_DIGEST
+
+
+def _effectful_commands() -> frozenset[str]:
+    """Names of builtin commands whose effect class is a durable write.
+
+    Resolved from the builtin registry (the contract source of truth), once
+    per process.  Commands unknown to the builtin registry (custom worker
+    handlers) are never treated as effectful.
+    """
+    global _EFFECTFUL_COMMANDS
+    if _EFFECTFUL_COMMANDS is None:
+        from tikhon.registry.enums import EffectClass
+        from tikhon.registry.registry import builtin_registry
+
+        durable = {EffectClass.REVERSIBLE_WRITE, EffectClass.IRREVERSIBLE_WRITE}
+        registry = builtin_registry()
+        _EFFECTFUL_COMMANDS = frozenset(
+            name
+            for name in registry.names()
+            if registry.resolve(name).effect_class in durable
+        )
+    return _EFFECTFUL_COMMANDS
 
 
 def _uses_kb_refs(program: Program) -> bool:
@@ -176,17 +222,32 @@ class DeterministicWorker:
 
 
 class SequentialCoordinator:
-    """Drives a tikhon program sequentially through an EventStore."""
+    """Drives a tikhon program sequentially through an EventStore.
+
+    ``workspace_root`` is the WorkspacePolicy hook (issue #9): when set,
+    every dispatch of an effectful command (durable-write class per the
+    builtin registry, e.g. ``edit``) injects a resolved ``_workspace_root``
+    kwarg so handlers can sandbox their writes; when ``None``, effectful
+    commands still dispatch but no root is provided and handlers decide
+    whether that is acceptable.
+    """
 
     def __init__(
         self,
         store: EventStore,
         worker: DeterministicWorker,
         memory: "KnowledgeBase | None" = None,
+        workspace_root: str | None = None,
+        protocols_dir: str | Path | None = None,
     ):
         self.store = store
         self.worker = worker
         self.memory = memory
+        self.workspace_root = workspace_root
+        # Issue #12: directory holding sealed protocol files.  ``None``
+        # means the default ``protocols/`` under the current working
+        # directory (resolved lazily, only when a program CALLs a protocol).
+        self.protocols_dir = protocols_dir
 
     def _resolve_kb_ref(self, ref: str) -> Any:
         """Resolve a ``KB.<name>`` reference from the knowledge base."""
@@ -201,8 +262,130 @@ class SequentialCoordinator:
             raise ValueError(f"KB key {key!r} not found (reference {ref})")
         return self.memory.get(key)
 
+    def _resolve_arg_value(self, value: Any, values: Mapping[str, Any]) -> Any:
+        """Resolve one raw argument value against run state (issue #12).
+
+        Same resolution rules as invocation arguments: a bare typed ref
+        resolves from ``values``, a ``KB.*`` ref from the knowledge base,
+        reference lists resolve item-wise, literals pass through.
+        """
+        if isinstance(value, str) and value in values:
+            return values[value]
+        if isinstance(value, str) and value.startswith("KB."):
+            return self._resolve_kb_ref(value)
+        if isinstance(value, list):
+            return [
+                values[item] if isinstance(item, str) and item in values
+                else self._resolve_kb_ref(item)
+                if isinstance(item, str) and item.startswith("KB.")
+                else item
+                for item in value
+            ]
+        return value
+
+    def _bind_protocol_inputs(
+        self,
+        protocol_name: str,
+        call_args: tuple[Argument, ...],
+        declarations: tuple[Declaration, ...],
+        values: dict[str, Any],
+    ) -> None:
+        """Bind a protocol's INPUT declarations from resolved CALL args.
+
+        Binding mirrors program declarations: each INPUT ref is written
+        into the shared run-state ``values`` mapping, keyed by its full
+        typed reference, using the CALL argument whose name matches the
+        declaration's leaf segment (validation guarantees an exact cover).
+        """
+        resolved: dict[str, Any] = {}
+        for arg in call_args:
+            resolved[arg.name] = self._resolve_arg_value(arg.value, values)
+        for declaration in declarations:
+            leaf = declaration.ref.split(".")[-1]
+            values[declaration.ref] = resolved[leaf]
+
+    @staticmethod
+    def _apply_call_finalizes(
+        finalizes: tuple[tuple[str, tuple[str, ...]], ...],
+        target_values: Mapping[str, Any],
+        values: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Commit protocol RETURN refs to the caller's CALL targets.
+
+        Returns the extra state nodes to merge into the owning step's
+        SUCCEEDED delta.  Validation pins CALL targets to a subset of the
+        protocol's RETURN refs, so each target is committed from the value
+        the protocol produced under the same reference (this step's own
+        ``target_values`` first, then earlier run state); a missing ref
+        raises and fails the run through the standard atomic path.
+        """
+        nodes: list[dict[str, Any]] = []
+        seen = set(target_values)
+        for protocol_name, caller_targets in finalizes:
+            for target in caller_targets:
+                if target in target_values:
+                    value = target_values[target]
+                elif target in values:
+                    value = values[target]
+                else:
+                    raise ValueError(
+                        f"protocol {protocol_name} did not commit RETURN"
+                        f" reference {target}"
+                    )
+                if target not in seen:
+                    nodes.append({"id": target, "value": value})
+                    seen.add(target)
+        return nodes
+
+    def _build_plan(self, program: Program) -> list[_PlanEntry]:
+        """Flatten the program into an execution plan (issue #12).
+
+        Caller invocations keep their positions; each CALL expands the
+        protocol's invocations inline at the call site with the protocol
+        name prefixed onto their task texts and invocation ids continuing
+        the parent sequence.  The expansion's first entry binds the
+        protocol's INPUT declarations; the last entry commits the
+        protocol's RETURN refs to the CALL targets.
+        """
+        entries: list[_PlanEntry] = []
+
+        def walk(statements: tuple[object, ...], prefix: str) -> None:
+            for statement in statements:
+                if isinstance(statement, Invocation):
+                    entries.append(_PlanEntry(statement, prefix))
+                elif isinstance(statement, Call):
+                    protocol = load_protocol(statement.protocol, self.protocols_dir)
+                    before = len(entries)
+                    walk(protocol.statements, f"{statement.protocol}: ")
+                    if len(entries) == before:
+                        # validate_program rejects empty protocols before
+                        # execution; this is a defensive guard only.
+                        raise ValueError(
+                            f"protocol {statement.protocol} contains no"
+                            " invocations to execute"
+                        )
+                    first = entries[before]
+                    entries[before] = dataclasses.replace(
+                        first,
+                        binds=first.binds
+                        + ((statement.protocol, statement.args, protocol.declarations),),
+                    )
+                    last = entries[-1]
+                    entries[-1] = dataclasses.replace(
+                        last,
+                        finalizes=last.finalizes
+                        + ((statement.protocol, statement.targets),),
+                    )
+
+        walk(program.statements, "")
+        return entries
+
     def execute(self, program: Program, run_id: str = "run-1") -> dict[str, Any]:
-        validate_program(program, known_commands=self.worker.commands)
+        validate_program(
+            program,
+            known_commands=self.worker.commands,
+            protocols_dir=self.protocols_dir,
+        )
         if self.memory is None and _uses_kb_refs(program):
             raise ValueError(
                 "program uses KB.* references but no knowledge base was"
@@ -232,19 +415,25 @@ class SequentialCoordinator:
         for decl in program.declarations:
             values[decl.ref] = decl.value
 
-        invocations: list[Invocation] = []
-        for statement in program.statements:
-            if not isinstance(statement, Invocation):
-                break
-            invocations.append(statement)
+        # Issue #12: flatten caller invocations and protocol-call
+        # expansions into one sequential plan.  Protocol steps execute
+        # inline through the same per-invocation loop below: their tasks
+        # are created in the same up-front batch with the protocol name
+        # prefixed onto the task text, and their invocation ids continue
+        # the parent sequence.
+        plan: list[_PlanEntry] = self._build_plan(program)
 
         # -- batch all task-creation records --------------------------
         statement_to_task: dict[int, str] = {}
         create_records: list[_Record] = []
         create_ledger = self.store.task_ledger(run_id)
-        for idx, statement in enumerate(invocations):
+        for idx, entry in enumerate(plan):
+            statement = entry.invocation
             task = create_ledger.create_task(
-                text=f"{statement.step_id}: DO {statement.command}",
+                text=(
+                    f"{entry.task_prefix}{statement.step_id}:"
+                    f" DO {statement.command}"
+                ),
                 creator="coordinator",
             )
             task_id = task.id
@@ -324,7 +513,7 @@ class SequentialCoordinator:
                     },
                     store=self.store,
                 )
-                for pending_idx in range(idx + 1, len(invocations))
+                for pending_idx in range(idx + 1, len(plan))
             )
             records.append(_Record(
                 event_type=EventType.RUN_FINISHED,
@@ -336,7 +525,8 @@ class SequentialCoordinator:
         failed = False
         error_msg: str | None = None
 
-        for idx, statement in enumerate(invocations):
+        for idx, entry in enumerate(plan):
+            statement = entry.invocation
             invocation_id = f"inv-{idx + 1}"
             task_id = statement_to_task[idx]
 
@@ -360,6 +550,25 @@ class SequentialCoordinator:
                     store=self.store,
                 ),
             ])
+
+            # Issue #12: entering a protocol expansion binds the protocol's
+            # INPUT declarations from the resolved CALL args (like program
+            # declarations) before the first protocol step resolves its own
+            # arguments.  Binding failures take the standard atomic path.
+            for protocol_name, call_args, declarations in entry.binds:
+                try:
+                    self._bind_protocol_inputs(
+                        protocol_name, call_args, declarations, values
+                    )
+                except Exception as exc:
+                    failed = True
+                    error_msg = f"protocol {protocol_name}: {exc}"
+                    finish_failed_invocation(
+                        idx, statement, invocation_id, task_id, error_msg
+                    )
+                    break
+            if failed:
+                break
 
             try:
                 resolved_kwargs: dict[str, Any] = {}
@@ -394,13 +603,24 @@ class SequentialCoordinator:
                 )
                 break
 
+            if (
+                self.workspace_root is not None
+                and statement.command in _effectful_commands()
+            ):
+                # WorkspacePolicy: effectful dispatches learn the declared
+                # workspace root so handlers can sandbox their writes.
+                resolved_kwargs["_workspace_root"] = self.workspace_root
+
             self.store.append(
                 run_id,
                 EventType.INVOCATION_DISPATCHED,
                 instruction_id=statement.step_id,
                 invocation_id=invocation_id,
                 task_id=task_id,
-                payload={"args": resolved_kwargs},
+                payload={
+                    "args": resolved_kwargs,
+                    "idempotency_key": f"{run_id}:{invocation_id}",
+                },
             )
 
             try:
@@ -461,6 +681,22 @@ class SequentialCoordinator:
                     )
                     break
 
+            # Issue #12: leaving a protocol expansion commits the protocol's
+            # RETURN refs to the caller's CALL targets.  Applied before
+            # VALIDATION_PASSED so a commit failure keeps the truthful
+            # event order (no VALIDATION_PASSED before FAILED).
+            try:
+                finalize_nodes = self._apply_call_finalizes(
+                    entry.finalizes, target_values, values
+                )
+            except Exception as exc:
+                failed = True
+                error_msg = str(exc)
+                finish_failed_invocation(
+                    idx, statement, invocation_id, task_id, error_msg
+                )
+                break
+
             self.store.append(
                 run_id,
                 EventType.VALIDATION_PASSED,
@@ -474,6 +710,7 @@ class SequentialCoordinator:
             for target, val in target_values.items():
                 values[target] = val
                 add_nodes.append({"id": target, "value": val})
+            add_nodes.extend(finalize_nodes)
 
             delta = StateDelta(add_nodes=tuple(add_nodes))
 

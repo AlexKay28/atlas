@@ -1,0 +1,15 @@
+# Live demo artifact (NOT the sealed protocol program): exercises the
+# implemented CALL grammar end to end through the tikhon CLI.
+# Sealed after implementation; the protocol program above (program.think)
+# remains the pre-edit seal of record.
+
+PROGRAM call_demo VERSION 1.0
+
+INPUT
+    G.request = "frame the protocol-calls issue"
+
+step.ask: DO define(request = G.request) -> G.probe
+CALL protocol.framing(request = G.probe, scope = "src/tikhon") -> G.plan, V.analysis
+step.wrap: DO summarize(source_refs = V.analysis, budget = 100) -> OUT.brief
+
+RETURN G.plan, V.analysis, OUT.brief

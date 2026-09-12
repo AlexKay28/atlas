@@ -1147,3 +1147,355 @@ RETURN OUT.total
 
         assert result["status"] == "succeeded"
         assert result["outputs"] == {"OUT.total": 12}
+
+
+# --- idempotency keys and workspace policy (issue #9) -------------------------
+
+
+def dispatched_payloads(store, run_id):
+    return [
+        event.payload
+        for event in store.events(run_id)
+        if event.event_type is EventType.INVOCATION_DISPATCHED
+    ]
+
+
+def test_every_dispatched_payload_carries_the_idempotency_key(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        run_canonical(store, run_id="run-1")
+
+        payloads = dispatched_payloads(store, "run-1")
+        assert len(payloads) == 2
+        for index, payload in enumerate(payloads, start=1):
+            assert payload["idempotency_key"] == f"run-1:inv-{index}"
+
+
+def test_idempotency_key_uses_the_explicit_run_id(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        run_canonical(store, run_id="issue-09-run-7")
+
+        payloads = dispatched_payloads(store, "issue-09-run-7")
+        for index, payload in enumerate(payloads, start=1):
+            assert payload["idempotency_key"] == f"issue-09-run-7:inv-{index}"
+
+
+def test_failed_invocation_still_dispatched_with_idempotency_key(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        run_canonical(
+            store, run_id="run-boom", worker=make_worker(calculate=broken_calculate_handler)
+        )
+
+        payloads = dispatched_payloads(store, "run-boom")
+        assert len(payloads) == 2
+        assert payloads[1]["idempotency_key"] == "run-boom:inv-2"
+
+
+def test_workspace_root_injected_only_for_effectful_commands(tmp_path):
+    captured: dict[str, Any] = {}
+
+    def edit_handler(**kwargs):
+        captured.update(kwargs)
+        return "scratch/edited.txt"
+
+    program = parse_program(
+        """\
+PROGRAM workspace VERSION 1.0
+INPUT
+    G.note = "hello"
+step.write: DO edit(path = "scratch/edited.txt", content = G.note) -> E.written
+step.echo: DO define(goal = G.note) -> G.goal
+RETURN E.written, G.goal
+"""
+    )
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(handlers={"edit": edit_handler, "define": define_handler})
+        coordinator = SequentialCoordinator(
+            store=store, worker=worker, workspace_root=str(tmp_path / "ws")
+        )
+        result = coordinator.execute(program, run_id="run-ws")
+
+        assert result["status"] == "succeeded"
+        assert captured["_workspace_root"] == str(tmp_path / "ws")
+        payloads = dispatched_payloads(store, "run-ws")
+        assert payloads[0]["args"]["_workspace_root"] == str(tmp_path / "ws")
+        assert "_workspace_root" not in payloads[1]["args"]
+
+
+def test_no_workspace_root_means_no_injection(tmp_path):
+    captured: dict[str, Any] = {}
+
+    def edit_handler(**kwargs):
+        captured.update(kwargs)
+        return "scratch/edited.txt"
+
+    program = parse_program(
+        """\
+PROGRAM workspace VERSION 1.0
+INPUT
+    G.note = "hello"
+step.write: DO edit(path = "scratch/edited.txt", content = G.note) -> E.written
+RETURN E.written
+"""
+    )
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(handlers={"edit": edit_handler})
+        result = SequentialCoordinator(store=store, worker=worker).execute(
+            program, run_id="run-nows"
+        )
+
+        assert result["status"] == "succeeded"
+        assert "_workspace_root" not in captured
+
+
+# -- protocol calls (issue #12): inline expansion of sealed protocols -----
+
+
+def write_test_protocol(root, name, text):
+    protocols = root / "protocols"
+    protocols.mkdir(exist_ok=True)
+    path = protocols / f"{name}.think"
+    path.write_text(text, encoding="utf-8")
+    return protocols
+
+
+FRAMING_TEST_PROTOCOL = """\
+PROGRAM framing VERSION 1.0
+
+INPUT
+    G.request = "frame the problem"
+    C.scope = "repository working tree"
+
+step.frame: DO define(request = G.request) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.context
+step.read: DO fetch(resource_refs = E.context) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "frame_analysis") -> V.analysis
+
+RETURN G.plan, E.context, ART.sources, V.analysis
+"""
+
+CALLER_TEST_PROGRAM = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+    G.request = "frame the kb issue"
+
+step.ask: DO define(request = G.request) -> G.probe
+CALL protocol.framing(request = G.probe, scope = "src/tikhon") -> G.plan, V.analysis
+step.wrap: DO summarize(source_refs = V.analysis, budget = 100) -> OUT.brief
+
+RETURN G.plan, V.analysis, OUT.brief
+"""
+
+PROTOCOL_TEST_HANDLERS = {
+    "define": lambda request: {"echo": request},
+    "search": lambda query, scope: [f"hit:{query}:{scope}"],
+    "fetch": lambda resource_refs: {"sources": resource_refs},
+    "extract": lambda artifact, schema: {"analysis": artifact, "schema": schema},
+    "summarize": lambda source_refs, budget: f"brief of {source_refs} ({budget})",
+}
+
+
+def make_protocol_worker(**overrides):
+    handlers = dict(PROTOCOL_TEST_HANDLERS)
+    handlers.update(overrides)
+    return DeterministicWorker(handlers=handlers)
+
+
+def test_program_calling_protocol_executes_with_protocol_tasks(tmp_path):
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        coordinator = SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        )
+        result = coordinator.execute(program, run_id="run-call")
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"]["G.plan"] == {"echo": {"echo": "frame the kb issue"}}
+        assert result["outputs"]["OUT.brief"].startswith("brief of")
+
+        state = store.project_state("run-call")
+        # Protocol RETURN values landed on the caller's CALL targets.
+        assert state["nodes"]["G.plan"]["value"] == {"echo": {"echo": "frame the kb issue"}}
+        assert state["nodes"]["V.analysis"]["value"]["schema"] == "frame_analysis"
+        # Protocol-internal state nodes exist (inline execution).
+        assert "E.context" in state["nodes"]
+        assert "ART.sources" in state["nodes"]
+
+        ledger = store.task_ledger("run-call")
+        texts = [task.text for task in ledger.tasks.values()]
+        assert texts == [
+            "step.ask: DO define",
+            "protocol.framing: step.frame: DO define",
+            "protocol.framing: step.locate: DO search",
+            "protocol.framing: step.read: DO fetch",
+            "protocol.framing: step.analyze: DO extract",
+            "step.wrap: DO summarize",
+        ]
+        profile = ledger.profile()
+        assert profile["counts"]["total"] == 6
+        assert profile["counts"]["completed"] == 6
+        assert profile["percent_complete"] == 100.0
+
+
+def test_protocol_invocation_ids_continue_parent_sequence(tmp_path):
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(program, run_id="run-call")
+
+        history = store.events("run-call")
+        grouped = events_by_invocation(history)
+        # One invocation per plan entry; ids continue across the protocol
+        # boundary instead of restarting a child namespace.
+        assert sorted(grouped, key=lambda name: int(name.split("-")[1])) == [
+            "inv-1", "inv-2", "inv-3", "inv-4", "inv-5", "inv-6",
+        ]
+        instructions = [
+            event.instruction_id
+            for event in history
+            if event.event_type is EventType.INVOCATION_READY
+        ]
+        assert instructions == [
+            "step.ask",
+            "step.frame",
+            "step.locate",
+            "step.read",
+            "step.analyze",
+            "step.wrap",
+        ]
+        for events in grouped.values():
+            assert tuple(event.event_type for event in events) == LIFECYCLE
+            assert all(event.task_id for event in events)
+
+
+def test_protocol_call_events_replay_identically_after_reopen(tmp_path):
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
+    db = tmp_path / "events.db"
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(db) as store:
+        result = SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(program, run_id="run-call")
+        assert result["status"] == "succeeded"
+        state_before = store.project_state("run-call")
+        ledger_before = store.task_ledger("run-call")
+        tasks_before = ledger_before.tasks
+        profile_before = ledger_before.profile()
+
+    reopened = EventStore(db)
+    try:
+        assert reopened.project_state("run-call") == state_before
+        ledger_after = reopened.task_ledger("run-call")
+        assert ledger_after.tasks == tasks_before
+        assert ledger_after.profile() == profile_before
+    finally:
+        reopened.close()
+
+
+def test_protocol_call_run_audits_clean(tmp_path):
+    from tikhon.audit import audit_run
+
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(program, run_id="run-call")
+
+        report = audit_run(store, "run-call")
+        assert report.ok, [finding.to_dict() for finding in report.findings]
+
+
+def test_failing_protocol_step_fails_caller_atomically(tmp_path):
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
+
+    def broken_extract(artifact, schema):
+        raise RuntimeError("protocol boom")
+
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        worker = make_protocol_worker(extract=broken_extract)
+        result = SequentialCoordinator(
+            store=store, worker=worker, protocols_dir=protocols
+        ).execute(program, run_id="run-fail")
+
+        assert result["status"] == "failed"
+        assert "protocol boom" in result["error"]
+        assert result["outputs"] == {}
+
+        history = store.events("run-fail")
+        assert history[-1].event_type is EventType.RUN_FINISHED
+        assert history[-1].payload["status"] == "failed"
+        failed = [event for event in history if event.event_type is EventType.FAILED]
+        assert len(failed) == 1
+        assert failed[0].instruction_id == "step.analyze"
+        assert failed[0].invocation_id == "inv-5"
+
+        ledger = store.task_ledger("run-fail")
+        profile = ledger.profile()
+        assert profile["counts"]["completed"] == 4
+        assert profile["counts"]["cancelled"] == 2
+        assert profile["counts"]["pending"] == 0
+        assert profile["counts"]["in_progress"] == 0
+        cancelled_texts = {
+            task.text for task in ledger.tasks.values()
+            if task.status is TaskStatus.CANCELLED
+        }
+        # The failing protocol task and the unreached caller step cancel
+        # together through the standard atomic failure path.
+        assert "protocol.framing: step.analyze: DO extract" in cancelled_texts
+        assert "step.wrap: DO summarize" in cancelled_texts
+
+        state = store.project_state("run-fail")
+        assert "OUT.brief" not in state["nodes"]
+
+
+def test_missing_protocol_rejected_before_run_creation(tmp_path):
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        coordinator = SequentialCoordinator(
+            store=store, worker=make_protocol_worker(),
+            protocols_dir=tmp_path / "protocols",
+        )
+        with pytest.raises(ParseError, match="protocol protocol.framing not found"):
+            coordinator.execute(program, run_id="run-x")
+        with pytest.raises(KeyError):
+            store.run("run-x")
+        assert store.events("run-x") == ()
+
+
+def test_nested_protocol_call_executes(tmp_path):
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL.replace(
+        "step.read: DO fetch(resource_refs = E.context) -> ART.sources",
+        "step.read: DO fetch(resource_refs = E.context) -> ART.sources\n"
+        "CALL protocol.inner(request = G.request, scope = C.scope) -> E.deep1, E.deep2",
+    ))
+    write_test_protocol(tmp_path, "inner", """\
+PROGRAM inner VERSION 1.0
+
+INPUT
+    G.request = "x"
+    C.scope = "y"
+
+step.deep: DO define(request = G.request) -> E.deep1
+step.deeper: DO extract(artifact = E.deep1, schema = "deep") -> E.deep2
+
+RETURN E.deep1, E.deep2
+""")
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(program, run_id="run-nested")
+
+        assert result["status"] == "succeeded"
+        texts = [
+            task.text for task in store.task_ledger("run-nested").tasks.values()
+        ]
+        assert "protocol.inner: step.deep: DO define" in texts
+        assert "protocol.inner: step.deeper: DO extract" in texts
+        state = store.project_state("run-nested")
+        assert state["nodes"]["E.deep2"]["value"]["schema"] == "deep"

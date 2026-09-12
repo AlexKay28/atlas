@@ -6,9 +6,10 @@ import dataclasses
 import hashlib
 import json
 import re
+from pathlib import Path
 from typing import Any, Iterable
 
-from .model import Argument, Declaration, DonePredicate, Invocation, Program, Return, Stop
+from .model import Argument, Call, Declaration, DonePredicate, Invocation, Program, Return, Stop
 
 _NAME = r"[a-z][a-z0-9_]*"
 # Program header names allow hyphens after the first character (issue #15).
@@ -27,8 +28,20 @@ _STEP_RE = re.compile(
 _STOP_RE = re.compile(
     rf"^STOP\s+(?P<kind>{_NAME})\((?P<ref>{_REF_PATTERN})?\)$"
 )
+# Protocol call (issue #12): CALL protocol.<segments>(args) -> targets.
+# The "protocol." prefix is mandatory (docs/spec/01-language-and-state.md:
+# protocol = "protocol.", name); the remaining dot-separated segments are
+# the protocol file stem under the protocols directory.
+_CALL_RE = re.compile(
+    rf"^CALL\s+(?P<protocol>protocol\.{_NAME}(?:\.{_NAME})*)"
+    rf"\((?P<args>.*)\)\s*->\s*(?P<targets>.+)$"
+)
+_PROTOCOL_PREFIX = "protocol."
+# Bounded recursion (issue #12): at most 8 nested protocol-call levels.
+_MAX_PROTOCOL_DEPTH = 8
+_PROTOCOLS_DIR_DEFAULT = "protocols"
 _UNSUPPORTED = frozenset(
-    {"IF", "FIRST", "SCATTER", "GATHER", "LOOP", "TRY", "CALL", "AWAIT", "APPROVE"}
+    {"IF", "FIRST", "SCATTER", "GATHER", "LOOP", "TRY", "AWAIT", "APPROVE"}
 )
 _STOP_KINDS = frozenset({"completed", "failed", "blocked", "denied", "cancelled", "unresolved"})
 _DONE_OPS = frozenset({"equals", "in", "matched"})
@@ -127,6 +140,17 @@ def parse_program(text: str) -> Program:
                 raise ParseError("malformed STOP", line_no, 1)
             statements.append(Stop(stop.group("kind"), stop.group("ref")))
             terminal_seen = True
+            continue
+
+        if re.match(r"CALL\b", line):
+            call = _CALL_RE.fullmatch(line)
+            if call is None:
+                raise ParseError("malformed CALL", line_no, 1)
+            args = tuple(_parse_argument(item, line_no) for item in _split_top_level(call.group("args")))
+            targets = _parse_refs(call.group("targets"), line_no, "target")
+            statements.append(
+                Call(call.group("protocol"), args, targets, line_no)
+            )
             continue
 
         step = _STEP_RE.fullmatch(line)
@@ -425,8 +449,22 @@ def _split_top_level(text: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
-def validate_program(program: Program, known_commands: Iterable[str] | None = None) -> bool:
-    """Validate names, reference ordering, commands, and terminal structure."""
+def validate_program(
+    program: Program,
+    known_commands: Iterable[str] | None = None,
+    protocols_dir: str | Path | None = None,
+    _protocol_stack: tuple[str, ...] = (),
+) -> bool:
+    """Validate names, reference ordering, commands, and terminal structure.
+
+    Programs containing CALL statements additionally validate every
+    referenced protocol (issue #12): the protocol file must exist under
+    ``protocols_dir`` (default ``protocols/``), parse, and itself validate;
+    CALL arguments must resolve like invocation arguments and exactly cover
+    the protocol's INPUT leaf names; CALL targets must be a subset of the
+    protocol's RETURN refs; and protocols must not call themselves directly
+    or transitively, with nested protocol-call chains bounded at depth 8.
+    """
     if not isinstance(program, Program):
         raise ParseError("expected Program")
     known = set(known_commands) if known_commands is not None else None
@@ -491,6 +529,32 @@ def validate_program(program: Program, known_commands: Iterable[str] | None = No
                         statement.done.line,
                         5,
                     )
+        elif isinstance(statement, Call):
+            for argument in statement.args:
+                for ref in _references_in(argument.value):
+                    # KB.* refs resolve from the KnowledgeBase at dispatch
+                    # time, so they need no run-local definition.
+                    if ref.startswith("KB."):
+                        continue
+                    if ref not in available:
+                        raise ParseError(
+                            f"reference {ref} used before definition",
+                            argument.line,
+                            1,
+                        )
+            for target in statement.targets:
+                if target.startswith("KB."):
+                    raise ParseError(
+                        f"KB reference {target} cannot be a CALL target:"
+                        " semantic memory is written with the remember command,"
+                        " not produced as a state node"
+                    )
+                if target in available:
+                    raise ParseError(f"duplicate target {target}")
+                available.add(target)
+            _validate_call_contract(
+                statement, known, protocols_dir, _protocol_stack
+            )
         elif isinstance(statement, Return):
             for ref in statement.refs:
                 if ref not in available:
@@ -507,6 +571,148 @@ def validate_program(program: Program, known_commands: Iterable[str] | None = No
     if not terminal:
         raise ParseError("program requires a terminal RETURN or STOP")
     return True
+
+
+def _validate_call_contract(
+    call: Call,
+    known_commands: Iterable[str] | None,
+    protocols_dir: str | Path | None,
+    stack: tuple[str, ...],
+) -> None:
+    """Validate one CALL statement against its protocol file (issue #12).
+
+    Enforces, in order: bounded recursion (no direct or transitive
+    self-call, nesting depth at most 8), protocol existence, the protocol
+    itself linting/validating, argument arity against the protocol's INPUT
+    leaf names, and CALL targets being a subset of the protocol's RETURN
+    refs.
+    """
+    if call.protocol in stack:
+        chain = " -> ".join(stack + (call.protocol,))
+        raise ParseError(
+            f"recursive protocol call: {call.protocol} calls itself directly"
+            f" or transitively ({chain})"
+        )
+    if len(stack) >= _MAX_PROTOCOL_DEPTH:
+        chain = " -> ".join(stack + (call.protocol,))
+        raise ParseError(
+            f"protocol call depth exceeds limit {_MAX_PROTOCOL_DEPTH} ({chain})"
+        )
+
+    protocol = load_protocol(call.protocol, protocols_dir)
+    try:
+        validate_program(
+            protocol,
+            known_commands=known_commands,
+            protocols_dir=protocols_dir,
+            _protocol_stack=stack + (call.protocol,),
+        )
+    except ParseError as exc:
+        raise ParseError(f"protocol {call.protocol} is invalid: {exc}") from exc
+
+    return_statement = next(
+        (
+            statement
+            for statement in protocol.statements
+            if isinstance(statement, Return)
+        ),
+        None,
+    )
+    if return_statement is None:
+        raise ParseError(
+            f"protocol {call.protocol} must end with RETURN (a CALL commits"
+            " the protocol's RETURN refs to the caller's targets)"
+        )
+    if not any(
+        isinstance(statement, Invocation) for statement in protocol.statements
+    ):
+        raise ParseError(
+            f"protocol {call.protocol} contains no invocations to execute"
+        )
+
+    # Argument arity: CALL args bind the protocol's INPUT declarations by
+    # leaf name (argument names are plain identifiers, INPUT refs are typed),
+    # so every INPUT must be bound exactly once and no unknown args may exist.
+    input_leaves = [declaration.ref.split(".")[-1] for declaration in protocol.declarations]
+    ambiguous = sorted({leaf for leaf in input_leaves if input_leaves.count(leaf) > 1})
+    if ambiguous:
+        raise ParseError(
+            f"protocol {call.protocol} INPUT declarations have ambiguous leaf"
+            f" names: {', '.join(ambiguous)}"
+        )
+    arg_names = [argument.name for argument in call.args]
+    duplicated = sorted({name for name in arg_names if arg_names.count(name) > 1})
+    if duplicated:
+        raise ParseError(
+            f"CALL {call.protocol} has duplicate arguments: {', '.join(duplicated)}"
+        )
+    missing = [leaf for leaf in input_leaves if leaf not in arg_names]
+    if missing:
+        raise ParseError(
+            f"CALL {call.protocol} is missing arguments for protocol INPUT:"
+            f" {', '.join(missing)}"
+        )
+    unknown = [name for name in arg_names if name not in input_leaves]
+    if unknown:
+        raise ParseError(
+            f"CALL {call.protocol} has arguments matching no protocol INPUT:"
+            f" {', '.join(unknown)}"
+        )
+
+    # Target contract: CALL targets are a subset of the protocol's RETURN
+    # refs, so each committed target is a ref the protocol actually returns.
+    uncovered = [target for target in call.targets if target not in return_statement.refs]
+    if uncovered:
+        raise ParseError(
+            f"CALL {call.protocol} targets must be a subset of the protocol"
+            f" RETURN refs ({', '.join(return_statement.refs)}):"
+            f" uncovered {', '.join(uncovered)}"
+        )
+
+
+def protocol_file_path(
+    name: str, protocols_dir: str | Path | None = None
+) -> Path:
+    """Filesystem path of the protocol referenced as ``protocol.<stem>``.
+
+    The ``protocol.`` prefix is mandatory; the remaining dot-separated
+    segments form the file stem, so ``protocol.framing`` maps to
+    ``<protocols_dir>/framing.think`` and ``protocol.ops.framing`` maps to
+    ``<protocols_dir>/ops.framing.think``.  ``protocols_dir`` defaults to
+    ``protocols/`` under the current working directory.
+    """
+    if not isinstance(name, str) or not name.startswith(_PROTOCOL_PREFIX):
+        raise ParseError(
+            f"protocol reference {name!r} must start with {_PROTOCOL_PREFIX!r}"
+        )
+    stem = name[len(_PROTOCOL_PREFIX):]
+    directory = (
+        Path(protocols_dir)
+        if protocols_dir is not None
+        else Path(_PROTOCOLS_DIR_DEFAULT)
+    )
+    return directory / f"{stem}.think"
+
+
+def load_protocol(name: str, protocols_dir: str | Path | None = None) -> Program:
+    """Deterministically load and parse a protocol program by reference name.
+
+    Loading is deterministic: the same name and protocols directory always
+    yield the same parsed program.  A caller's seal composition changes when
+    a protocol changes (composite seal hashing is deliberately not
+    implemented); callers must re-seal after editing a protocol.
+    """
+    path = protocol_file_path(name, protocols_dir)
+    if not path.is_file():
+        raise ParseError(f"protocol {name} not found: expected file {path}")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ParseError(f"cannot read protocol {name} from {path}: {exc}") from exc
+    try:
+        return parse_program(text)
+    except ParseError as exc:
+        raise ParseError(f"protocol {name} failed to parse: {exc}") from exc
 
 
 def _references_in(value: Any) -> tuple[str, ...]:
@@ -555,6 +761,17 @@ def _statement_dict(statement: object) -> dict[str, Any]:
                 if statement.done is not None
                 else None
             ),
+        }
+    if isinstance(statement, Call):
+        # Like invocations, the source line is not part of the canonical form.
+        return {
+            "kind": "call",
+            "protocol": statement.protocol,
+            "args": [
+                {"name": argument.name, "value": argument.value}
+                for argument in statement.args
+            ],
+            "targets": list(statement.targets),
         }
     if isinstance(statement, Return):
         return {"kind": "return", **dataclasses.asdict(statement)}
