@@ -1,0 +1,37 @@
+{
+  "task": "GitHub issue #43: widen the transport seam so usage reaches receipts",
+  "run_id": "sprint1-43-telemetry",
+  "seal": "5053afe18472cb7b109553c35231a63ca7b9d3dc1697409ab04d2799d2486689",
+  "terminal_status": "succeeded",
+  "steps_planned": 11,
+  "steps_executed": 11,
+  "acceptance": [
+    {
+      "criterion": "Stub transport returning TransportResult(text, {\"tokens\": 123}) → receipt tokens == 123",
+      "passed": true,
+      "evidence": "test_transport_result_carries_usage_tokens_into_receipt: worker.last_result_envelope.receipt[\"usage\"][\"tokens\"] == 123"
+    },
+    {
+      "criterion": "Legacy str-returning transport → receipt tokens None",
+      "passed": true,
+      "evidence": "test_legacy_str_transport_yields_none_tokens: receipt[\"usage\"][\"tokens\"] is None"
+    },
+    {
+      "criterion": "Existing adapter tests pass",
+      "passed": true,
+      "evidence": "All 25 pre-existing test_worker_adapter.py tests pass unmodified; full suite 766 passed"
+    },
+    {
+      "criterion": "Full pytest suite green (760 baseline + new tests)",
+      "passed": true,
+      "evidence": "python3 -m pytest -q → 766 passed in 20.68s (760 baseline + 6 new)"
+    },
+    {
+      "criterion": "git status --porcelain shows only owned files",
+      "passed": true,
+      "evidence": "M src/tikhon/worker_adapter.py, M tests/test_worker_adapter.py, ?? demo/runs/sprint1-43-telemetry/"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": []
+}

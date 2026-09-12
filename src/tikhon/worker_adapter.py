@@ -4,9 +4,23 @@
 ``.execute(command, resolved_kwargs)``) but produces DO results by
 dispatching a contract prompt to a language model instead of calling a
 Python handler.  All network/subprocess detail lives behind the
-``transport`` callable — ``transport(model: str, prompt: str) -> str`` —
-so tests use stubs and the CLI wires real HTTP/exec transports from
-environment configuration (see ``tikhon.cli._build_model_worker``).
+``transport`` callable — ``transport(model: str, prompt: str) -> str |
+TransportResult`` — so tests use stubs and the CLI wires real HTTP/exec
+transports from environment configuration (see
+``tikhon.cli._build_model_worker``).
+
+Issue #43 transport seam contract: a transport callable may return
+either a bare ``str`` (legacy — text only, no usage) or a
+``TransportResult(text, usage)`` dataclass where ``usage`` is a ``dict``
+or ``None``.  ``ModelWorker.execute`` unwraps ``TransportResult`` to
+obtain the text for parsing and maps a non-None ``usage`` dict's
+``"tokens"`` value into the receipt it already builds; legacy
+``str``-returning transports continue to yield ``None`` tokens and cost.
+The downstream ``envelope._recorded_usage`` consumer already reads
+``receipt["usage"]["tokens"]`` and ``receipt["usage"]["cost"]``, so no
+envelope changes are needed.  The CLI HTTP transport wiring (in
+``cli.py``) constructs a ``TransportResult`` from the HTTP response
+body's ``usage`` dict — see the solution report for exact wiring.
 
 Issue #18 binding: every dispatch is rendered as a
 ``tikhon.envelope.TaskEnvelope`` — the resolved contract summary, pinned
@@ -56,12 +70,33 @@ from tikhon.registry.enums import RoutingTier
 from tikhon.registry.registry import Registry
 from tikhon.runtime.coordinator import map_results_to_targets
 
-__all__ = ["DEFAULT_TIMEOUT_SECONDS", "ModelWorker", "WorkerError"]
+__all__ = [
+    "DEFAULT_TIMEOUT_SECONDS",
+    "ModelWorker",
+    "TransportResult",
+    "WorkerError",
+]
 
 #: Default deadline advertised to transports (``ModelWorker.timeout_seconds``).
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
-Transport = Callable[[str, str], str]
+
+@dataclasses.dataclass
+class TransportResult:
+    """Issue #43: transport return value carrying usage telemetry.
+
+    A transport callable may return either a bare ``str`` (legacy) or a
+    ``TransportResult`` with ``text`` (the raw model reply) and optional
+    ``usage`` (a dict, e.g. ``{"tokens": 123}``).  When ``usage`` is
+    ``None`` the receipt records ``None`` tokens/cost, exactly as the
+    legacy str path does.
+    """
+
+    text: str
+    usage: dict[str, Any] | None = None
+
+
+Transport = Callable[[str, str], "str | TransportResult"]
 
 
 class WorkerError(Exception):
@@ -186,9 +221,10 @@ class ModelWorker:
         self.last_task_envelope = task_envelope
         prompt = self._build_prompt(task_envelope)
         raw = self._transport(model, prompt)
-        parsed = self._parse_response(raw, command)
+        raw_text, usage = self._unwrap_transport(raw)
+        parsed = self._parse_response(raw_text, command)
         result_envelope = self._build_result_envelope(
-            task_envelope, model, parsed, raw
+            task_envelope, model, parsed, raw_text, usage
         )
         if target_refs:
             _, mapping_error = map_results_to_targets(target_refs, parsed)
@@ -196,7 +232,7 @@ class ModelWorker:
                 raise WorkerError(
                     f"model response for command {command!r} failed"
                     f" target mapping: {mapping_error}",
-                    raw if isinstance(raw, str) else None,
+                    raw_text,
                 )
         return result_envelope.payload
 
@@ -287,19 +323,38 @@ class ModelWorker:
             )
         return "\n".join(lines)
 
+    def _unwrap_transport(self, raw: Any) -> tuple[str, dict[str, Any] | None]:
+        """Unwrap a transport return value into (text, usage).
+
+        Legacy ``str`` returns ``(text, None)``; ``TransportResult``
+        returns ``(result.text, result.usage)``.
+        """
+        if isinstance(raw, TransportResult):
+            return raw.text, raw.usage
+        return raw, None
+
     def _build_result_envelope(
         self,
         task_envelope: TaskEnvelope,
         model: str,
         parsed: Any,
         raw: Any,
+        usage: dict[str, Any] | None = None,
     ) -> ResultEnvelope:
         """Wrap the parsed reply INTO a validated ResultEnvelope.
 
         The reply payload becomes a ``succeeded`` result; the receipt
-        records the routed model identity and usage with ``None`` tokens
-        (telemetry unavailable — distinguished from a measured zero).
+        records the routed model identity and usage.  When ``usage`` is
+        a dict with an integer ``"tokens"`` value, that value is carried
+        into the receipt; otherwise tokens are ``None`` (telemetry
+        unavailable — distinguished from a measured zero).  ``cost`` is
+        ``None`` unless a price table is configured upstream.
         """
+        tokens: int | None = None
+        if isinstance(usage, dict):
+            value = usage.get("tokens")
+            if isinstance(value, int) and not isinstance(value, bool):
+                tokens = value
         result_envelope = ResultEnvelope(
             schema_version=ENVELOPE_SCHEMA_VERSION,
             run_id=task_envelope.run_id,
@@ -314,7 +369,7 @@ class ModelWorker:
             error=None,
             receipt={
                 "model": model,
-                "usage": {"tokens": None, "cost": None},
+                "usage": {"tokens": tokens, "cost": None},
             },
         )
         try:
