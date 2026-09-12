@@ -6,9 +6,11 @@ from .model import (
     Conditional,
     Declaration,
     DonePredicate,
+    Gather,
     Invocation,
     Program,
     Return,
+    Scatter,
     Stop,
 )
 from .parser import (
@@ -29,9 +31,11 @@ __all__ = [
     "Conditional",
     "Declaration",
     "DonePredicate",
+    "Gather",
     "Invocation",
     "Program",
     "Return",
+    "Scatter",
     "Stop",
     "ParseError",
     "parse_program",

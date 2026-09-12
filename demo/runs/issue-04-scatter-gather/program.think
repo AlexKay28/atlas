@@ -1,0 +1,20 @@
+# Tikhon run for GitHub issue #4: SCATTER/GATHER bounded fan-out with
+# USING all|any|ranked judges.  Sealed before any source edit; SCATTER and
+# GATHER are deliberately NOT used here because the sealed program must
+# parse with the pre-#4 grammar.
+
+PROGRAM issue_04_scatter_gather VERSION 1.0
+
+INPUT
+    G.goal = "Implement GitHub issue #4: SCATTER <item> IN <collection> MAX n with a single indented body step, and GATHER <step-id> AS <alias> USING all|any|ranked (first/best accepted aliases) with an optional JUDGE step line; the coordinator expands the scatter deterministically over the committed list bounded by MAX, runs one ledger task per candidate committing candidate-scoped alias.c<k>.<leaf> nodes, cancels losers under USING any (first candidate-order success wins), ranks by an explicit judge invocation under USING ranked picking max score with lowest-index tie-break, commits the join to the alias node with selection evidence, and keeps crash/resume replay-identical with audit-clean runs"
+    C.scope = "src/tikhon/syntax/parser.py, src/tikhon/syntax/model.py, src/tikhon/syntax/__init__.py, src/tikhon/runtime/coordinator.py, tests/test_syntax.py, tests/test_coordinator.py, tests/test_scatter.py, demo/runs/issue-04-scatter-gather/"
+    C.behavior = "SCATTER/GATHER parse into frozen Scatter/Gather statements; validation enforces fresh item and alias refs, an existing committed collection ref, MAX >= 1, a directly following GATHER, a judge line exactly when USING ranked, and rejects REVISE/RETIRE on the per-candidate body; the runtime expands candidates in collection order with one child task per candidate (task text suffixed [candidate k]), fails the run when the list exceeds MAX or any candidate fails under USING all, records losers without FAILED events under USING any, and the gather commits the alias with selection evidence in its task completion; programs without SCATTER/GATHER seal byte-identically"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.design: DO summarize(source_refs = E.sites, budget = 4000) -> P.design
+step.patch: DO report(committed_refs = P.design, format = "python_patch") -> ART.patch
+step.check: DO check(artifact = ART.patch, criteria = C.behavior) -> V.tests
+step.verify: DO verify(goal = G.goal, evidence = [ART.patch, V.tests]) -> V.result
+
+RETURN ART.patch, V.tests, V.result

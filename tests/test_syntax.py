@@ -1634,3 +1634,26 @@ IF V.flag == "go" STOP completed()
         ParseError, match="program requires a terminal RETURN or STOP"
     ):
         validate_program(program, known_commands=set())
+
+
+def test_scatter_and_gather_exported_from_tikhon_syntax():
+    # Issue #4: the fan-out block models are part of the public syntax
+    # surface and round-trip through parse_program.
+    import tikhon.syntax as syntax_module
+
+    assert syntax_module.Scatter is not None
+    assert syntax_module.Gather is not None
+    assert "Scatter" in syntax_module.__all__
+    assert "Gather" in syntax_module.__all__
+    source = """\
+PROGRAM fan VERSION 1.0
+INPUT
+  Q.parts = ["a"]
+SCATTER X.part IN Q.parts MAX 1
+  step.draft: DO define(goal = X.part) -> E.draft
+GATHER draft AS E.all USING all
+RETURN E.all
+"""
+    program = parse_program(source)
+    assert isinstance(program.statements[0], syntax_module.Scatter)
+    assert isinstance(program.statements[1], syntax_module.Gather)

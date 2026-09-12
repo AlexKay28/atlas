@@ -9,7 +9,19 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-from .model import Argument, Call, Conditional, Declaration, DonePredicate, Invocation, Program, Return, Stop
+from .model import (
+    Argument,
+    Call,
+    Conditional,
+    Declaration,
+    DonePredicate,
+    Gather,
+    Invocation,
+    Program,
+    Return,
+    Scatter,
+    Stop,
+)
 
 _NAME = r"[a-z][a-z0-9_]*"
 # Program header names allow hyphens after the first character (issue #15).
@@ -56,10 +68,26 @@ _PROTOCOL_PREFIX = "protocol."
 _MAX_PROTOCOL_DEPTH = 8
 _PROTOCOLS_DIR_DEFAULT = "protocols"
 # Issue #3: IF is no longer reserved — it parses a single-line deterministic
-# conditional.  FIRST/SCATTER/GATHER/LOOP/TRY/AWAIT/APPROVE stay unsupported.
-_UNSUPPORTED = frozenset(
-    {"FIRST", "SCATTER", "GATHER", "LOOP", "TRY", "AWAIT", "APPROVE"}
+# conditional.  FIRST/LOOP/TRY/AWAIT/APPROVE stay unsupported.  Issue #4:
+# SCATTER/GATHER are no longer reserved — they parse bounded fan-out blocks.
+_UNSUPPORTED = frozenset({"FIRST", "LOOP", "TRY", "AWAIT", "APPROVE"})
+# Issue #4: SCATTER/GATHER block grammar.  The SCATTER line is followed by
+# exactly one indented body step line; the GATHER line names that body step
+# and optionally a judge step, itself defined by the following indented line.
+_SCATTER_RE = re.compile(
+    rf"^SCATTER\s+(?P<item>{_REF_PATTERN})\s+IN\s+"
+    rf"(?P<collection>{_REF_PATTERN})\s+MAX\s+(?P<max>\d+)$"
 )
+_GATHER_RE = re.compile(
+    rf"^GATHER\s+(?P<step_id>(?:step\.)?{_NAME})\s+AS\s+(?P<alias>{_REF_PATTERN})\s+"
+    rf"USING\s+(?P<mode>{_NAME})(?:\s+JUDGE\s+step\.(?P<judge_id>{_NAME}))?$"
+)
+# Canonical join rules (issue #27 naming resolution): the draft spec's
+# all/any/ranked are canonical; the issue body's first/best are accepted
+# aliases (first == any, best == ranked) normalized at parse time so both
+# spellings parse and seal identically.
+_GATHER_MODES = frozenset({"all", "any", "ranked"})
+_GATHER_MODE_ALIASES = {"first": "any", "best": "ranked"}
 _STOP_KINDS = frozenset({"completed", "failed", "blocked", "denied", "cancelled", "unresolved"})
 _DONE_OPS = frozenset({"equals", "in", "matched"})
 _DONE_MATCHED_RE = re.compile(r"^matched\((?P<inner>.*)\)$", re.DOTALL)
@@ -111,11 +139,16 @@ def parse_program(text: str) -> Program:
         raise ParseError("malformed PROGRAM header", header_line, 1)
 
     declarations: list[Declaration] = []
-    statements: list[Invocation | Return | Stop | Conditional] = []
+    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather] = []
     in_input = False
     terminal_seen = False
 
-    for line_no, raw, line in source[1:]:
+    lines = iter(source[1:])
+    while True:
+        try:
+            line_no, raw, line = next(lines)
+        except StopIteration:
+            break
         if line == "INPUT":
             if declarations or statements or in_input:
                 raise ParseError("INPUT must appear once before statements", line_no, 1)
@@ -187,6 +220,18 @@ def parse_program(text: str) -> Program:
             statements.append(
                 Call(call.group("protocol"), args, targets, line_no)
             )
+            continue
+
+        # Issue #4: bounded fan-out block.  The SCATTER line consumes the
+        # immediately following indented line as its single per-candidate
+        # body step; the join is a separate GATHER statement that must
+        # directly follow (validated in validate_program).
+        if re.match(r"SCATTER\b", line):
+            statements.append(_parse_scatter_block(line, line_no, lines))
+            continue
+
+        if re.match(r"GATHER\b", line):
+            statements.append(_parse_gather_line(line, line_no, lines))
             continue
 
         # Issue #7: strip the optional trailing REVISE/RETIRE clause before
@@ -283,6 +328,113 @@ def _parse_conditional_line(line: str, line_no: int) -> Conditional:
             1,
         )
     return Conditional(condition, embedded, line_no)
+
+
+def _consume_block_line(
+    lines, construct: str, line_no: int
+) -> tuple[int, str]:
+    """Consume the block line following a SCATTER/GATHER header (issue #4).
+
+    The next significant source line must exist and be indented (mirroring
+    INPUT declarations); returns ``(line_no, stripped_text)``.
+    """
+    try:
+        next_line_no, next_raw, next_line = next(lines)
+    except StopIteration:
+        raise ParseError(
+            f"{construct} requires an indented step line", line_no, 1
+        ) from None
+    if not next_raw[:1].isspace():
+        raise ParseError(
+            f"{construct} requires an indented step line", next_line_no, 1
+        )
+    return next_line_no, next_line
+
+
+def _parse_scatter_block(line: str, line_no: int, lines) -> Scatter:
+    """Parse one ``SCATTER <item> IN <collection> MAX <n>`` block (issue #4).
+
+    The header is followed by exactly one indented body step line — the
+    per-candidate ``step.<id>: DO ... -> <target>`` invocation.
+    """
+    match = _SCATTER_RE.fullmatch(line)
+    if match is None:
+        raise ParseError(
+            "malformed SCATTER (expected SCATTER <ref> IN <ref> MAX <int>)",
+            line_no,
+            1,
+        )
+    max_count = int(match.group("max"))
+    if max_count < 1:
+        raise ParseError(
+            "SCATTER MAX must be a positive integer", line_no, 1
+        )
+    body_line_no, body_line = _consume_block_line(
+        lines, "SCATTER body step", line_no
+    )
+    body = _parse_invocation_text(body_line, body_line_no)
+    return Scatter(
+        match.group("item"),
+        match.group("collection"),
+        max_count,
+        body,
+        line_no,
+    )
+
+
+def _parse_gather_line(line: str, line_no: int, lines) -> Gather:
+    """Parse one ``GATHER <step-id> AS <alias> USING <rule>`` line (issue #4).
+
+    ``USING`` accepts the canonical rules ``all`` / ``any`` / ``ranked``
+    and the aliases ``first`` (== any) and ``best`` (== ranked), normalized
+    at parse time.  ``JUDGE step.<id>`` is declared on the line for ranked
+    joins and the judge step itself is the immediately following indented
+    line, whose step id must match the declared one.
+    """
+    match = _GATHER_RE.fullmatch(line)
+    if match is None:
+        raise ParseError(
+            "malformed GATHER (expected GATHER <step-id> AS <ref> USING"
+            " all|any|ranked [JUDGE step.<id>])",
+            line_no,
+            1,
+        )
+    written_mode = match.group("mode")
+    mode = _GATHER_MODE_ALIASES.get(written_mode, written_mode)
+    if mode not in _GATHER_MODES:
+        raise ParseError(
+            f"unknown GATHER USING mode {written_mode!r} (expected all,"
+            " any, ranked, or the aliases first, best)",
+            line_no,
+            1,
+        )
+    # The body step id normalizes to its canonical "step.<id>" spelling;
+    # both `GATHER draft AS ...` and `GATHER step.draft AS ...` parse (the
+    # draft spec writes the prefixed form, the ADR the bare one).
+    body_step_id = match.group("step_id")
+    if not body_step_id.startswith("step."):
+        body_step_id = f"step.{body_step_id}"
+    judge: Invocation | None = None
+    judge_id = match.group("judge_id")
+    if judge_id is not None:
+        judge_line_no, judge_line = _consume_block_line(
+            lines, f"GATHER judge step step.{judge_id}", line_no
+        )
+        judge = _parse_invocation_text(judge_line, judge_line_no)
+        if judge.step_id != f"step.{judge_id}":
+            raise ParseError(
+                f"GATHER JUDGE declares step.{judge_id} but the following"
+                f" line defines {judge.step_id}",
+                judge_line_no,
+                1,
+            )
+    return Gather(
+        body_step_id,
+        match.group("alias"),
+        mode,
+        judge,
+        line_no,
+    )
 
 
 def parse_condition(text: str, line_no: int = 0) -> tuple:
@@ -891,10 +1043,38 @@ def validate_program(
     conditional_targets: set[str] = set()
     conditional_invocation_seen = False
     terminal = False
+    # Issue #4: a SCATTER block must be directly followed by its GATHER.
+    pending_scatter: Scatter | None = None
     for statement in program.statements:
         if terminal:
             raise ParseError("statement appears after terminal")
-        if isinstance(statement, Invocation):
+        if pending_scatter is not None and not isinstance(statement, Gather):
+            raise ParseError(
+                f"SCATTER block for {pending_scatter.body.step_id} must"
+                " be directly followed by its GATHER"
+            )
+        if isinstance(statement, Scatter):
+            # Issue #4: the scatter body is an unconditional invocation
+            # line, so it cannot follow an IF ... DO conditional.
+            if conditional_invocation_seen:
+                raise ParseError(
+                    f"SCATTER block for {statement.body.step_id}"
+                    " appears after an IF ... DO conditional: a conditional"
+                    " DO invocation must come after every unconditional"
+                    " invocation line"
+                )
+            _validate_scatter_statement(statement, known, available, steps)
+            pending_scatter = statement
+        elif isinstance(statement, Gather):
+            _validate_gather_statement(
+                statement, pending_scatter, known, available, steps
+            )
+            # The alias is the join's committed node: later statements may
+            # read it.  The item ref and body/judge targets never join the
+            # final namespace (candidate scoping), so they are not added.
+            available.add(statement.alias_ref)
+            pending_scatter = None
+        elif isinstance(statement, Invocation):
             # Issue #3 pragmatic rule: a conditional DO invocation must come
             # after every unconditional invocation line, so an invocation
             # following one is rejected.
@@ -1003,6 +1183,11 @@ def validate_program(
                 )
         else:
             raise ParseError(f"unknown statement {type(statement).__name__}")
+    if pending_scatter is not None:
+        raise ParseError(
+            f"SCATTER block for {pending_scatter.body.step_id} must"
+            " be directly followed by its GATHER"
+        )
     if not terminal:
         raise ParseError("program requires a terminal RETURN or STOP")
     return True
@@ -1119,6 +1304,161 @@ def _validate_invocation_statement(
                 f" step's targets ({', '.join(statement.targets)})",
                 statement.done.line,
                 5,
+            )
+
+
+def _validate_scatter_statement(
+    statement: Scatter,
+    known: set[str] | None,
+    available: set[str],
+    steps: set[str],
+) -> None:
+    """Validate one SCATTER block (issue #4).
+
+    The collection ref must name an existing committed node (declared
+    INPUT or an earlier step's target) — its runtime list-ness is checked
+    at execution.  The item ref is a fresh loop variable: it binds inside
+    the body step only, never collides with an existing node, and never
+    joins the final namespace.  The body step validates like a normal
+    invocation over ``available | {item_ref}`` but its targets are
+    candidate-scoped (never committed to the raw names), so they are
+    checked for freshness only; REVISE/RETIRE corrections are undefined
+    per candidate and rejected, and duplicate target leaves would collide
+    in the ``alias.c<k>.<leaf>`` namespace and are rejected too.
+    """
+    if statement.max_count < 1:
+        raise ParseError("SCATTER MAX must be a positive integer")
+    for name, ref in (("item", statement.item_ref), ("collection", statement.collection_ref)):
+        if ref.startswith("KB."):
+            raise ParseError(
+                f"SCATTER {name} reference {ref} cannot address KB.*"
+                " nodes: semantic memory is durable across runs and is"
+                " read with recall, not scattered over"
+            )
+    if statement.collection_ref not in available:
+        raise ParseError(
+            f"SCATTER collection {statement.collection_ref} used before"
+            " definition: it must name a committed node (a declared INPUT"
+            " or an earlier step's target)"
+        )
+    if statement.item_ref in available:
+        raise ParseError(
+            f"SCATTER item reference {statement.item_ref} is already"
+            " defined: the item ref is a fresh loop-scoped name"
+        )
+    if statement.item_ref == statement.collection_ref:
+        raise ParseError(
+            f"SCATTER item reference {statement.item_ref} must differ from"
+            " the collection reference"
+        )
+    body = statement.body
+    if statement.item_ref in body.targets:
+        raise ParseError(
+            f"SCATTER body target {statement.item_ref} cannot overwrite the"
+            " item reference"
+        )
+    _validate_invocation_statement(
+        body,
+        known,
+        available | {statement.item_ref},
+        steps,
+        commit_targets=False,
+    )
+    if body.revisions or body.retirements:
+        raise ParseError(
+            f"SCATTER body step {body.step_id} cannot use REVISE/RETIRE:"
+            " corrections are undefined for per-candidate execution"
+        )
+    leaves = [target.split(".")[-1] for target in body.targets]
+    duplicate_leaves = sorted({leaf for leaf in leaves if leaves.count(leaf) > 1})
+    if duplicate_leaves:
+        raise ParseError(
+            f"SCATTER body step {body.step_id} has duplicate target leaves"
+            f" ({', '.join(duplicate_leaves)}): candidate nodes are scoped"
+            " as alias.c<k>.<leaf> and must not collide"
+        )
+
+
+def _validate_gather_statement(
+    statement: Gather,
+    pending_scatter: Scatter | None,
+    known: set[str] | None,
+    available: set[str],
+    steps: set[str],
+) -> None:
+    """Validate one GATHER join (issue #4).
+
+    The GATHER must directly follow its SCATTER block and name that block's
+    body step id.  The alias is a fresh committed node name.  ``USING
+    ranked`` requires the judge step; the judge is invalid for the other
+    rules.  The judge step validates like an invocation over ``available |
+    {item_ref} | body targets`` (the judge reads the candidate's item value
+    and produced values), must have exactly one target (the score), and
+    never commits nodes — its targets stay template-scoped.
+    """
+    if pending_scatter is None:
+        raise ParseError(
+            f"GATHER of {statement.body_step_id} must directly follow"
+            " its SCATTER block"
+        )
+    scatter = pending_scatter
+    if statement.body_step_id != scatter.body.step_id:
+        raise ParseError(
+            f"GATHER names {statement.body_step_id} but the preceding"
+            f" SCATTER body is {scatter.body.step_id}"
+        )
+    if statement.mode not in _GATHER_MODES:
+        raise ParseError(
+            f"unknown GATHER USING mode {statement.mode!r} (expected all,"
+            " any, ranked, or the aliases first, best)"
+        )
+    alias = statement.alias_ref
+    if alias.startswith("KB."):
+        raise ParseError(
+            f"GATHER alias {alias} cannot address KB.* nodes: semantic"
+            " memory is written with the remember command, not produced"
+            " as a state node"
+        )
+    if alias in available:
+        raise ParseError(f"duplicate target {alias}")
+    if alias == scatter.item_ref or alias in scatter.body.targets:
+        raise ParseError(
+            f"GATHER alias {alias} collides with the scatter's item or"
+            " body target references"
+        )
+    if statement.mode == "ranked" and statement.judge is None:
+        raise ParseError(
+            "GATHER USING ranked requires JUDGE step.<id>"
+        )
+    if statement.mode != "ranked" and statement.judge is not None:
+        raise ParseError(
+            "GATHER JUDGE is only valid with USING ranked (or its alias"
+            " best)"
+        )
+    if statement.judge is not None:
+        judge = statement.judge
+        bindings = (
+            available | {scatter.item_ref} | set(scatter.body.targets)
+        )
+        _validate_invocation_statement(
+            judge, known, bindings, steps, commit_targets=False
+        )
+        if judge.revisions or judge.retirements:
+            raise ParseError(
+                f"GATHER judge step {judge.step_id} cannot use"
+                " REVISE/RETIRE: the judge is a scoring template"
+            )
+        if len(judge.targets) != 1:
+            raise ParseError(
+                f"GATHER judge step {judge.step_id} must have exactly one"
+                f" target (the score); got {len(judge.targets)}"
+            )
+        if judge.targets[0] == scatter.item_ref or (
+            judge.targets[0] in scatter.body.targets
+        ):
+            raise ParseError(
+                f"GATHER judge target {judge.targets[0]} collides with the"
+                " scatter's item or body target references"
             )
 
 
@@ -1352,6 +1692,31 @@ def _statement_dict(statement: object) -> dict[str, Any]:
             "kind": "conditional",
             "condition": statement.condition,
             "statement": _statement_dict(statement.statement),
+        }
+    if isinstance(statement, Scatter):
+        # Issue #4: the source line is not part of the canonical form; the
+        # block seals as its header fields plus the body invocation.
+        return {
+            "kind": "scatter",
+            "item_ref": statement.item_ref,
+            "collection_ref": statement.collection_ref,
+            "max": statement.max_count,
+            "body": _statement_dict(statement.body),
+        }
+    if isinstance(statement, Gather):
+        # Issue #4: the mode serializes in its canonical spelling (first/
+        # best normalize to any/ranked at parse time), so both spellings
+        # of the same rule seal identically.
+        return {
+            "kind": "gather",
+            "step_id": statement.body_step_id,
+            "alias": statement.alias_ref,
+            "mode": statement.mode,
+            "judge": (
+                _statement_dict(statement.judge)
+                if statement.judge is not None
+                else None
+            ),
         }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 

@@ -95,6 +95,57 @@ class Conditional:
 
 
 @dataclass(frozen=True)
+class Scatter:
+    """Bounded fan-out block (issue #4).
+
+    ``SCATTER <item_ref> IN <collection_ref> MAX <max_count>`` followed by
+    exactly one indented per-candidate body step.  ``item_ref`` is a fresh
+    typed reference bound per candidate inside the body step only (the loop
+    variable; it never becomes a committed node and is not visible after
+    the block).  ``collection_ref`` must name a committed node whose
+    runtime value is a list; ``max_count`` bounds the fan-out — a runtime
+    list longer than ``max_count`` fails the run, a shorter one iterates
+    its actual length.  ``body`` is the single ``Invocation`` executed once
+    per candidate with the item ref bound to that candidate's collection
+    element; the body's targets are candidate-scoped names committed under
+    the gather alias (never the raw target names).
+    """
+
+    item_ref: str
+    collection_ref: str
+    max_count: int
+    body: Invocation
+    line: int = 0
+
+
+@dataclass(frozen=True)
+class Gather:
+    """Explicit join (issue #4): ``GATHER <step-id> AS <alias> USING <mode>``.
+
+    Must directly follow its ``Scatter`` block and name that block's body
+    step id.  ``mode`` is the canonical join rule — ``all`` (every
+    candidate must succeed; alias = list of candidate values in candidate
+    order), ``any`` (first candidate-order success wins; remaining
+    candidates are cancelled and recorded as losers), or ``ranked`` (an
+    explicit judge invocation scores each candidate; max score wins, ties
+    break to the lowest candidate index).  The issue body's ``first`` and
+    ``best`` spellings are accepted aliases for ``any`` and ``ranked``
+    respectively and are normalized into ``mode`` at parse time, so both
+    spellings parse and seal identically.  ``judge`` is the judge step's
+    ``Invocation`` (required exactly when ``mode`` is ``ranked``); it is a
+    template executed once per candidate with the item ref and the body's
+    target refs bound to that candidate's values, and its result provides
+    the score — its targets are never committed as nodes.
+    """
+
+    body_step_id: str
+    alias_ref: str
+    mode: str
+    judge: Invocation | None = None
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Return:
     refs: tuple[str, ...]
 

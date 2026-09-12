@@ -1,0 +1,85 @@
+{
+  "task": "GitHub issue #4: SCATTER/GATHER bounded fan-out with USING all|any|ranked judges (naming resolved per issue #27: all/any/ranked canonical, first/best accepted aliases)",
+  "run_id": "issue-04-scatter-gather",
+  "seal": "87f1d0649d405081881273ff9d605a4b6056f8ce5036d6a7daacb7be8c7a48bc",
+  "terminal_status": "succeeded",
+  "steps_planned": ["step.frame", "step.locate", "step.design", "step.patch", "step.check", "step.verify"],
+  "steps_executed": ["step.frame", "step.locate", "step.design", "step.patch", "step.check", "step.verify"],
+  "acceptance": [
+    {
+      "criterion": "Protocol: demo/runs/issue-04-scatter-gather/program.think created first (canonical grammar, registered commands only, ref lists supported, no SCATTER/GATHER), linted and sealed to seal.txt before any source edit; digest still reproduces after all edits",
+      "passed": true,
+      "evidence": "seal.txt 87f1d0649d405081881273ff9d605a4b6056f8ce5036d6a7daacb7be8c7a48bc; PYTHONPATH=src python3 -m tikhon seal reproduces it post-implementation; tests/test_scatter.py::test_sealed_demo_program_digest_reproduces"
+    },
+    {
+      "criterion": "Grammar: SCATTER <item-ref> IN <collection-ref> MAX <int> with one indented body step; GATHER <step-id> AS <alias-ref> USING all|any|ranked [JUDGE step.<id>] with the judge defined by the following indented line; both parse into frozen Scatter/Gather statements",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_scatter_block_parses_into_frozen_statements, test_gather_accepts_prefixed_step_id_and_seals_identically, test_canonical_json_serializes_scatter_and_gather; tests/test_syntax.py::test_scatter_and_gather_exported_from_tikhon_syntax"
+    },
+    {
+      "criterion": "Naming resolution (issue #27): USING any/first and ranked/best are equivalent (aliases normalized at parse time, identical seals); canonical modes are all/any/ranked; unknown modes rejected",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_first_and_best_are_aliases_for_any_and_ranked, test_using_alias_first_behaves_like_any, test_best_alias_runs_ranked_join, test_unknown_using_mode_rejected"
+    },
+    {
+      "criterion": "Validation: MAX > 0, collection ref exists (committed node), item/alias refs fresh, GATHER directly follows its SCATTER, judge required exactly for ranked, judge single target, REVISE/RETIRE and item-visibility rules enforced, pre-#4 programs seal byte-identically",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_max_must_be_positive, test_collection_ref_must_exist, test_item_ref_must_be_fresh, test_alias_must_be_fresh, test_gather_must_directly_follow_scatter, test_gather_without_preceding_scatter_rejected, test_scatter_without_gather_rejected, test_ranked_requires_judge_step, test_judge_invalid_for_all_and_any, test_judge_must_have_single_target, test_scatter_body_revise_retire_rejected, test_item_ref_not_visible_after_the_block; tests/test_scatter.py::test_pre_scatter_programs_seal_byte_identically"
+    },
+    {
+      "criterion": "USING all commits the alias as the list of all candidates' target values in candidate order, with candidate-scoped alias.c<k>.<leaf> nodes and never the raw target names",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_using_all_commits_list_of_values_in_candidate_order (E.all == [summary-of-alpha, summary-of-beta, summary-of-gamma]; E.all.c1.draft..c3.draft committed; E.draft absent); test_multi_target_body_joins_list_of_mappings; test_candidate_body_receives_the_item_value"
+    },
+    {
+      "criterion": "USING any: first candidate-order success wins, loser candidates cancelled (task_cancelled) and recorded not committed, later candidates cancelled without starting, run succeeds with no FAILED events, selection evidence in the gather task; all-losers fails the run",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_using_any_first_success_wins_and_losers_are_cancelled, test_using_any_all_candidates_failing_fails_the_run, test_using_any_with_empty_collection_fails"
+    },
+    {
+      "criterion": "USING ranked: judge executed once per candidate, max score wins with lowest-index tie-break, judge evidence in the gather task completion; judge score extraction (number/bool/passed/score field/status field) deterministic; judge failure fails the run",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_ranked_picks_max_score_with_lowest_index_tie_break (0.9 tie between candidates 2 and 3 breaks to 2), test_ranked_judge_status_passed_scores_binary, test_ranked_judge_number_and_bool_results, test_judge_scores_extracted_deterministically, test_ranked_judge_failure_fails_the_run, test_ranked_judge_reads_candidate_item_and_result, test_ranked_candidate_failure_fails_the_run"
+    },
+    {
+      "criterion": "Total-work bound: runtime list longer than MAX fails the run atomically; shorter lists iterate actual length; empty collection commits [] under all and fails under any/ranked",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_runtime_list_longer_than_max_fails_the_run, test_runtime_list_shorter_than_max_iterates_actual, test_using_all_with_empty_collection_commits_empty_list, test_using_any_with_empty_collection_fails"
+    },
+    {
+      "criterion": "Ledger: one child task per candidate with text 'step.<id>: DO <command> [candidate k]'; candidate invocation ids inv-<K>.cand<k>; scatter and gather entries carry their own tasks; gather completion evidence records the selection",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_ledger_shows_per_candidate_tasks (texts, statuses, invocation ids); test_ranked_picks_max_score_with_lowest_index_tie_break (gather evidence 'join ranked: winner candidate 2 (score 0.9); scores: ...; judge check')"
+    },
+    {
+      "criterion": "Crash/replay: crash_hook mid-scatter then resume completes at-least-once with no duplicate commits; gathered state identical after reopen; two fresh runs produce identical event sequences, state and ledger; audit clean",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_crash_mid_scatter_resume_completes_without_duplicate_commits (parametrized over five crash windows; recovered state == fresh state), test_crash_resume_is_at_least_once_for_the_interrupted_candidate, test_any_mode_resume_after_winner_committed_skips_remaining, test_gathered_state_identical_after_reopen, test_replay_identity_across_two_fresh_runs; audit_run ok asserted throughout"
+    },
+    {
+      "criterion": "Reference Program A (research) parses and executes with deterministic workers: decompose -> SCATTER over parts -> gather -> synthesize/report, plus a ranked variant",
+      "passed": true,
+      "evidence": "tests/test_scatter.py::test_research_style_program_executes_with_deterministic_workers, test_research_ranked_variant_picks_best_branch (draft-spec indexed targets E.urls[Q.part] are outside the implemented grammar; the unindexed equivalent with candidate-scoped commits is used)"
+    },
+    {
+      "criterion": "Default behavior unchanged: all 631 pre-existing tests pass unmodified; scatter runs are deterministic for any max_workers (sequential plan drive)",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: 687 passed (631 baseline + 55 new in tests/test_scatter.py + 1 additive in tests/test_syntax.py); tests/test_scatter.py::test_scatter_run_with_max_workers_stays_deterministic"
+    },
+    {
+      "criterion": "Hard constraints respected: only allowed files touched (src/tikhon/syntax/{parser,model,__init__}.py, src/tikhon/runtime/coordinator.py, tests/test_syntax.py additive, tests/test_scatter.py new, demo/runs/issue-04-scatter-gather/); cli.py, registry/, runtime/events.py, runtime/tasks.py, resume.py, budgets.py, audit.py, envelope.py, other demo runs, protocols/, docs/ untouched; no git commit",
+      "passed": true,
+      "evidence": "git status --short shows exactly: M src/tikhon/runtime/coordinator.py, M src/tikhon/syntax/__init__.py, M src/tikhon/syntax/model.py, M src/tikhon/syntax/parser.py, M tests/test_syntax.py, ?? demo/runs/issue-04-scatter-gather/, ?? tests/test_scatter.py"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "Sequential candidate dispatch (CONCURRENCY vs TOTAL-WORK per issue #27): MAX n bounds total work and fails the run when the list exceeds it; candidates deliberately execute sequentially in collection order instead of dispatching in parallel up to max_workers. This makes USING-any first-success and ranked tie-breaks deterministic by construction, keeps the strict single-IN_PROGRESS ledger invariant, and the required tests pass either way (verified identical event shapes at max_workers 1 and 4). The Wave 10 budget gate still wraps every candidate/judge dispatch (global deadline, per-invocation deadline, slot). Parallel fan-out is future work.",
+    "USING-any losers emit no FAILED events while the run can still succeed: audit.py (untouchable) rejects any FAILED event in a run that finishes succeeded (run_finished_status_mismatch). Loser failures are recorded as task_cancelled reason payloads plus the gather task's selection evidence; FAILED events for losers are emitted only in the final all-losers failure batch, keeping every terminal run audit-clean.",
+    "The scatter entry's own ledger task stays PENDING while candidates run and starts+completes in the entry's terminal batch: the strict single-in-progress ledger invariant (tasks.py, untouchable) forbids the umbrella task overlapping candidate tasks. The candidates carry the live lifecycle; the scatter's SUCCEEDED (empty delta) marks the entry terminal for the resume prefix invariant and carries the expansion record the gather reads.",
+    "External driver (tikhon next/submit, envelope.py) does not support scatter programs: envelope.py is outside this run's allowed file set and rejects IF/CALL programs before plan inspection but has no Scatter branch, so an externally driven scatter program raises AttributeError instead of a clean DriverError. Out of scope for #4.",
+    "The draft spec's Reference Program A uses indexed targets (E.urls[Q.part]); indexed targets are a draft-spec feature outside the implemented one-line grammar, so the tested research program uses the unindexed equivalent with candidate-scoped alias.c<k>.<leaf> commits.",
+    "The issue text mentions 'all 22 registered commands'; the builtin registry has 17 (calculate, challenge, check, choose, compare, decompose, define, extract, fetch, hypothesize, rank, recall, remember, report, search, summarize, verify). The sealed program uses only registered commands.",
+    "GATHER accepts both bare ('GATHER draft AS ...', matching docs/adr/0002) and prefixed ('GATHER step.draft AS ...', matching docs/spec/01) step-id spellings; both normalize and seal identically. The judge step is defined by the indented line following the GATHER (the issue grammar names it via JUDGE step.<id> but does not pin its definition site); this keeps the judge a scoped template that never executes as a plan entry."
+  ]
+}
