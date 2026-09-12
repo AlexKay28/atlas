@@ -43,6 +43,29 @@ The bundled CLI currently uses deterministic demonstration handlers. Real model
 workers can implement the same coordinator contract; model dispatch adapters are
 the next integration layer.
 
+## CLI Reference
+
+| Subcommand | Required flags | Purpose |
+| --- | --- | --- |
+| `lint` | `program` | Parse and validate a `.think` program file |
+| `seal` | `program` | Print the sealed SHA-256 digest of a program |
+| `run` | `program`, `--db`, `--run-id`, `--seal` | Execute a sealed program; optional `--workspace`, `--worker` |
+| `resume` | `--db`, `--run-id`, `--program`, `--seal` | Resume an interrupted run after a crash; optional `--workspace`, `--worker` |
+| `status` | `--db`, `--run-id` | Print run status and progress bar |
+| `events` | `--db`, `--run-id` | Print ordered event log as JSON lines |
+| `audit` | `--db`, `--run-id` | Verify a persisted run against audit invariants |
+| `learn` | `--runs` | Mine a runs directory into protocol candidates and failure clusters; optional `--out` |
+| `bench` | — | Run the deterministic benchmark harness; optional `--repetitions`, `--out`, `--latency-seconds` |
+| `next` | `--db`, `--run-id`, `--program`, `--seal` | Render the task envelope for the next ready invocation (external driver) |
+| `submit` | `--db`, `--run-id`, `--invocation-id`, `--result-file` | Submit a result envelope for a dispatched invocation; optional `--program`, `--seal`, `--claim-token`, `--claim-timeout` |
+| `ready` | `--db`, `--run-id`, `--program`, `--seal` | Render and claim the next ready invocation; optional `--workspace`, `--claim-timeout` |
+| `claim` | `--db`, `--run-id`, `--program`, `--seal` | Like `ready` but records a claimant name; optional `--claimant`, `--workspace`, `--claim-timeout` |
+
+See the [design doc](docs/design/01-reasoning-language-foundation.md) for the
+reasoning behind the frozen 23-command registry, the [CHANGELOG](CHANGELOG.md)
+for release history, and the [command catalog](docs/spec/02-command-catalog.md)
+for the full command contract specification.
+
 ## Agent Demo
 
 `demo/tasks/` contains hard evaluation tasks. The project-local skill at
