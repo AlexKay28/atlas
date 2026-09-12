@@ -1,0 +1,17 @@
+# Scratch program (written AFTER landing issue #7, not sealed): exercises
+# the new REVISE/RETIRE clause end to end — both groups, comma-separated
+# refs, on a single-target step, correcting nodes produced earlier.
+
+PROGRAM issue_07_revise_retire_scratch VERSION 1.0
+
+INPUT
+    G.request = "verify the revise/retire clause lints"
+    C.scope = "src/tikhon/syntax and src/tikhon/runtime"
+
+step.frame: DO define(request = G.request) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.context
+step.read: DO fetch(resource_refs = E.context) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "corrections") -> V.analysis
+step.conclude: DO summarize(source_refs = V.analysis, budget = 200) -> OUT.brief REVISE G.plan, V.analysis | RETIRE E.context, ART.sources
+
+RETURN OUT.brief, G.plan, V.analysis

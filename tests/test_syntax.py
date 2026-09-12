@@ -37,6 +37,7 @@ from tikhon.syntax import (
     ParseError,
     Program,
     Return,
+    canonical_json,
     parse_program,
     protocol_file_path,
     seal_digest,
@@ -975,3 +976,257 @@ def test_protocol_file_path_mapping():
     )
     with pytest.raises(ParseError, match="must start with"):
         protocol_file_path("framing")
+
+
+# -- revise/retire correction clause (issue #7) ---------------------------
+#
+# An invocation line may end with an optional trailing correction clause
+# `REVISE r1, r2 | RETIRE r3, r4` (either or both, pipe-separated groups;
+# each list is comma-separated refs).  REVISEd refs are set to the step's
+# single target value at commit time (so REVISE requires exactly one
+# target); RETIREd refs are removed from the projection.  Validation is
+# pragmatic: refs must exist earlier, may not be the step's own targets,
+# and no ref may appear in both groups; whether a RETIREd ref is still
+# RETURNed stays the programmer's responsibility.
+
+CORRECTIONS_PROGRAM = """\
+PROGRAM corrector VERSION 1.0
+
+INPUT
+  G.left = 5
+
+step.first: DO define(value = G.left) -> G.summary
+step.stale: DO define(value = G.left) -> E.stale
+step.fix: DO define(value = G.left) -> E.correction REVISE G.summary | RETIRE E.stale
+
+RETURN E.correction
+"""
+
+CORRECTIONS_KNOWN = {"define"}
+
+
+def test_revise_and_retire_clause_parses_both_groups():
+    program = parse_program(CORRECTIONS_PROGRAM)
+    fix = program.statements[2]
+    assert isinstance(fix, Invocation)
+    assert fix.revisions == ("G.summary",)
+    assert fix.retirements == ("E.stale",)
+    assert fix.targets == ("E.correction",)
+    assert validate_program(program, known_commands=CORRECTIONS_KNOWN) is True
+
+
+def test_steps_without_clause_default_to_empty():
+    program = parse_program(CANONICAL)
+    step = program.statements[0]
+    assert step.revisions == ()
+    assert step.retirements == ()
+
+
+@pytest.mark.parametrize(
+    ("clause", "revisions", "retirements"),
+    [
+        ("REVISE G.summary", ("G.summary",), ()),
+        ("RETIRE E.stale", (), ("E.stale",)),
+        (
+            "REVISE G.summary | RETIRE E.stale",
+            ("G.summary",),
+            ("E.stale",),
+        ),
+        ("REVISE G.summary, E.stale", ("G.summary", "E.stale"), ()),
+        ("RETIRE E.stale, G.summary", (), ("E.stale", "G.summary")),
+        (
+            "REVISE G.summary, E.stale | RETIRE E.stale, G.summary",
+            ("G.summary", "E.stale"),
+            ("E.stale", "G.summary"),
+        ),
+    ],
+)
+def test_clause_shapes_parse_with_comma_separated_refs(clause, revisions, retirements):
+    source = CORRECTIONS_PROGRAM.replace(
+        "-> E.correction REVISE G.summary | RETIRE E.stale",
+        f"-> E.correction {clause}",
+    )
+    fix = parse_program(source).statements[2]
+    assert fix.targets == ("E.correction",)
+    assert fix.revisions == revisions
+    assert fix.retirements == retirements
+
+
+def test_clause_tolerates_extra_whitespace():
+    source = CORRECTIONS_PROGRAM.replace(
+        "REVISE G.summary | RETIRE E.stale",
+        "REVISE  G.summary ,  E.stale   |   RETIRE  E.stale",
+    ).replace("-> E.correction REVISE", "->  E.correction    REVISE")
+    fix = parse_program(source).statements[2]
+    assert fix.revisions == ("G.summary", "E.stale")
+    assert fix.retirements == ("E.stale",)
+
+
+def test_malformed_clause_rejected():
+    for bad in [
+        "REVISE",
+        "REVISE G.summary |",
+        "REVISE G.summary | RETIRE",
+        "REVISE G.summary | RETIRE not.a-ref",
+        "REVISE G.summary RETIRE E.stale",
+    ]:
+        source = CORRECTIONS_PROGRAM.replace(
+            "-> E.correction REVISE G.summary | RETIRE E.stale",
+            f"-> E.correction {bad}",
+        )
+        with pytest.raises(ParseError):
+            parse_program(source)
+
+
+def test_revise_unknown_reference_rejected():
+    source = CORRECTIONS_PROGRAM.replace(
+        "REVISE G.summary", "REVISE G.ghost"
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match=r"REVISE reference G\.ghost"):
+        validate_program(program, known_commands=CORRECTIONS_KNOWN)
+
+
+def test_retire_unknown_reference_rejected():
+    source = CORRECTIONS_PROGRAM.replace(
+        "RETIRE E.stale", "RETIRE E.ghost"
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match=r"RETIRE reference E\.ghost"):
+        validate_program(program, known_commands=CORRECTIONS_KNOWN)
+
+
+def test_revise_own_target_rejected():
+    source = CORRECTIONS_PROGRAM.replace(
+        "REVISE G.summary", "REVISE E.correction"
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="own targets"):
+        validate_program(program, known_commands=CORRECTIONS_KNOWN)
+
+
+def test_retire_own_target_rejected():
+    source = CORRECTIONS_PROGRAM.replace(
+        "RETIRE E.stale", "RETIRE E.correction"
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="own targets"):
+        validate_program(program, known_commands=CORRECTIONS_KNOWN)
+
+
+def test_revise_and_retire_overlap_rejected():
+    source = CORRECTIONS_PROGRAM.replace(
+        "REVISE G.summary | RETIRE E.stale",
+        "REVISE G.summary | RETIRE G.summary",
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="both"):
+        validate_program(program, known_commands=CORRECTIONS_KNOWN)
+
+
+def test_retire_reference_defined_only_later_rejected():
+    source = CORRECTIONS_PROGRAM.replace(
+        "step.fix: DO define(value = G.left) -> E.correction REVISE G.summary | RETIRE E.stale",
+        "step.fix: DO define(value = G.left) -> E.correction RETIRE E.later\n"
+        "step.later: DO define(value = G.left) -> E.later",
+    ).replace("RETURN E.correction", "RETURN E.correction")
+    program = parse_program(source)
+    with pytest.raises(ParseError, match=r"RETIRE reference E\.later"):
+        validate_program(program, known_commands=CORRECTIONS_KNOWN)
+
+
+def test_kb_reference_cannot_be_revised_or_retired():
+    for kind in ("REVISE", "RETIRE"):
+        source = CORRECTIONS_PROGRAM.replace(
+            f"{kind} G.summary" if kind == "REVISE" else "RETIRE E.stale",
+            f"{kind} KB.note",
+        )
+        program = parse_program(source)
+        with pytest.raises(ParseError, match=f"{kind} reference KB.note"):
+            validate_program(program, known_commands=CORRECTIONS_KNOWN)
+
+
+def test_revise_on_multi_target_step_rejected():
+    source = CORRECTIONS_PROGRAM.replace(
+        "step.fix: DO define(value = G.left) -> E.correction REVISE G.summary | RETIRE E.stale",
+        "step.fix: DO define(value = G.left) -> E.correction, E.extra REVISE G.summary",
+    ).replace("RETURN E.correction", "RETURN E.correction, E.extra")
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="requires exactly one target"):
+        validate_program(program, known_commands=CORRECTIONS_KNOWN)
+
+
+def test_retire_on_multi_target_step_allowed():
+    source = CORRECTIONS_PROGRAM.replace(
+        "step.fix: DO define(value = G.left) -> E.correction REVISE G.summary | RETIRE E.stale",
+        "step.fix: DO define(value = G.left) -> E.correction, E.extra RETIRE E.stale",
+    ).replace("RETURN E.correction", "RETURN E.correction, E.extra")
+    program = parse_program(source)
+    assert validate_program(program, known_commands=CORRECTIONS_KNOWN) is True
+
+
+def test_returning_a_retired_reference_still_validates():
+    # Pragmatic per the issue: RETURN semantics are the programmer's
+    # responsibility; validation only checks existence, no overlap, and
+    # not-own-target.
+    source = CORRECTIONS_PROGRAM.replace(
+        "RETURN E.correction", "RETURN E.correction, E.stale"
+    )
+    program = parse_program(source)
+    assert validate_program(program, known_commands=CORRECTIONS_KNOWN) is True
+
+
+def test_clause_works_with_done_and_ref_lists():
+    source = """\
+PROGRAM corrector VERSION 1.0
+
+INPUT
+  G.left = 5
+  G.right = 7
+
+step.first: DO define(value = G.left) -> G.summary
+step.stale: DO define(value = G.left) -> E.stale
+step.fix: DO merge(items = [G.left, G.right]) -> E.correction
+DONE E.correction == 12
+step.settle: DO define(value = E.correction) -> E.settled REVISE G.summary | RETIRE E.stale
+
+RETURN E.settled
+"""
+    program = parse_program(source)
+    settle = program.statements[3]
+    assert settle.revisions == ("G.summary",)
+    assert settle.retirements == ("E.stale",)
+    assert settle.done is None
+    assert program.statements[2].done is not None
+    assert (
+        validate_program(program, known_commands={"define", "merge"}) is True
+    )
+
+
+def test_clause_seal_digest_deterministic_and_sensitive():
+    base = seal_digest(parse_program(CORRECTIONS_PROGRAM))
+    assert seal_digest(parse_program(CORRECTIONS_PROGRAM)) == base
+    decorated = "# comment\n\n" + CORRECTIONS_PROGRAM + "\n# trailing\n"
+    assert seal_digest(parse_program(decorated)) == base
+    without_clause = CORRECTIONS_PROGRAM.replace(
+        " REVISE G.summary | RETIRE E.stale", ""
+    )
+    assert seal_digest(parse_program(without_clause)) != base
+    swapped = CORRECTIONS_PROGRAM.replace(
+        "REVISE G.summary", "REVISE G.left"
+    )
+    assert seal_digest(parse_program(swapped)) != base
+    reordered = CORRECTIONS_PROGRAM.replace(
+        "REVISE G.summary | RETIRE E.stale",
+        "REVISE G.summary | RETIRE E.stale, G.summary",
+    )
+    assert seal_digest(parse_program(reordered)) != base
+
+
+def test_clause_canonical_json_omits_empty_groups():
+    # Pre-existing programs keep their exact canonical form (and seal).
+    plain = canonical_json(parse_program(CANONICAL))
+    assert "revisions" not in plain and "retirements" not in plain
+    with_clause = canonical_json(parse_program(CORRECTIONS_PROGRAM))
+    assert '"revisions":["G.summary"]' in with_clause
+    assert '"retirements":["E.stale"]' in with_clause

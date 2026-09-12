@@ -1,0 +1,76 @@
+{
+  "task": "GitHub issue #13: tikhon learn — mine runs into protocol candidates and failure clusters (wake-sleep, human-gated)",
+  "run_id": "issue-13-tikhon-learn",
+  "seal": "20af411f0e592e132d7b88b1d56abdc64b31935753b6afad161dfc23fe338926",
+  "terminal_status": "succeeded",
+  "steps_planned": 8,
+  "steps_executed": 8,
+  "acceptance": [
+    {
+      "criterion": "mine_run_directory scans demo/runs/*/ artifacts (program.think parsed with tolerance, evaluation.json missing/invalid tolerated, WORKLOG.md optional, optional *.db event stores)",
+      "passed": true,
+      "evidence": "src/tikhon/learn.py mine_run_directory; tests/test_learn.py::test_parse_error_and_invalid_evaluation_tolerated (broken program + invalid JSON -> parse_error_runs + unknown status), test_event_store_failed_payloads_mined (real EventStore FAILED payload -> other cluster), test_telemetry_counts (run without evaluation.json -> unknown)."
+    },
+    {
+      "criterion": "Protocol candidates: recurring maximal step-command subsequences with support >= 2 distinct programs, carrying command sequence, support, example run ids, snake_case suggested name from first three commands",
+      "passed": true,
+      "evidence": "learn.py _mine_candidates (maximal = not contained in another candidate with equal-or-higher support); test_candidate_found_with_support_and_sequence asserts ('define','search','fetch','extract') support 4 with suggested_name define_search_fetch_pipeline; real corpus: support 10 for define_search_fetch_pipeline in report.md."
+    },
+    {
+      "criterion": "Programs using CALL are excluded from candidate mining",
+      "passed": true,
+      "evidence": "learn.py routes CALL programs to call_skipped_runs and omits their sequences; test_call_program_excluded_from_candidates asserts run-call absent from every candidate's run ids and support not inflated."
+    },
+    {
+      "criterion": "Failure clusters bucketed (identifier syntax, reference arrays, missing commands, path errors, other) with counts and 200-char-truncated representative quotes",
+      "passed": true,
+      "evidence": "learn.py _BUCKET_KEYWORDS priority order + QUOTE_LIMIT=200 + REPRESENTATIVES=3; test_failure_clusters_bucketed asserts missing_commands/path_errors/reference_arrays with exact counts, quotes and run ids; real report.md shows five clusters over 34 real quotes."
+    },
+    {
+      "criterion": "Routing/telemetry summary: runs count, terminal statuses, steps planned/executed totals",
+      "passed": true,
+      "evidence": "LearnReport fields runs_scanned/terminal_status_counts/steps_planned_total/steps_executed_total rendered under '## Routing telemetry'; test_telemetry_counts pins exact values (planned 28, executed 16 on the fixture)."
+    },
+    {
+      "criterion": "LearnReport dataclass with deterministic to_markdown() renderer with evidence links (file paths + run ids)",
+      "passed": true,
+      "evidence": "test_markdown_is_deterministic_and_evidence_linked: two mine_run_directory calls -> identical markdown containing sequences, suggested names and run ids; real corpus check 'deterministic: True | lines: 92'; report.md committed as evidence."
+    },
+    {
+      "criterion": "CLI tikhon learn --runs PATH [--out PATH]: prints markdown, writes with --out, exit 0 always, 1 on unreadable runs dir",
+      "passed": true,
+      "evidence": "cli.py _cmd_learn + parser wiring; test_cli_learn_prints_report (rc 0, report on stdout), test_cli_learn_out_writes_file (file written, path printed, content == to_markdown()), test_cli_learn_unreadable_runs_dir (rc 1, error on stderr); real run: PYTHONPATH=src python3 -m tikhon learn --runs demo/runs --out .../report.md."
+    },
+    {
+      "criterion": "Miner never writes anything except the optional --out file; never touches protocols/ or src/",
+      "passed": true,
+      "evidence": "test_miner_writes_nothing snapshots the runs dir before/after and asserts equality; learn.py contains no write operations; git status shows no changes under protocols/ from this run."
+    },
+    {
+      "criterion": "Real corpus yields >= 1 protocol candidate (loose assertion, skip only if demo/runs missing)",
+      "passed": true,
+      "evidence": "test_real_corpus_yields_candidates (@pytest.mark.skipif not REAL_RUNS.is_dir()) asserts report.candidates non-empty; mined report shows 12 candidates incl. define -> search -> fetch -> extract (support 10)."
+    },
+    {
+      "criterion": "Tikhon protocol followed: program.think linted+sealed to seal.txt before source edits and never modified after; WORKLOG.md maintained; solution.md + evaluation.json written",
+      "passed": true,
+      "evidence": "tikhon lint -> 'valid', tikhon seal -> 20af411f0e592e132d7b88b1d56abdc64b31935753b6afad161dfc23fe338926 written to seal.txt before any src/test edit; digest re-verified identical after all edits (installed CLI and PYTHONPATH=src python3 -m tikhon agree); WORKLOG.md has one section per step; WORKLOG.md/program.think/seal.txt predate learn.py."
+    },
+    {
+      "criterion": "File constraint: only src/tikhon/learn.py, src/tikhon/cli.py, tests/test_learn.py, demo/runs/issue-13-tikhon-learn/ touched",
+      "passed": true,
+      "evidence": "git status --porcelain: my changes are exactly cli.py (M), learn.py (??), test_learn.py (??), demo/runs/issue-13-tikhon-learn/ (??); the parser.py/model.py/coordinator.py modifications and demo/runs/issue-07-revise-retire/ belong to the concurrent agent working in the same tree."
+    },
+    {
+      "criterion": "Full test suite passes",
+      "passed": true,
+      "evidence": "python3 -m pytest -q -> 410 passed in 6.16s (baseline 397 at task start + 13 new learn tests); run twice with the same result while concurrent agent edits landed in between."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The installed tikhon CLI binary resolves to /home/alexkay28/.local/lib/python3.10/site-packages (stale, non-editable) while pytest uses the repo src via pyproject pythonpath; lint/seal were run with the installed CLI as mandated and the digest was cross-verified byte-identical with the repo parser, but CLI learn evidence was produced with PYTHONPATH=src python3 -m tikhon. No repo file was changed to work around this.",
+    "A concurrent agent modified src/tikhon/syntax/parser.py, src/tikhon/syntax/model.py and src/tikhon/runtime/coordinator.py in the same working tree during this run (issue-07 wave); those changes are outside this run's allowed file set, were not touched by this run, and the seal was re-verified stable across them. The mined corpus grew from 13 to 15 runs mid-task, exercising the miner's tolerance for a run dir (issue-07-revise-retire) whose evaluation.json was not yet complete.",
+    "The maximal-candidate rule keeps short 2-command sequences such as 'define -> search' (support 14) when no longer candidate covers all their programs; this is the formal maximal-repeat definition from the issue and keeps the report deterministic, but reviewers may prefer a longer minimum sequence length when promoting candidates to protocols/."
+  ]
+}

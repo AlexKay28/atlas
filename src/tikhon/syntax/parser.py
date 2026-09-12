@@ -25,6 +25,21 @@ _STEP_RE = re.compile(
     rf"^(?P<step>step\.{_NAME}):\s*DO\s+(?P<command>{_NAME})"
     rf"\((?P<args>.*)\)\s*->\s*(?P<targets>.+)$"
 )
+# Correction clause (issue #7): an invocation line may end with an
+# optional trailing `REVISE r1, r2 | RETIRE r3, r4` clause — either or
+# both pipe-separated groups; when both appear the REVISE group precedes
+# the RETIRE group.  Each group is a comma-separated list of typed
+# references.  REVISEd refs are set to the step's single target value at
+# commit time (so REVISE requires exactly one target); RETIREd refs are
+# removed from the projection.  The clause sits after the targets, which
+# are pure refs, so the anchored match cannot reach into quoted argument
+# text.
+_REF_LIST_PATTERN = rf"{_REF_PATTERN}(?:\s*,\s*{_REF_PATTERN})*"
+_CORRECTIONS_RE = re.compile(
+    rf"\s+(?:(?:REVISE\s+(?P<revise>{_REF_LIST_PATTERN})"
+    rf"(?:\s*\|\s*RETIRE\s+(?P<retire_after_revise>{_REF_LIST_PATTERN}))?)"
+    rf"|(?:RETIRE\s+(?P<retire>{_REF_LIST_PATTERN})))\s*$"
+)
 _STOP_RE = re.compile(
     rf"^STOP\s+(?P<kind>{_NAME})\((?P<ref>{_REF_PATTERN})?\)$"
 )
@@ -153,13 +168,42 @@ def parse_program(text: str) -> Program:
             )
             continue
 
+        # Issue #7: strip the optional trailing REVISE/RETIRE clause before
+        # matching the invocation itself; the clause only ever follows the
+        # target refs, so an unmatched clause falls through to the ordinary
+        # malformed-invocation / target errors below.
+        revisions: tuple[str, ...] = ()
+        retirements: tuple[str, ...] = ()
+        corrections = _CORRECTIONS_RE.search(line)
+        if corrections is not None:
+            line = line[:corrections.start()]
+            revise_text = corrections.group("revise")
+            retire_text = (
+                corrections.group("retire_after_revise")
+                or corrections.group("retire")
+            )
+            if revise_text:
+                revisions = tuple(
+                    ref.strip() for ref in revise_text.split(",")
+                )
+            if retire_text:
+                retirements = tuple(
+                    ref.strip() for ref in retire_text.split(",")
+                )
         step = _STEP_RE.fullmatch(line)
         if step is None:
             raise ParseError("malformed invocation", line_no, 1)
         args = tuple(_parse_argument(item, line_no) for item in _split_top_level(step.group("args")))
         targets = _parse_refs(step.group("targets"), line_no, "target")
         statements.append(
-            Invocation(step.group("step"), step.group("command"), args, targets)
+            Invocation(
+                step.group("step"),
+                step.group("command"),
+                args,
+                targets,
+                revisions=revisions,
+                retirements=retirements,
+            )
         )
 
     program = Program(
@@ -505,6 +549,52 @@ def validate_program(
                             argument.line,
                             1,
                         )
+            # Issue #7: correction-clause validation, kept pragmatic:
+            # every revised/retired ref must be an existing node (declared
+            # in INPUT or produced by an earlier step), may not be the
+            # step's own target, and no ref may appear in both groups;
+            # KB.* refs are cross-run semantic memory, never run-local
+            # nodes.  REVISE pins the step to a single target because the
+            # revised nodes receive that target's value.  Whether a
+            # RETIREd ref is still RETURNed on this path remains the
+            # programmer's responsibility.
+            if statement.revisions and len(statement.targets) != 1:
+                raise ParseError(
+                    f"REVISE on {statement.step_id} requires exactly one"
+                    " target (revised nodes are set to the step's single"
+                    f" target value); got {len(statement.targets)}"
+                )
+            for kind, refs in (
+                ("REVISE", statement.revisions),
+                ("RETIRE", statement.retirements),
+            ):
+                for ref in refs:
+                    if ref.startswith("KB."):
+                        raise ParseError(
+                            f"{kind} reference {ref} cannot correct KB.*"
+                            " nodes: semantic memory is durable across runs"
+                            " and is written with remember, not revised"
+                        )
+                    if ref in statement.targets:
+                        raise ParseError(
+                            f"{kind} reference {ref} is one of the step's"
+                            " own targets; corrections apply to earlier"
+                            " nodes only"
+                        )
+                    if ref not in available:
+                        raise ParseError(
+                            f"{kind} reference {ref} used before definition:"
+                            " corrections must name an existing node"
+                            " (a declared INPUT or an earlier step's target)"
+                        )
+            overlap = sorted(
+                set(statement.revisions) & set(statement.retirements)
+            )
+            if overlap:
+                raise ParseError(
+                    f"reference(s) {', '.join(overlap)} appear in both"
+                    " REVISE and RETIRE"
+                )
             for target in statement.targets:
                 if target.startswith("KB."):
                     raise ParseError(
@@ -715,6 +805,16 @@ def load_protocol(name: str, protocols_dir: str | Path | None = None) -> Program
         raise ParseError(f"protocol {name} failed to parse: {exc}") from exc
 
 
+def is_typed_reference(value: object) -> bool:
+    """Whether ``value`` is a syntactically valid typed reference.
+
+    Exported for the coordinator's dispatch guard (issue #7): a ref-shaped
+    argument string that no longer resolves must fail the invocation
+    clearly instead of passing the raw ref string through as a literal.
+    """
+    return isinstance(value, str) and _REF_RE.fullmatch(value) is not None
+
+
 def _references_in(value: Any) -> tuple[str, ...]:
     if isinstance(value, str) and _REF_RE.fullmatch(value):
         return (value,)
@@ -742,8 +842,10 @@ def _statement_dict(statement: object) -> dict[str, Any]:
         # Built field-by-field (not via dataclasses.asdict) so the sealed
         # canonical JSON stays identical to pre-ref-list programs: the
         # Argument.line source location is deliberately not part of the
-        # canonical form, exactly like comments and blank lines.
-        return {
+        # canonical form, exactly like comments and blank lines.  The
+        # issue #7 correction clause joins the canonical form only when
+        # present, keeping every pre-existing seal digest unchanged.
+        entry: dict[str, Any] = {
             "kind": "invocation",
             "step_id": statement.step_id,
             "command": statement.command,
@@ -762,6 +864,11 @@ def _statement_dict(statement: object) -> dict[str, Any]:
                 else None
             ),
         }
+        if statement.revisions:
+            entry["revisions"] = list(statement.revisions)
+        if statement.retirements:
+            entry["retirements"] = list(statement.retirements)
+        return entry
     if isinstance(statement, Call):
         # Like invocations, the source line is not part of the canonical form.
         return {

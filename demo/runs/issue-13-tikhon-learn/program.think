@@ -1,0 +1,19 @@
+# Tikhon run for GitHub issue #13: tikhon learn — mine runs into protocol candidates and failure clusters.
+
+PROGRAM issue_13_tikhon_learn VERSION 1.0
+
+INPUT
+    G.goal = "Add a wake-sleep mining pass (tikhon learn): scan demo/runs/* artifacts into a deterministic LearnReport of recurring maximal step-command sequences (protocol candidates), normalized failure clusters from evaluation.json deviations/unresolved and FAILED event payloads, and routing telemetry; expose tikhon learn --runs PATH [--out PATH]; promotion to protocols/ or the registry stays a human-approved PR and learn never writes outside the optional --out file"
+    C.scope = "src/tikhon/learn.py, src/tikhon/cli.py, tests/test_learn.py, demo/runs/issue-13-tikhon-learn"
+    C.behavior = "mine_run_directory(runs_dir) returns a LearnReport dataclass with deterministic (sorted, stable) output; protocol candidates are maximal step-command subsequences appearing in >=2 distinct programs, excluding programs that use CALL, each carrying the command sequence, support count, example run ids and a snake_case suggested name from the first three commands; failure clusters bucket deviations/unresolved/FAILED quotes into identifier syntax, reference arrays, missing commands, path errors and other with counts and 200-char-truncated representatives; markdown renderer is human-readable with evidence links and two calls produce identical text; CLI prints the report, writes it with --out, exits 0 always and 1 only on an unreadable runs dir; the miner writes nothing by itself"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "run_mining") -> E.findings
+step.design: DO summarize(source_refs = E.findings, budget = 4000) -> P.design
+step.patch: DO report(committed_refs = P.design, format = "python_module") -> ART.patch
+step.check: DO check(artifact = ART.patch, criteria = C.behavior) -> V.tests
+step.verify: DO verify(goal = G.goal, evidence = V.tests) -> V.result
+
+RETURN ART.patch, V.tests, V.result

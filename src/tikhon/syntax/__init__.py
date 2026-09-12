@@ -4,6 +4,7 @@ from .model import Argument, Call, Declaration, DonePredicate, Invocation, Progr
 from .parser import (
     ParseError,
     canonical_json,
+    is_typed_reference,
     load_protocol,
     parse_program,
     protocol_file_path,
@@ -27,4 +28,5 @@ __all__ = [
     "protocol_file_path",
     "canonical_json",
     "seal_digest",
+    "is_typed_reference",
 ]

@@ -1,6 +1,6 @@
 """Command-line interface for tikhon (docs/spec/02-command-catalog.md).
 
-Commands: lint, seal, run, status, events, audit.
+Commands: lint, seal, run, status, events, audit, learn.
 Uses argparse and the standard library only.
 """
 
@@ -11,9 +11,11 @@ import hashlib
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any, Mapping
 
 from tikhon.audit import audit_run
+from tikhon.learn import mine_run_directory
 from tikhon.memory import KnowledgeBase
 from tikhon.registry import builtin_registry
 from tikhon.runtime import DeterministicWorker, EventStore, EventType, SequentialCoordinator
@@ -392,6 +394,21 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_learn(args: argparse.Namespace) -> int:
+    try:
+        report = mine_run_directory(Path(args.runs))
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    markdown = report.to_markdown()
+    print(markdown)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(markdown)
+        print(args.out)
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tikhon",
@@ -438,6 +455,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p_audit.add_argument("--db", required=True, help="Path to event store database")
     p_audit.add_argument("--run-id", required=True, help="Run identifier")
     p_audit.set_defaults(func=_cmd_audit)
+
+    p_learn = sub.add_parser(
+        "learn",
+        help="Mine a runs directory into protocol candidates and failure clusters",
+    )
+    p_learn.add_argument(
+        "--runs", required=True, help="Path to the runs directory to mine"
+    )
+    p_learn.add_argument(
+        "--out", default=None, help="Optional path to write the markdown report"
+    )
+    p_learn.set_defaults(func=_cmd_learn)
 
     return parser
 

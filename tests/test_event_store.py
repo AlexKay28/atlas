@@ -263,3 +263,100 @@ def test_validation_failed_event_roundtrip(tmp_path):
         assert history[0].payload["predicate"]["ref"] == "E.result"
         assert history[0].instruction_id == "step.one"
         assert history[0].task_id == "task-1"
+
+
+# -- revise/retire deltas project and replay (issue #7) -------------------
+
+
+def test_revise_retire_delta_projects_and_bumps_version(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        store.create_run("run-1", "prog@1")
+        store.append("run-1", EventType.RUN_STARTED)
+        event = store.append(
+            "run-1",
+            EventType.SUCCEEDED,
+            instruction_id="step.fix",
+            invocation_id="inv-1",
+            payload={"delta": make_delta()},
+        )
+
+        assert event.state_version == 1
+        state = store.project_state("run-1")
+        assert state["state_version"] == 1
+        # revise merges into the existing node, replacing the given keys
+        assert state["nodes"]["n1"] == {
+            "id": "n1", "kind": "task", "status": "done",
+        }
+        # retire removes the node from the projection
+        assert "n2" not in state["nodes"]
+        assert state["artifacts"] == {"a1": {"id": "a1", "digest": "deadbeef"}}
+
+
+def test_revise_retire_replay_identical_after_reopen(tmp_path):
+    db = tmp_path / "events.db"
+    with EventStore(db) as store:
+        store.create_run("run-1", "prog@1")
+        store.append("run-1", EventType.RUN_STARTED)
+        store.append(
+            "run-1",
+            EventType.SUCCEEDED,
+            invocation_id="inv-1",
+            payload={"delta": make_delta()},
+        )
+        # a later step re-adds over the retired id: projection follows
+        # the event order deterministically
+        store.append(
+            "run-1",
+            EventType.SUCCEEDED,
+            invocation_id="inv-2",
+            payload={"delta": StateDelta(add_nodes=({"id": "n2", "kind": "task"},))},
+        )
+        before = store.project_state("run-1")
+
+    reopened = EventStore(db)
+    try:
+        assert reopened.project_state("run-1") == before
+        assert reopened.project_state("run-1")["nodes"]["n2"] == {
+            "id": "n2", "kind": "task",
+        }
+        assert "n1" in reopened.project_state("run-1")["nodes"]
+    finally:
+        reopened.close()
+
+
+def test_retired_node_stays_in_event_history(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        store.create_run("run-1", "prog@1")
+        store.append(
+            "run-1",
+            EventType.SUCCEEDED,
+            invocation_id="inv-1",
+            payload={"delta": StateDelta(add_nodes=({"id": "n1", "value": 1},))},
+        )
+        store.append(
+            "run-1",
+            EventType.SUCCEEDED,
+            invocation_id="inv-2",
+            payload={"delta": StateDelta(retire_nodes=("n1",))},
+        )
+
+        history = store.events("run-1")
+        # the historical add event still carries the node
+        assert history[0].payload["delta"]["add_nodes"] == [{"id": "n1", "value": 1}]
+        assert history[1].payload["delta"]["retire_nodes"] == ["n1"]
+        # ...while the projection no longer shows it
+        assert store.project_state("run-1")["nodes"] == {}
+        assert store.project_state("run-1")["state_version"] == 2
+
+
+def test_retire_of_absent_node_is_a_no_op(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        store.create_run("run-1", "prog@1")
+        store.append(
+            "run-1",
+            EventType.SUCCEEDED,
+            invocation_id="inv-1",
+            payload={"delta": StateDelta(retire_nodes=("ghost",))},
+        )
+        assert store.project_state("run-1")["nodes"] == {}
+        assert store.project_state("run-1")["state_version"] == 1

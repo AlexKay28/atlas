@@ -1499,3 +1499,197 @@ RETURN E.deep1, E.deep2
         assert "protocol.inner: step.deeper: DO extract" in texts
         state = store.project_state("run-nested")
         assert state["nodes"]["E.deep2"]["value"]["schema"] == "deep"
+
+
+# -- revise/retire node deltas (issue #7) ---------------------------------
+#
+# A step's trailing `REVISE r1, r2 | RETIRE r3` clause commits inside the
+# SAME StateDelta as the step's adds: REVISEd refs (existing earlier
+# nodes, never the step's own targets; REVISE requires a single-target
+# step) are set to the step's single target value, RETIREd refs are
+# removed from the projection while history retains them, the version
+# bumps once for the step, and replay after reopen is identical.
+
+REVISE_RETIRE_PROGRAM = """\
+PROGRAM corrector VERSION 1.0
+INPUT
+    G.left = 5
+step.first: DO define(goal = G.left) -> G.summary
+step.stale: DO define(goal = G.left) -> E.stale
+step.fix: DO calculate(left = G.left, right = G.left) -> E.correction REVISE G.summary | RETIRE E.stale
+RETURN E.correction
+"""
+
+CORRECTIONS_WORKER = DeterministicWorker(
+    handlers={
+        "define": define_handler,
+        "calculate": calculate_handler,
+    }
+)
+
+
+def run_corrections(store, run_id, program_text=REVISE_RETIRE_PROGRAM, worker=None):
+    coordinator = SequentialCoordinator(
+        store=store, worker=worker or CORRECTIONS_WORKER
+    )
+    return coordinator.execute(parse_program(program_text), run_id=run_id)
+
+
+def test_revise_replaces_value_and_retire_removes_in_same_delta(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        result = run_corrections(store, "run-corrections")
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"E.correction": 10}
+
+        state = store.project_state("run-corrections")
+        assert state["state_version"] == 3
+        assert set(state["nodes"]) == {"G.summary", "E.correction"}
+        # REVISE: the earlier node now carries the step's target value.
+        assert state["nodes"]["G.summary"]["value"] == 10
+        # RETIRE: removed from the projection.
+        assert "E.stale" not in state["nodes"]
+
+
+def test_succeeded_payload_carries_revise_and_retire_with_adds(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        run_corrections(store, "run-corrections")
+
+        succeeded = [
+            event for event in store.events("run-corrections")
+            if event.event_type is EventType.SUCCEEDED
+        ]
+        fix = next(
+            event for event in succeeded
+            if event.instruction_id == "step.fix"
+        )
+        delta = fix.payload["delta"]
+        assert delta["add_nodes"] == [{"id": "E.correction", "value": 10}]
+        assert delta["revise_nodes"] == [{"id": "G.summary", "value": 10}]
+        assert delta["retire_nodes"] == ["E.stale"]
+        # One version bump for the whole step, adds and corrections alike.
+        assert fix.state_version == 3
+
+
+def test_revised_value_visible_to_later_steps(tmp_path):
+    program = """\
+PROGRAM reviser VERSION 1.0
+INPUT
+    G.left = 5
+step.first: DO define(goal = G.left) -> G.summary
+step.fix: DO calculate(left = G.left, right = G.left) -> E.correction REVISE G.summary
+step.after: DO calculate(left = G.summary, right = G.left) -> OUT.after
+DONE OUT.after == 15
+RETURN E.correction, OUT.after
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        result = run_corrections(store, "run-revised", program_text=program)
+
+        assert result["status"] == "succeeded"
+        # G.summary was revised to 10 by step.fix; the later step and its
+        # DONE predicate observe the revised value.
+        assert result["outputs"] == {"E.correction": 10, "OUT.after": 15}
+
+
+def test_retired_node_unavailable_to_later_steps_fails_coherently(tmp_path):
+    program = REVISE_RETIRE_PROGRAM.replace(
+        "step.fix: DO calculate(left = G.left, right = G.left) -> E.correction REVISE G.summary | RETIRE E.stale",
+        "step.fix: DO calculate(left = G.left, right = G.left) -> E.correction REVISE G.summary | RETIRE E.stale\n"
+        "step.after: DO calculate(left = E.stale, right = G.left) -> OUT.after",
+    )
+    with EventStore(tmp_path / "events.db") as store:
+        result = run_corrections(store, "run-retired-use", program_text=program)
+
+        assert result["status"] == "failed"
+        assert "E.stale" in result["error"]
+        assert "retired" in result["error"]
+        history = store.events("run-retired-use")
+        assert history[-1].payload["status"] == "failed"
+        state = store.project_state("run-retired-use")
+        assert "OUT.after" not in state["nodes"]
+        counts = store.task_ledger("run-retired-use").profile()["counts"]
+        assert counts["cancelled"] == 1
+        assert counts["completed"] == 3
+
+
+def test_retire_only_keeps_history_and_replays_identically(tmp_path):
+    program = """\
+PROGRAM retirer VERSION 1.0
+INPUT
+    G.left = 5
+step.first: DO define(goal = G.left) -> G.summary
+step.stale: DO define(goal = G.left) -> E.stale
+step.fix: DO calculate(left = G.left, right = G.left) -> E.correction RETIRE E.stale
+RETURN E.correction
+"""
+    db = tmp_path / "events.db"
+    with EventStore(db) as store:
+        result = run_corrections(store, "run-retire-only", program_text=program)
+        assert result["status"] == "succeeded"
+
+        state = store.project_state("run-retire-only")
+        assert set(state["nodes"]) == {"G.summary", "E.correction"}
+        assert state["state_version"] == 3
+
+        # History retains the retired node: the earlier SUCCEEDED delta
+        # still carries its add, unmodified.
+        stale_add = next(
+            event
+            for event in store.events("run-retire-only")
+            if event.event_type is EventType.SUCCEEDED
+            and event.instruction_id == "step.stale"
+        )
+        assert stale_add.payload["delta"]["add_nodes"] == [
+            {"id": "E.stale", "value": {"goal": "add two inputs", "observed": 5}}
+        ]
+
+        before = store.project_state("run-retire-only")
+
+    reopened = EventStore(db)
+    try:
+        assert reopened.project_state("run-retire-only") == before
+    finally:
+        reopened.close()
+
+
+def test_revise_retire_run_replays_identically_and_audits_clean(tmp_path):
+    from tikhon.audit import audit_run
+
+    db = tmp_path / "events.db"
+    with EventStore(db) as store:
+        result = run_corrections(store, "run-corrections")
+        assert result["status"] == "succeeded"
+        state_before = store.project_state("run-corrections")
+        ledger_before = store.task_ledger("run-corrections")
+
+        report = audit_run(store, "run-corrections")
+        assert report.ok, [finding.to_dict() for finding in report.findings]
+
+    reopened = EventStore(db)
+    try:
+        assert reopened.project_state("run-corrections") == state_before
+        assert reopened.task_ledger("run-corrections").tasks == ledger_before.tasks
+    finally:
+        reopened.close()
+
+
+def test_retire_within_protocol_expansion_reaches_caller_state(tmp_path):
+    # Protocol steps share the caller's run state, so a RETIRE inside the
+    # expansion removes the node from the one shared projection.
+    protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL.replace(
+        "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis",
+        "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis\n"
+        "step.trim: DO summarize(source_refs = V.analysis, budget = 10) -> E.trim RETIRE E.context",
+    ))
+    program = parse_program(CALLER_TEST_PROGRAM)
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store=store, worker=make_protocol_worker(), protocols_dir=protocols
+        ).execute(program, run_id="run-protocol-retire")
+
+        assert result["status"] == "succeeded"
+        state = store.project_state("run-protocol-retire")
+        # The protocol's own step retired its own earlier node.
+        assert "E.context" not in state["nodes"]
+        assert "ART.sources" in state["nodes"]
+        assert state["nodes"]["E.trim"]["value"].startswith("brief of")

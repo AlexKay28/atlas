@@ -1,0 +1,20 @@
+# Sealed program for GitHub issue #7: wire revise/retire node deltas in
+# the coordinator. Written in the pre-existing canonical grammar and
+# sealed before any source edit (see seal.txt); the REVISE/RETIRE clause
+# this issue adds is exercised by scratch-program.think after landing.
+
+PROGRAM issue_07_revise_retire VERSION 1.0
+
+INPUT
+    G.goal = "Wire revise/retire node deltas in the coordinator: parse an optional trailing REVISE/RETIRE clause on invocation lines into Invocation, emit the corrections inside the step's own StateDelta, and keep projection, versioning, DONE, and replay identical"
+    C.scope = "src/tikhon/syntax/parser.py, src/tikhon/syntax/model.py, src/tikhon/runtime/coordinator.py, tests/test_syntax.py, tests/test_coordinator.py, tests/test_event_store.py"
+    C.done = "Full pytest suite passes with new tests for clause parsing, validation (existence, no overlap, not own target), coordinator delta emission with version bump, and replay identity after reopen; baseline 397 passed"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.patterns
+step.design: DO extract(artifact = E.patterns, schema = "revise_retire_clause_design") -> V.design
+step.patch: DO summarize(source_refs = V.design, budget = 4000) -> P.patch
+step.check: DO check(artifact = P.patch, criteria = C.done) -> V.tests
+step.verify: DO verify(goal = G.goal, evidence = V.tests) -> V.result
+
+RETURN G.plan, V.tests, V.result

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping
 from tikhon.runtime.events import EventStore, EventType, _Record
 from tikhon.runtime.tasks import TaskLedger, TaskLedgerError
 from tikhon.state import StateDelta
-from tikhon.syntax import load_protocol, validate_program
+from tikhon.syntax import is_typed_reference, load_protocol, validate_program
 from tikhon.syntax.model import Argument, Call, Declaration, Invocation, Program, Return, Stop
 
 if TYPE_CHECKING:
@@ -262,6 +262,33 @@ class SequentialCoordinator:
             raise ValueError(f"KB key {key!r} not found (reference {ref})")
         return self.memory.get(key)
 
+    @staticmethod
+    def _reject_unresolved_refs(value: Any, values: Mapping[str, Any]) -> None:
+        """Fail ref-shaped arguments that no longer resolve (issue #7).
+
+        Validation guarantees every ref inside an argument resolves at
+        dispatch time — except refs retired by an earlier step's RETIRE
+        clause.  Passing such a ref through as a literal would silently
+        feed the raw ref string to the worker, so the invocation must
+        fail clearly instead.  Purely additive: before retirement existed
+        this guard was unreachable for validated programs, so it cannot
+        change the behavior of any pre-#7 program.
+        """
+        if isinstance(value, str):
+            if (
+                value not in values
+                and not value.startswith("KB.")
+                and is_typed_reference(value)
+            ):
+                raise ValueError(
+                    f"reference {value} is not in run state (retired or"
+                    " undefined); retired nodes cannot be read by later"
+                    " steps"
+                )
+        elif isinstance(value, list):
+            for item in value:
+                SequentialCoordinator._reject_unresolved_refs(item, values)
+
     def _resolve_arg_value(self, value: Any, values: Mapping[str, Any]) -> Any:
         """Resolve one raw argument value against run state (issue #12).
 
@@ -299,6 +326,9 @@ class SequentialCoordinator:
         """
         resolved: dict[str, Any] = {}
         for arg in call_args:
+            # Issue #7: guard first so a retired ref in a CALL argument
+            # fails the bind instead of passing the raw ref string through.
+            self._reject_unresolved_refs(arg.value, values)
             resolved[arg.name] = self._resolve_arg_value(arg.value, values)
         for declaration in declarations:
             leaf = declaration.ref.split(".")[-1]
@@ -573,6 +603,10 @@ class SequentialCoordinator:
             try:
                 resolved_kwargs: dict[str, Any] = {}
                 for arg in statement.args:
+                    # Issue #7: guard first so a ref retired by an earlier
+                    # step fails the invocation clearly instead of passing
+                    # the raw ref string through as a literal.
+                    self._reject_unresolved_refs(arg.value, values)
                     if isinstance(arg.value, str) and arg.value in values:
                         resolved_kwargs[arg.name] = values[arg.value]
                     elif isinstance(arg.value, str) and arg.value.startswith("KB."):
@@ -685,10 +719,34 @@ class SequentialCoordinator:
             # RETURN refs to the caller's CALL targets.  Applied before
             # VALIDATION_PASSED so a commit failure keeps the truthful
             # event order (no VALIDATION_PASSED before FAILED).
+            # Issue #7: resolve the step's REVISE/RETIRE corrections here,
+            # before VALIDATION_PASSED, so a malformed (unvalidated)
+            # invocation fails through the standard atomic path.  REVISE
+            # refs are set to the step's single target value (validation
+            # pins REVISE to single-target steps); RETIRE refs are removed
+            # from the projection.  Both commit inside the same SUCCEEDED
+            # delta as the step's adds, so later steps observe the
+            # corrected state and the version bumps once per step.
+            revision_nodes: list[dict[str, Any]] = []
+            retired_nodes: list[str] = []
             try:
                 finalize_nodes = self._apply_call_finalizes(
                     entry.finalizes, target_values, values
                 )
+                if statement.revisions:
+                    if len(statement.targets) != 1 or (
+                        statement.targets[0] not in target_values
+                    ):
+                        raise ValueError(
+                            f"REVISE on {statement.step_id} requires the"
+                            " step's single target value"
+                        )
+                    revised_value = target_values[statement.targets[0]]
+                    revision_nodes = [
+                        {"id": ref, "value": revised_value}
+                        for ref in statement.revisions
+                    ]
+                retired_nodes = list(statement.retirements)
             except Exception as exc:
                 failed = True
                 error_msg = str(exc)
@@ -711,8 +769,19 @@ class SequentialCoordinator:
                 values[target] = val
                 add_nodes.append({"id": target, "value": val})
             add_nodes.extend(finalize_nodes)
+            # Issue #7: keep the run-state values mapping in lockstep with
+            # the corrections so later steps resolve revised values and
+            # fail coherently on retired refs.
+            for node in revision_nodes:
+                values[node["id"]] = node["value"]
+            for ref in retired_nodes:
+                values.pop(ref, None)
 
-            delta = StateDelta(add_nodes=tuple(add_nodes))
+            delta = StateDelta(
+                add_nodes=tuple(add_nodes),
+                revise_nodes=tuple(revision_nodes),
+                retire_nodes=tuple(retired_nodes),
+            )
 
             expected_sv = self.store._current_state_version(run_id)
 

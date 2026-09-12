@@ -35,11 +35,24 @@ class DonePredicate:
 
 @dataclass(frozen=True)
 class Invocation:
+    """One sequential step: ``step.<id>: DO <command>(args) -> targets``.
+
+    ``revisions`` and ``retirements`` carry the optional trailing
+    correction clause (issue #7): ``REVISE r1, r2 | RETIRE r3`` (either or
+    both groups).  Semantics, applied by the coordinator inside the
+    step's own SUCCEEDED delta: a REVISE ref — an existing earlier node,
+    never the step's own target — is set to the step's single target
+    value (REVISE is therefore only valid on single-target steps); a
+    RETIRE ref is removed from the projection (history retains it).
+    """
+
     step_id: str
     command: str
     args: tuple[Argument, ...]
     targets: tuple[str, ...]
     done: DonePredicate | None = None
+    revisions: tuple[str, ...] = ()
+    retirements: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

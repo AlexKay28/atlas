@@ -1,0 +1,59 @@
+{
+  "task": "GitHub issue #7: wire revise/retire node deltas in the coordinator (grammar clause REVISE/RETIRE, same-delta emission, projection/version/replay consistency)",
+  "run_id": "issue-07-revise-retire",
+  "seal": "b731e3e0d9be477d6a1a28a9e44ad837ca09dfe44b45199ae8fac4c381fa2c61",
+  "terminal_status": "succeeded",
+  "steps_planned": 6,
+  "steps_executed": 6,
+  "acceptance": [
+    {
+      "criterion": "REVISE/RETIRE clause parses (both groups, either alone, neither)",
+      "passed": true,
+      "evidence": "tests/test_syntax.py: test_revise_and_retire_clause_parses_both_groups, test_steps_without_clause_default_to_empty, and six parametrized clause shapes (REVISE-only, RETIRE-only, both, comma-separated lists) plus whitespace and malformed-clause rejection all pass."
+    },
+    {
+      "criterion": "Invalid refs, overlap, and own-target corrections rejected; seal deterministic",
+      "passed": true,
+      "evidence": "tests/test_syntax.py: unknown REVISE/RETIRE refs, own-target, REVISE+RETIRE overlap, KB.* refs, later-defined refs, and multi-target REVISE all raise ParseError with named refs; test_clause_seal_digest_deterministic_and_sensitive verifies digest stability and sensitivity; canonical JSON of pre-existing programs is byte-identical (test_clause_canonical_json_omits_empty_groups)."
+    },
+    {
+      "criterion": "Coordinator emits revisions/retirements in the SAME StateDelta as the step's adds; revise replaces the node value with the step's single target value; retire removes the node",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py: test_succeeded_payload_carries_revise_and_retire_with_adds asserts delta == {add_nodes: [E.correction], revise_nodes: [{id: G.summary, value: 10}], retire_nodes: [E.stale]}; test_revise_replaces_value_and_retire_removes_in_same_delta asserts projection nodes == {G.summary: 10, E.correction: 10}."
+    },
+    {
+      "criterion": "Revise/retire bump state_version like adds; projection applies them; DONE keeps working over revised values",
+      "passed": true,
+      "evidence": "SUCCEEDED event carries state_version 3 for the third step (one bump per step); test_revised_value_visible_to_later_steps runs a later step and DONE OUT.after == 15 over a revised G.summary; delta.py/events.py required no changes (apply_to/project_state already handle revise/retire, verified by reading them first)."
+    },
+    {
+      "criterion": "Retire removes from projection while history retains the node; replay identical after reopen",
+      "passed": true,
+      "evidence": "tests/test_event_store.py: test_retired_node_stays_in_event_history and test_revise_retire_replay_identical_after_reopen; tests/test_coordinator.py: test_retire_only_keeps_history_and_replays_identically and test_revise_retire_run_replays_identically_and_audits_clean (audit_run reports ok)."
+    },
+    {
+      "criterion": "Existing tests unbroken; full suite passes",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: 444 passed (397 baseline + 39 new from this issue + 8 concurrent issue-13 tests, zero failures)."
+    },
+    {
+      "criterion": "Only allowed files touched; shared files with agent #13 untouched",
+      "passed": true,
+      "evidence": "git status: modifications confined to src/tikhon/syntax/{parser,model,__init__}.py, src/tikhon/runtime/coordinator.py, tests/{test_syntax,test_coordinator,test_event_store}.py, demo/runs/issue-07-revise-retire/. cli.py, learn.py, test_learn.py and demo/runs/issue-13-tikhon-learn/ are the concurrent agent's and were never edited."
+    },
+    {
+      "criterion": "Tikhon protocol honored: program.think sealed before source edits and never modified afterwards",
+      "passed": true,
+      "evidence": "seal.txt (b731e3e0d9be477d6a1a28a9e44ad837ca09dfe44b45199ae8fac4c381fa2c61) written before the first source edit; recomputed digest after all edits matches; scratch-program.think exercising the new clause lints valid via PYTHONPATH=src."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "REVISE on a multi-target step is rejected at validation (and defensively at dispatch): the issue defines revise semantics only for the single-target case and explicitly rejects positional target mapping as too magical, so leaving it undefined was unsound. RETIRE remains allowed on multi-target steps.",
+    "Added one minimal export is_typed_reference to tikhon.syntax (explicitly allowed) plus an additive coordinator guard _reject_unresolved_refs: without it, a later step argument naming a retired ref fell through the pre-existing literal passthrough and silently handed the raw ref string (e.g. 'E.stale') to the worker. The guard only fires where the old code was unreachable for validated programs, and is also applied to CALL argument binding.",
+    "The clause order is canonical: when both groups appear, REVISE precedes RETIRE (as in the issue's example); a standalone RETIRE group is allowed, RETIRE-first is a parse error.",
+    "src/tikhon/state/delta.py and src/tikhon/runtime/events.py were not modified because reading them first showed revise/retire application, projection, and version-bump logic already present; the issue's conditional '(if application logic missing)' did not trigger.",
+    "The installed tikhon console script resolves a non-editable site-packages copy, so lint/seal ran via PYTHONPATH=src python3 -m tikhon against local source (same workaround as issue-06).",
+    "Suite count 444 includes 8 passing tests from the concurrent issue-13 agent sharing the worktree; this change shares no files with them."
+  ]
+}
