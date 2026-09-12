@@ -1,0 +1,47 @@
+{
+  "task": "GitHub issue #30: KnowledgeBase thread safety — check_same_thread=False + RLock around all operations",
+  "run_id": "sprint2-30-kb-threads",
+  "seal": "9b788c700c05e4accc41a46c00999dc595a131cd910cf6ca496c2eafdb99ede5",
+  "terminal_status": "succeeded",
+  "steps_planned": 10,
+  "steps_executed": 10,
+  "acceptance": [
+    {
+      "criterion": "(1) concurrent run, 2+ remember steps, max_workers=2 -> succeeded",
+      "passed": true,
+      "evidence": "tests/test_memory.py::test_concurrent_remember_steps_succeed — 2 set calls on ThreadPoolExecutor(max_workers=2) both succeed; KB.get returns correct values"
+    },
+    {
+      "criterion": "(2) KB methods callable from a non-creator thread",
+      "passed": true,
+      "evidence": "tests/test_memory.py::test_kb_callable_from_non_creator_thread — KB created on main thread, set/get/__contains__/recall/keys all called from worker thread without error"
+    },
+    {
+      "criterion": "(3) parallel remember+recall of one key never tears",
+      "passed": true,
+      "evidence": "tests/test_memory.py::test_parallel_remember_and_recall_never_tears — 40 set + 40 recall on 4 threads; no exceptions; final get returns a valid value containing 'deploy value'; keys() returns exactly 1 key"
+    },
+    {
+      "criterion": "(4) all #45 recall tests pass unchanged",
+      "passed": true,
+      "evidence": "test_recall_ranks_matching_key_first, test_delete_removes_key_from_recall, test_recall_empty_kb_returns_empty, test_recall_lazy_creation_on_old_db all pass; FTS5 recall surface and exact-key grammar unchanged (only locking added)"
+    },
+    {
+      "criterion": "full pytest suite green (baseline 857)",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q -> 860 passed in 20.36s (857 baseline + 3 new)"
+    },
+    {
+      "criterion": "git status --porcelain shows ONLY owned files",
+      "passed": true,
+      "evidence": "git status --porcelain: M src/tahoe/memory.py, M tests/test_memory.py, ?? demo/runs/sprint2-30-kb-threads/ — all within owned file scope"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    {
+      "description": "Sealed ATLAS plan in issue #30 references src/atlas/memory.py and tests/test_memory.py in C.scope. The #53 TAHOE rebrand moved all src/atlas/ paths to src/tahoe/. Only string literals mentioning src/atlas/ were updated to src/tahoe/ in program.think; logic is identical.",
+      "impact": "none — path rename only, no logic change"
+    }
+  ]
+}
