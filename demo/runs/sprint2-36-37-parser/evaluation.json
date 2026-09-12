@@ -1,0 +1,59 @@
+{
+  "task": "GitHub issues #36 + #37 (parser language+ergonomics bundle)",
+  "run_id": "sprint2-36-37-parser",
+  "seal": "4b3514963974df9483fdcbed2f3d276fa224b56459a69de52bac121237f1ac4f",
+  "terminal_status": "succeeded",
+  "steps_planned": 10,
+  "steps_executed": 10,
+  "acceptance": [
+    {
+      "criterion": "#36(1): DONE after a conditional invocation attaches to the embedded step",
+      "passed": true,
+      "evidence": "test_done_attaches_after_if_do_conditional; test_done_attaches_after_scatter_body"
+    },
+    {
+      "criterion": "#36(2): field-path and != DONE parse",
+      "passed": true,
+      "evidence": "test_done_field_path_spec_example_parses; test_done_not_equals_operator_parses; test_done_not_equals_with_field_path; test_done_count_operator_parses; test_done_count_with_field_path; test_done_field_path_ref_accepted"
+    },
+    {
+      "criterion": "#36(3): spec example 01:128-131 round-trips",
+      "passed": true,
+      "evidence": "test_done_field_path_spec_example_parses (V.quality.status == \"passed\")"
+    },
+    {
+      "criterion": "#36(4): IF V.a == V.b parses",
+      "passed": true,
+      "evidence": "test_if_ref_to_ref_comparison_parses; test_if_ref_to_ref_comparison_validates; test_if_ref_to_ref_comparison_undefined_rejected; test_done_ref_to_ref_comparison_parses; test_done_ref_to_ref_comparison_validates; test_done_ref_to_ref_comparison_undefined_rejected"
+    },
+    {
+      "criterion": "#36: indexed targets give precise error naming [ column and workaround",
+      "passed": true,
+      "evidence": "test_indexed_target_gives_precise_error (match='indexed element access.*SCATTER')"
+    },
+    {
+      "criterion": "#37(1): trailing comment parses and seals identically to comment-free program",
+      "passed": true,
+      "evidence": "test_trailing_comment_strips_and_seals_identically; test_trailing_comment_in_target_line; test_trailing_comment_after_done; test_trailing_comment_with_hash_in_string_preserved"
+    },
+    {
+      "criterion": "#37(2): multi-line bracketed INPUT parses",
+      "passed": true,
+      "evidence": "test_multiline_input_parses; test_multiline_input_seal_deterministic"
+    },
+    {
+      "criterion": "#37(3): unbalanced-arg errors carry line and column",
+      "passed": true,
+      "evidence": "test_split_top_level_unbalanced_error_has_line; test_split_top_level_unbalanced_closing_error_has_line"
+    },
+    {
+      "criterion": "HARD CONSTRAINT: purely additive — all previously-valid seals byte-identical",
+      "passed": true,
+      "evidence": "CANONICAL seal 39c3a47a... unchanged; 938 baseline tests pass; trailing-comment seals identically (v1)"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "String literals mentioning src/atlas/ updated to src/tahoe/ per #53 TAHOE rebrand; logic identical; original seal 71f96a6e... matches issue comment"
+  ]
+}

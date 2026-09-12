@@ -99,7 +99,7 @@ _BARRIER_RE = re.compile(
 _GATHER_MODES = frozenset({"all", "any", "ranked"})
 _GATHER_MODE_ALIASES = {"first": "any", "best": "ranked"}
 _STOP_KINDS = frozenset({"completed", "failed", "blocked", "denied", "cancelled", "unresolved"})
-_DONE_OPS = frozenset({"equals", "in", "matched"})
+_DONE_OPS = frozenset({"equals", "in", "matched", "ne", "eq_ref", "ne_ref", "count"})
 _DONE_MATCHED_RE = re.compile(r"^matched\((?P<inner>.*)\)$", re.DOTALL)
 # Issue #3: block forms of the conditional (ELSE, ELSE IF) are out of scope
 # and rejected with a dedicated message; the keyword check sees the line's
@@ -130,16 +130,111 @@ class ParseError(Exception):
         return self.message
 
 
+def _strip_trailing_comment(raw: str) -> str:
+    """Strip a trailing ``#`` comment outside quotes (issue #37).
+
+    Scans the raw line character by character; when a ``#`` is found
+    outside any quote (and not preceded by a non-whitespace character that
+    is part of a ref or token), everything from that ``#`` to end-of-line
+    is removed.  Quoted-string tracking handles both ``"`` and ``'`` with
+    ``\\`` escapes.  A ``#`` inside a JSON literal string is preserved.
+    """
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(raw):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+        elif char == "#":
+            return raw[:index].rstrip()
+    return raw
+
+
+def _is_unbalanced(text: str) -> bool:
+    """Whether *text* has unbalanced brackets or unclosed quotes (issue #37).
+
+    Used to detect multi-line INPUT declarations: when a declaration
+    value has open brackets (e.g. ``{"a": [``), the parser accumulates
+    subsequent indented lines until brackets and quotes balance.
+    """
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    for char in text:
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+        elif char in "[({":
+            depth += 1
+        elif char in "])}":
+            depth -= 1
+    return quote is not None or depth != 0
+
+
+def _done_ref_matches_targets(ref: str, targets: tuple[str, ...]) -> bool:
+    """Whether *ref* or its longest dotted prefix matches a target (issue #36).
+
+    A DONE ref like ``V.quality.status`` is valid when ``V.quality`` is a
+    target, per the spec's immutable field selection.  The exact ref
+    itself may also match a target directly.
+    """
+    segments = ref.split(".")
+    while segments:
+        if ".".join(segments) in targets:
+            return True
+        segments.pop()
+    return False
+
+
+def _resolve_done_target(
+    statement: object, line_no: int
+) -> tuple[Invocation | None, object]:
+    """Find the invocation a DONE line should attach to (issue #36).
+
+    Returns ``(invocation, replace_fn)`` where ``replace_fn(new_invocation)``
+    produces the statement object that should replace ``statement`` in the
+    program's statement list.  ``None`` means DONE cannot attach here.
+
+    - A bare ``Invocation`` attaches directly.
+    - A ``Conditional`` whose embedded statement is an ``Invocation``
+      attaches to that embedded invocation.
+    - A ``Scatter`` attaches to its body invocation.
+    """
+    if isinstance(statement, Invocation):
+        return statement, lambda inv: inv
+    if isinstance(statement, Conditional) and isinstance(statement.statement, Invocation):
+        return statement.statement, lambda inv: dataclasses.replace(statement, statement=inv)
+    if isinstance(statement, Scatter):
+        body = statement.body
+        return body, lambda inv: dataclasses.replace(statement, body=inv)
+    return None, lambda inv: inv
+
+
 def parse_program(text: str) -> Program:
     """Parse the canonical one-line sequential MVP syntax."""
     if not isinstance(text, str):
         raise ParseError("source must be text")
 
-    source = [
-        (number, raw, raw.strip())
-        for number, raw in enumerate(text.splitlines(), 1)
-        if raw.strip() and not raw.lstrip().startswith("#")
-    ]
+    source = []
+    for number, raw in enumerate(text.splitlines(), 1):
+        stripped = _strip_trailing_comment(raw)
+        if not stripped.strip() or stripped.lstrip().startswith("#"):
+            continue
+        source.append((number, stripped, stripped.strip()))
     if not source:
         raise ParseError("missing PROGRAM header", 1, 1)
 
@@ -166,13 +261,54 @@ def parse_program(text: str) -> Program:
             continue
 
         if in_input and raw[:1].isspace():
-            declaration = _DECL_RE.fullmatch(line)
+            # Issue #37: accumulate multi-line bracket-balanced INPUT
+            # values.  A declaration value may span multiple indented
+            # lines when it contains bracketed JSON (objects, arrays).
+            # We accumulate until brackets and quotes balance, then
+            # parse the whole value as one JSON literal.
+            decl_line_no = line_no
+            decl_raw = raw
+            decl_line = line
+            while _is_unbalanced(decl_line):
+                try:
+                    next_line_no, next_raw, next_line = next(lines)
+                except StopIteration:
+                    raise ParseError(
+                        "unbalanced bracket in INPUT declaration",
+                        decl_line_no,
+                        1,
+                    ) from None
+                if not next_raw[:1].isspace():
+                    raise ParseError(
+                        "unbalanced bracket in INPUT declaration"
+                        " (continuation line must be indented)",
+                        next_line_no,
+                        1,
+                    )
+                decl_raw = decl_raw + "\n" + next_raw
+                decl_line = decl_line + " " + next_line
+            declaration = _DECL_RE.fullmatch(decl_line.strip())
             if declaration is None:
-                raise ParseError("malformed INPUT declaration", line_no, len(raw) - len(raw.lstrip()) + 1)
+                raise ParseError(
+                    "malformed INPUT declaration",
+                    decl_line_no,
+                    len(decl_raw) - len(decl_raw.lstrip()) + 1,
+                )
+            raw_value = declaration.group("value")
+            if _detect_single_quoted_string(raw_value):
+                raise ParseError(
+                    "single-quoted strings are not supported; use double quotes",
+                    decl_line_no,
+                    1,
+                )
             try:
-                value = json.loads(declaration.group("value"))
+                value = json.loads(raw_value)
             except json.JSONDecodeError as exc:
-                raise ParseError(f"invalid JSON input value: {exc.msg}", line_no, exc.colno) from exc
+                raise ParseError(
+                    f"invalid JSON input value: {exc.msg}",
+                    decl_line_no,
+                    exc.colno,
+                ) from exc
             declarations.append(Declaration(declaration.group("ref"), value))
             continue
         in_input = False
@@ -192,19 +328,32 @@ def parse_program(text: str) -> Program:
 
         if re.match(r"DONE\b", line):
             expression = line[4:].strip()
-            if not expression or not statements or not isinstance(statements[-1], Invocation):
+            if not expression or not statements:
                 raise ParseError("DONE must follow an invocation", line_no, 1)
-            if statements[-1].done is not None:
+            # Issue #36: DONE may attach to an Invocation, a Conditional
+            # (attaching to the embedded DO invocation), or a Scatter
+            # (attaching to the body invocation).  Resolve the target
+            # invocation and its parent statement for replacement.
+            target_invocation, replace_fn = _resolve_done_target(
+                statements[-1], line_no
+            )
+            if target_invocation is None:
+                raise ParseError("DONE must follow an invocation", line_no, 1)
+            if target_invocation.done is not None:
                 raise ParseError("invocation has more than one DONE expression", line_no, 1)
             predicate = _parse_done_expression(expression, line_no)
-            if predicate.ref not in statements[-1].targets:
+            # Issue #36: field-path refs (e.g. V.q.status) are valid when
+            # the longest prefix matches one of the step's targets, per
+            # the spec's immutable field selection.
+            if not _done_ref_matches_targets(predicate.ref, target_invocation.targets):
                 raise ParseError(
                     f"DONE reference {predicate.ref} must be one of the step's"
-                    f" targets ({', '.join(statements[-1].targets)})",
+                    f" targets ({', '.join(target_invocation.targets)})",
                     line_no,
                     5,
                 )
-            statements[-1] = dataclasses.replace(statements[-1], done=predicate)
+            updated = dataclasses.replace(target_invocation, done=predicate)
+            statements[-1] = replace_fn(updated)
             continue
 
         if re.match(r"RETURN\b", line):
@@ -225,7 +374,7 @@ def parse_program(text: str) -> Program:
             call = _CALL_RE.fullmatch(line)
             if call is None:
                 raise ParseError("malformed CALL", line_no, 1)
-            args = tuple(_parse_argument(item, line_no) for item in _split_top_level(call.group("args")))
+            args = tuple(_parse_argument(item, line_no) for item in _split_top_level(call.group("args"), line_no))
             targets = _parse_refs(call.group("targets"), line_no, "target")
             statements.append(
                 Call(call.group("protocol"), args, targets, line_no)
@@ -304,7 +453,7 @@ def _parse_invocation_text(line: str, line_no: int) -> Invocation:
     step = _STEP_RE.fullmatch(line)
     if step is None:
         raise ParseError("malformed invocation", line_no, 1)
-    args = tuple(_parse_argument(item, line_no) for item in _split_top_level(step.group("args")))
+    args = tuple(_parse_argument(item, line_no) for item in _split_top_level(step.group("args"), line_no))
     targets = _parse_refs(step.group("targets"), line_no, "target")
     return Invocation(
         step.group("step"),
@@ -496,7 +645,7 @@ def _parse_par_block(line: str, line_no: int, lines) -> Par:
                     raise ParseError("malformed CALL in PAR branch", next_line_no, 1)
                 args = tuple(
                     _parse_argument(item, next_line_no)
-                    for item in _split_top_level(call.group("args"))
+                    for item in _split_top_level(call.group("args"), next_line_no)
                 )
                 targets = _parse_refs(call.group("targets"), next_line_no, "target")
                 branches.append(
@@ -697,6 +846,14 @@ class _ConditionScanner:
             )
         self.pos += len(op)
         self.skip_spaces()
+        # Issue #36: ref-to-ref comparison — if the RHS is a typed
+        # reference, produce an eq_ref/ne_ref node so the coordinator
+        # knows to resolve both sides against committed state.
+        ref_match = re.compile(_REF_PATTERN).match(self.source, self.pos)
+        if ref_match is not None:
+            rhs_ref = ref_match.group(0)
+            self.pos = ref_match.end()
+            return ("eq_ref" if op == "==" else "ne_ref", ref, rhs_ref)
         value, end = _decode_condition_literal(
             self.source, self.pos, self.line_no
         )
@@ -786,6 +943,8 @@ def _condition_refs(node: tuple) -> tuple[str, ...]:
     kind = node[0]
     if kind in ("eq", "ne", "count"):
         return (node[1],)
+    if kind in ("eq_ref", "ne_ref"):
+        return (node[1], node[2])
     if kind == "not":
         return _condition_refs(node[1])
     if kind in ("and", "or"):
@@ -810,6 +969,18 @@ def _condition_ref_resolvable(ref: str, available: set[str]) -> bool:
     return False
 
 
+def _detect_single_quoted_string(text: str) -> bool:
+    """Whether *text* starts with a single-quoted string (issue #37).
+
+    The splitters honor single quotes as quote delimiters, but the value
+    decoder uses ``json.loads`` which rejects them.  Detecting a leading
+    ``'`` lets us give the author a precise ``use double quotes`` message
+    instead of a misleading ``invalid JSON literal`` error.
+    """
+    stripped = text.strip()
+    return stripped.startswith("'")
+
+
 def _parse_argument(text: str, line_no: int) -> Argument:
     if "=" not in text:
         raise ParseError("argument must be name = value", line_no, 1)
@@ -818,6 +989,12 @@ def _parse_argument(text: str, line_no: int) -> Argument:
         raise ParseError("malformed named argument", line_no, 1)
     if _REF_RE.fullmatch(raw_value):
         value: Any = raw_value
+    elif _detect_single_quoted_string(raw_value):
+        raise ParseError(
+            "single-quoted strings are not supported; use double quotes",
+            line_no,
+            1,
+        )
     elif raw_value.startswith("[") and raw_value.endswith("]"):
         value = _parse_bracket_value(raw_value, line_no)
     else:
@@ -831,15 +1008,21 @@ def _parse_argument(text: str, line_no: int) -> Argument:
 def _parse_done_expression(expression: str, line_no: int) -> DonePredicate:
     """Parse the deterministic DONE subset (docs/spec/01-language-and-state.md).
 
-    Supported forms:
+    Supported forms (issue #36 extends the DONE operators to parity with
+    IF-condition comparisons):
 
-    - ``<ref> == <json-literal>``      (spec infix equality)
-    - ``<ref> IN [<json-literal>, ...]`` (spec infix set membership)
-    - ``matched(<ref>, "<regex>")``    (deterministic regex predicate; the
-      spec defines no regex operator, so the issue's suggested name stands)
+    - ``<ref> == <json-literal-or-ref>``  (spec infix equality; ref-to-ref
+      via ``eq_ref`` op)
+    - ``<ref> != <json-literal-or-ref>``  (not-equals; ref-to-ref via
+      ``ne_ref`` op)
+    - ``<ref> IN [<json-literal>, ...]``   (spec infix set membership)
+    - ``matched(<ref>, "<regex>")``       (deterministic regex predicate)
+    - ``count(<ref>) <op> <int>``         (op in ``== != < <= > >=``;
+      reuses the condition machinery)
 
-    The reference must still be validated against the owning step's
-    targets by the caller.
+    Field paths (e.g. ``V.quality.status``) are valid typed references;
+    the caller validates that the longest prefix of the ref matches one of
+    the step's targets (per the spec's immutable field selection).
     """
     text = expression.strip()
     if not text:
@@ -849,25 +1032,18 @@ def _parse_done_expression(expression: str, line_no: int) -> DonePredicate:
     if matched is not None:
         return _parse_matched_predicate(matched.group("inner"), line_no)
 
+    # Issue #36: count() comparison reuses the condition machinery.
+    if text.startswith("count("):
+        return _parse_done_count(text, line_no)
+
+    # Issue #36: != operator (not-equals).
+    ne_index = _find_top_level(text, "!=")
+    if ne_index != -1:
+        return _parse_done_comparison(text, ne_index, "!=", "ne", line_no)
+
     eq_index = _find_top_level(text, "==")
     if eq_index != -1:
-        lhs = text[:eq_index].strip()
-        rhs = text[eq_index + 2:].strip()
-        if _REF_RE.fullmatch(lhs) is None:
-            raise ParseError(
-                "DONE equality requires a typed reference on the left", line_no, 5
-            )
-        if not rhs:
-            raise ParseError(
-                "DONE equality requires a JSON literal on the right", line_no, 5
-            )
-        try:
-            value = json.loads(rhs)
-        except json.JSONDecodeError as exc:
-            raise ParseError(
-                f"invalid JSON literal in DONE expression: {exc.msg}", line_no, exc.colno
-            ) from exc
-        return DonePredicate("equals", lhs, value, line_no)
+        return _parse_done_comparison(text, eq_index, "==", "eq", line_no)
 
     in_index = _find_in_keyword(text)
     if in_index != -1:
@@ -892,9 +1068,75 @@ def _parse_done_expression(expression: str, line_no: int) -> DonePredicate:
     raise ParseError(f"unsupported DONE expression: {expression}", line_no, 5)
 
 
+def _parse_done_comparison(
+    text: str, op_index: int, op_sym: str, op_name: str, line_no: int
+) -> DonePredicate:
+    """Parse a DONE ``==`` or ``!=`` comparison (issue #36).
+
+    The LHS must be a typed reference (which may be a field path like
+    ``V.q.status``).  The RHS is either a JSON literal (``equals`` /
+    ``ne`` ops) or a typed reference (``eq_ref`` / ``ne_ref`` ops for
+    ref-to-ref comparison).
+    """
+    lhs = text[:op_index].strip()
+    rhs = text[op_index + len(op_sym):].strip()
+    if _REF_RE.fullmatch(lhs) is None:
+        raise ParseError(
+            f"DONE {op_sym} requires a typed reference on the left", line_no, 5
+        )
+    if not rhs:
+        raise ParseError(
+            f"DONE {op_sym} requires a JSON literal or typed reference on the right",
+            line_no,
+            5,
+        )
+    if _REF_RE.fullmatch(rhs):
+        return DonePredicate(
+            f"{op_name}_ref" if op_name in ("eq", "ne") else op_name,
+            lhs,
+            rhs,
+            line_no,
+        )
+    if _detect_single_quoted_string(rhs):
+        raise ParseError(
+            "single-quoted strings are not supported; use double quotes",
+            line_no,
+            5,
+        )
+    try:
+        value = json.loads(rhs)
+    except json.JSONDecodeError as exc:
+        raise ParseError(
+            f"invalid JSON literal in DONE expression: {exc.msg}",
+            line_no,
+            exc.colno,
+        ) from exc
+    return DonePredicate("equals" if op_name == "eq" else "ne", lhs, value, line_no)
+
+
+def _parse_done_count(text: str, line_no: int) -> DonePredicate:
+    """Parse a DONE ``count(<ref>) <op> <int>`` comparison (issue #36).
+
+    Reuses the condition scanner for consistent parsing, then wraps the
+    result as a ``DonePredicate`` with ``op="count"``.
+    """
+    try:
+        ast = parse_condition(text, line_no)
+    except ParseError:
+        raise ParseError(
+            f"unsupported DONE expression: {text}", line_no, 5
+        )
+    if ast[0] != "count":
+        raise ParseError(
+            f"unsupported DONE expression: {text}", line_no, 5
+        )
+    _, ref, op, value = ast
+    return DonePredicate("count", ref, (op, value), line_no)
+
+
 def _parse_matched_predicate(inner: str, line_no: int) -> DonePredicate:
     try:
-        items = _split_top_level(inner)
+        items = _split_top_level(inner, line_no)
     except ParseError:
         raise ParseError(
             'matched predicate requires exactly (ref, "regex") arguments', line_no, 5
@@ -1008,7 +1250,7 @@ def _parse_bracket_value(raw_value: str, line_no: int) -> Any:
         except json.JSONDecodeError as exc:
             raise ParseError(f"invalid argument value: {exc.msg}", line_no, exc.colno) from exc
     refs: list[str] = []
-    for item in _split_top_level(inner):
+    for item in _split_top_level(inner, line_no):
         if _REF_RE.fullmatch(item):
             refs.append(item)
         elif "[" in item or "]" in item:
@@ -1047,13 +1289,26 @@ def _contains_ref(text: str) -> bool:
 
 
 def _parse_refs(text: str, line_no: int, context: str) -> tuple[str, ...]:
-    refs = tuple(part.strip() for part in _split_top_level(text))
-    if not refs or any(_REF_RE.fullmatch(ref) is None for ref in refs):
+    refs = tuple(part.strip() for part in _split_top_level(text, line_no))
+    if not refs:
+        raise ParseError(f"{context} requires typed references", line_no, 1)
+    for ref in refs:
+        if _REF_RE.fullmatch(ref) is not None:
+            continue
+        # Issue #36: indexed element access (e.g. V.items[0]) is
+        # spec-promised but not implemented; give a precise error.
+        if "[" in ref and _REF_RE.fullmatch(ref.split("[")[0]) is not None:
+            raise ParseError(
+                f"indexed element access ({ref}) is not supported;"
+                " use a SCATTER to iterate over the collection instead",
+                line_no,
+                1,
+            )
         raise ParseError(f"{context} requires typed references", line_no, 1)
     return refs
 
 
-def _split_top_level(text: str) -> tuple[str, ...]:
+def _split_top_level(text: str, line_no: int = 0) -> tuple[str, ...]:
     if not text.strip():
         return ()
     parts: list[str] = []
@@ -1076,15 +1331,15 @@ def _split_top_level(text: str) -> tuple[str, ...]:
         elif char in "])}":
             depth -= 1
             if depth < 0:
-                raise ParseError("unbalanced delimiter")
+                raise ParseError("unbalanced delimiter", line_no, index + 1)
         elif char == "," and depth == 0:
             parts.append(text[start:index].strip())
             start = index + 1
     if quote is not None or depth != 0:
-        raise ParseError("unbalanced argument value")
+        raise ParseError("unbalanced argument value", line_no, len(text) + 1)
     parts.append(text[start:].strip())
     if any(not part for part in parts):
-        raise ParseError("empty comma-separated item")
+        raise ParseError("empty comma-separated item", line_no, 1)
     return tuple(parts)
 
 
@@ -1408,13 +1663,33 @@ def _validate_invocation_statement(
                 statement.done.line,
                 5,
             )
-        if statement.done.ref not in statement.targets:
+        # Issue #36: field-path refs (e.g. V.q.status) are valid when
+        # the longest prefix matches one of the step's targets.
+        if not _done_ref_matches_targets(statement.done.ref, statement.targets):
             raise ParseError(
                 f"DONE reference {statement.done.ref} must be one of the"
                 f" step's targets ({', '.join(statement.targets)})",
                 statement.done.line,
                 5,
             )
+        # Issue #36: ref-to-ref DONE ops (eq_ref, ne_ref) — the RHS ref
+        # must resolve like any other typed reference at the step's
+        # position.  The count op stores (op, value) as its value, so
+        # no ref validation is needed for count or the standard ops.
+        if statement.done.op in ("eq_ref", "ne_ref"):
+            rhs_ref = statement.done.value
+            if isinstance(rhs_ref, str) and _REF_RE.fullmatch(rhs_ref):
+                if rhs_ref.startswith("KB."):
+                    pass
+                elif not _condition_ref_resolvable(rhs_ref, available):
+                    raise ParseError(
+                        f"DONE reference {rhs_ref} used before definition:"
+                        " ref-to-ref DONE comparisons read committed nodes"
+                        " (a declared INPUT or an earlier step's target,"
+                        " or a field of one)",
+                        statement.done.line,
+                        5,
+                    )
 
 
 def _validate_scatter_statement(
@@ -1953,6 +2228,10 @@ def _condition_ast_to_canonical(node: tuple) -> list:
         return ["eq", node[1], node[2]]
     if kind == "ne":
         return ["ne", node[1], node[2]]
+    if kind == "eq_ref":
+        return ["eq_ref", node[1], node[2]]
+    if kind == "ne_ref":
+        return ["ne_ref", node[1], node[2]]
     if kind == "count":
         return ["count", node[1], node[2], node[3]]
     if kind == "not":
