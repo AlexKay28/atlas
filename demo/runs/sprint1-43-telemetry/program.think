@@ -1,0 +1,25 @@
+# Tikhon run for GitHub issue #43: widen the transport seam so usage reaches receipts
+# Sealed BEFORE any source edit (Tikhon protocol step 2). Uses only the canonical
+# grammar: plain DO steps over registered commands, one typed reference or JSON
+# literal per argument, ref lists via summarization steps where needed.
+
+PROGRAM sprint1_43_telemetry VERSION 1.0
+
+INPUT
+    G.goal = "Widen the transport seam in worker_adapter.py back-compatibly so transport callables may return either a bare str (today) or a TransportResult dataclass with text + usage fields, and ModelWorker.execute maps non-None usage into the receipt it already builds, while str-returning transports keep tokens and cost None"
+    C.scope = "src/tikhon/worker_adapter.py, tests/test_worker_adapter.py, demo/runs/sprint1-43-telemetry/"
+    C.done = "TransportResult dataclass exists with text + usage fields; Transport type alias accepts both str and TransportResult; ModelWorker.execute unwraps TransportResult and maps usage tokens into receipt usage tokens; legacy str transports yield None tokens; full pytest suite green at 760+ passed; only owned files touched"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "seam_design") -> E.findings
+step.design: DO summarize(source_refs = E.findings, budget = 4000) -> P.design
+step.implement: DO edit(path = "src/tikhon/worker_adapter.py", content = "TransportResult dataclass + Transport type alias widening + execute usage mapping + module docstring note") -> ART.patch
+step.test_write: DO edit(path = "tests/test_worker_adapter.py", content = "acceptance tests for TransportResult usage mapping and legacy str compat") -> ART.tests
+step.test_run: DO test(path = "tests/test_worker_adapter.py", timeout_seconds = 300) -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = P.design, format = "markdown") -> OUT.solution
+step.verify: DO verify(goal = G.goal, evidence = V.verdict) -> V.result
+
+RETURN OUT.solution, V.verdict, V.result

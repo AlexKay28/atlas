@@ -34,7 +34,12 @@ from tikhon.registry.enums import RoutingTier
 from tikhon.runtime import EventStore, SequentialCoordinator
 from tikhon.runtime.coordinator import map_results_to_targets
 from tikhon.syntax import parse_program, seal_digest
-from tikhon.worker_adapter import DEFAULT_TIMEOUT_SECONDS, ModelWorker, WorkerError
+from tikhon.worker_adapter import (
+    DEFAULT_TIMEOUT_SECONDS,
+    ModelWorker,
+    TransportResult,
+    WorkerError,
+)
 
 TIKHON_ENV_VARS = (
     "TIKHON_WORKER_TRANSPORT",
@@ -534,3 +539,107 @@ def test_model_worker_drives_two_step_program_through_coordinator(tmp_path):
         assert DEFAULT_TIMEOUT_SECONDS == 120.0
     finally:
         store.close()
+
+
+# ------------------------------------------ issue #43: transport usage seam
+
+def test_transport_result_carries_usage_tokens_into_receipt():
+    """Acceptance (1): TransportResult(text, {"tokens": 123}) → receipt tokens == 123."""
+
+    def transport(model: str, prompt: str) -> TransportResult:
+        return TransportResult(text='{"k": 1}', usage={"tokens": 123})
+
+    worker = ModelWorker(
+        registry=builtin_registry(),
+        transport=transport,
+        default_model="m",
+    )
+    worker.execute("define", {"request": "x"})
+    assert worker.last_result_envelope is not None
+    receipt = worker.last_result_envelope.receipt
+    assert receipt["usage"]["tokens"] == 123
+
+
+def test_legacy_str_transport_yields_none_tokens():
+    """Acceptance (2): legacy str-returning transport → receipt tokens None."""
+
+    def transport(model: str, prompt: str) -> str:
+        return '{"k": 1}'
+
+    worker = ModelWorker(
+        registry=builtin_registry(),
+        transport=transport,
+        default_model="m",
+    )
+    worker.execute("define", {"request": "x"})
+    assert worker.last_result_envelope is not None
+    receipt = worker.last_result_envelope.receipt
+    assert receipt["usage"]["tokens"] is None
+    assert receipt["usage"]["cost"] is None
+
+
+def test_transport_result_with_none_usage_yields_none_tokens():
+    """TransportResult with usage=None should behave like legacy str."""
+
+    def transport(model: str, prompt: str) -> TransportResult:
+        return TransportResult(text='{"k": 1}', usage=None)
+
+    worker = ModelWorker(
+        registry=builtin_registry(),
+        transport=transport,
+        default_model="m",
+    )
+    worker.execute("define", {"request": "x"})
+    assert worker.last_result_envelope is not None
+    receipt = worker.last_result_envelope.receipt
+    assert receipt["usage"]["tokens"] is None
+
+
+def test_transport_result_with_non_integer_tokens_yields_none():
+    """Non-integer tokens in usage dict should not corrupt the receipt."""
+
+    def transport(model: str, prompt: str) -> TransportResult:
+        return TransportResult(text='{"k": 1}', usage={"tokens": "not-a-number"})
+
+    worker = ModelWorker(
+        registry=builtin_registry(),
+        transport=transport,
+        default_model="m",
+    )
+    worker.execute("define", {"request": "x"})
+    assert worker.last_result_envelope is not None
+    receipt = worker.last_result_envelope.receipt
+    assert receipt["usage"]["tokens"] is None
+
+
+def test_transport_result_payload_parsed_correctly():
+    """TransportResult text is parsed as JSON, same as legacy str."""
+
+    def transport(model: str, prompt: str) -> TransportResult:
+        return TransportResult(text='{"answer": 42}', usage={"tokens": 7})
+
+    worker = ModelWorker(
+        registry=builtin_registry(),
+        transport=transport,
+        default_model="m",
+    )
+    result = worker.execute("define", {"request": "x"})
+    assert result == {"answer": 42}
+    assert worker.last_result_envelope is not None
+    assert worker.last_result_envelope.receipt["usage"]["tokens"] == 7
+
+
+def test_transport_result_with_json_fence_stripped():
+    """TransportResult text with json fence is stripped, same as legacy str."""
+
+    def transport(model: str, prompt: str) -> TransportResult:
+        return TransportResult(text='```json\n{"a": 1}\n```', usage={"tokens": 99})
+
+    worker = ModelWorker(
+        registry=builtin_registry(),
+        transport=transport,
+        default_model="m",
+    )
+    assert worker.execute("define", {"request": "x"}) == {"a": 1}
+    assert worker.last_result_envelope is not None
+    assert worker.last_result_envelope.receipt["usage"]["tokens"] == 99
