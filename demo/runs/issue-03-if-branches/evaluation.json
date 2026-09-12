@@ -1,0 +1,89 @@
+{
+  "task": "GitHub issue #3: IF branches with deterministic expressions",
+  "run_id": "issue-03-if-branches",
+  "seal": "e039349fee95f52648bc5d4b52c2eaf744176a0ceb9808d9be94b1effe8fc0bd",
+  "terminal_status": "succeeded",
+  "steps_planned": ["step.frame", "step.locate", "step.design", "step.patch", "step.check", "step.verify"],
+  "steps_executed": ["step.frame", "step.locate", "step.design", "step.patch", "step.check", "step.verify"],
+  "acceptance": [
+    {
+      "criterion": "IF removed from _UNSUPPORTED; single-line deterministic conditional IF <expr> <statement> with <statement> exactly one of STOP <kind>(<ref?>), RETURN <refs>, or a full step.<id>: DO ... invocation line (including the REVISE/RETIRE clause)",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_if_condition_expression_forms_parse, test_if_condition_accepts_json_literal_right_hand_sides, test_if_do_accepts_full_invocation_line_with_corrections; demo/runs/issue-03-if-branches/program.think seals without IF lines as required before the feature existed"
+    },
+    {
+      "criterion": "Expression forms: <ref> == <json>, <ref> != <json>, count(<ref>) with == != < <= > >= over list-valued refs, left-associative AND/OR, prefix NOT; parentheses rejected with a clear error",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_if_condition_ast_shape_and_left_associativity (all six count ops verified, left-assoc fold asserted), test_if_parentheses_rejected; tests/test_coordinator.py::test_evaluate_condition_truth_tables"
+    },
+    {
+      "criterion": "Unknown ref in condition rejected (validated like DONE predicate refs: declared INPUT or an earlier step's target, at the conditional's source position)",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_if_condition_refs_validated_like_done_refs (declared/earlier accepted; later/undeclared rejected, count ref included); tests/test_coordinator.py::test_condition_field_selection_validation"
+    },
+    {
+      "criterion": "ELSE and ELSE IF block forms rejected with 'unsupported control construct ELSE' ParseError",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_if_else_block_forms_rejected"
+    },
+    {
+      "criterion": "IF-DO-after-invocation rule enforced: any IF <...> DO ... must appear after every unconditional invocation line; a following Invocation or CALL is rejected by validation",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_if_do_must_come_after_every_unconditional_invocation (invocation and CALL cases rejected; tail position accepted)"
+    },
+    {
+      "criterion": "Seal determinism: conditionals serialize into canonical JSON deterministically; pre-existing programs (no IF) seal byte-identically",
+      "passed": true,
+      "evidence": "tests/test_syntax.py::test_if_canonical_json_is_deterministic_and_omits_source_line, test_pre_if_programs_seal_byte_identically (hardcoded pre-change digest pin); demo seal e039349f... computed before any source edit still reproduces after all edits"
+    },
+    {
+      "criterion": "Model: new frozen dataclass Conditional(condition: str, statement: object, line: int) stored in program.statements in source position; exported from tikhon.syntax",
+      "passed": true,
+      "evidence": "src/tikhon/syntax/model.py; tests/test_syntax.py::test_if_conditional_is_frozen_dataclass, test_if_condition_expression_forms_parse (source-position assertion)"
+    },
+    {
+      "criterion": "Coordinator: conditionals among invocations evaluate in source order after preceding invocations commit; STOP fires existing terminal handling (completed->succeeded, other kinds verbatim, reason payload when the ref resolves); RETURN uses existing Return handling; false condition skips and execution continues",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_reference_program_b_failing_check_stops_with_reason_payload, test_reference_program_b_false_conditions_continue_to_return, test_conditional_return_finishes_run_and_cancels_later_tasks, test_conditional_gate_open_runs_everything"
+    },
+    {
+      "criterion": "Reference-Program-B-style flow: step fails a check -> IF V.tests.status != \"passed\" STOP failed(V.tests) produces run failed with the mapping node as reason payload; V.tests mapping reuses existing Stop reason semantics; unreached later step's task cancelled",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_reference_program_b_failing_check_stops_with_reason_payload (RUN_FINISHED payload {'status':'failed','reason':{...}}; step.final task cancelled; no V.result committed); field selection per docs/spec/01-language-and-state.md 'immutable field selection'"
+    },
+    {
+      "criterion": "count() over ref list values and over selected list fields (count(R.review.blocking) > 0)",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_conditional_count_over_ref_list_value, test_count_condition_over_review_blockers_stops_with_review_reason, test_evaluate_condition_truth_tables"
+    },
+    {
+      "criterion": "AND/OR truth tables and JSON-strict equality (bool != 1) via evaluate_condition",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_evaluate_condition_truth_tables (incl. left-associative fold and V.on == 1 is False)"
+    },
+    {
+      "criterion": "Invocation inside a true conditional executes through the exact same invocation machinery: lazily created ledger task, full lifecycle events (READY, DISPATCHED, RESULT_RECEIVED, VALIDATION_PASSED, SUCCEEDED), state commit; false branch creates no task and no events; a failing conditional step fails the run atomically",
+      "passed": true,
+      "evidence": "tests/test_coordinator.py::test_invocation_inside_true_conditional_runs_full_lifecycle, test_invocation_inside_false_conditional_is_skipped_entirely, test_failing_conditional_invocation_fails_run_atomically"
+    },
+    {
+      "criterion": "Full pytest suite passes",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: 540 passed (baseline 484; +29 issue-#3 tests + concurrent issue-#8 wave tests; no pre-existing test modified or dropped)"
+    },
+    {
+      "criterion": "Hard constraints respected: only allowed files touched (src/tikhon/syntax/{parser,model,__init__}.py, src/tikhon/runtime/coordinator.py, tests/test_syntax.py, tests/test_coordinator.py, demo/runs/issue-03-if-branches/); cli.py/registry/events.py/tasks.py/resume.py/audit.py, other demo runs, protocols/, docs/ untouched by this run; no git commit",
+      "passed": true,
+      "evidence": "git status shows this run's edits confined to the allowed set; the modified src/tikhon/cli.py and new src/tikhon/worker_adapter.py + tests/test_worker_adapter.py + demo/runs/issue-08-model-worker/ belong to the concurrent issue-#8 agent, not this run"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "Field selection: the issue text lists only <ref> ==/!= <json> and count(<ref>) comparisons, but its own mandated reference-Program-B line IF V.tests.status != \"passed\" STOP failed(V.tests) requires reading the status field of the committed V.tests node. docs/spec/01-language-and-state.md explicitly allows 'immutable field selection' in control expressions, so dotted refs resolve as longest-committed-prefix + trailing field path (validation accepts any dotted prefix; evaluation fails the run loudly on a non-mapping node or missing field). A full dotted ref that exists as a node outright still resolves directly.",
+    "A bare unconditional terminal RETURN/STOP is still required by validation: a conditional STOP/RETURN is a possible exit, not a guaranteed one, so a program ending only in conditionals is rejected ('program requires a terminal RETURN or STOP'). Reference Program B, flattened to single lines, satisfies this naturally.",
+    "Conditional-DO targets are checked for duplicates but never added to the validation 'available' set: statically the branch may not run, so later statements cannot reference its nodes (returning or consuming a conditional branch's target requires routing through refs that unconditionally exist).",
+    "Crash-resume interplay is best-effort: resume of a program whose conditional-DO branch evaluated false pre-crash can leave an orphan PENDING task (resume.py, which this run must not modify, pre-creates tasks for every plan entry), and a skipped conditional followed by a fired one makes resume refuse safely with its existing mismatch guard. Fresh runs and non-conditional programs are unaffected; both resume smoke paths (crash before a true branch) pass.",
+    "Conditionals inside protocol files are validated per-program; the IF-DO-after-all-unconditional-invocations rule is not enforced across the caller/protocol boundary.",
+    "The tikhon binary on PATH is a site-packages install; lint/seal were run through it (digest matches the repo-source computation) and all runtime smoke checks ran against repo sources via PYTHONPATH=src."
+  ]
+}

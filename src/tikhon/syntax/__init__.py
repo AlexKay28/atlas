@@ -1,11 +1,22 @@
 """tikhon.syntax — models, parser and sealing helpers for the minimal tikhon pseudo-language."""
 
-from .model import Argument, Call, Declaration, DonePredicate, Invocation, Program, Return, Stop
+from .model import (
+    Argument,
+    Call,
+    Conditional,
+    Declaration,
+    DonePredicate,
+    Invocation,
+    Program,
+    Return,
+    Stop,
+)
 from .parser import (
     ParseError,
     canonical_json,
     is_typed_reference,
     load_protocol,
+    parse_condition,
     parse_program,
     protocol_file_path,
     seal_digest,
@@ -15,6 +26,7 @@ from .parser import (
 __all__ = [
     "Argument",
     "Call",
+    "Conditional",
     "Declaration",
     "DonePredicate",
     "Invocation",
@@ -23,6 +35,7 @@ __all__ = [
     "Stop",
     "ParseError",
     "parse_program",
+    "parse_condition",
     "validate_program",
     "load_protocol",
     "protocol_file_path",

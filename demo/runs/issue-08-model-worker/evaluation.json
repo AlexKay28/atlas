@@ -1,0 +1,64 @@
+{
+  "task": "GitHub issue #8: model worker adapter with tier-based routing (T0-T3) — ModelWorker duck-typing DeterministicWorker, RoutingPolicy-driven model selection, transport seam, strict-JSON response validation via map_results_to_targets, and a --worker model|deterministic CLI flag",
+  "run_id": "issue-08-model-worker",
+  "seal": "d9e8e127e4fca46808beaedbda8fe65683682523663574a33ccac9a7fa79cd0a",
+  "terminal_status": "succeeded",
+  "steps_planned": 6,
+  "steps_executed": 6,
+  "acceptance": [
+    {
+      "criterion": "ModelWorker implements the DeterministicWorker duck-type (.commands property, .execute(command, resolved_kwargs)) and .commands returns the registry's command names",
+      "passed": true,
+      "evidence": "tests/test_worker_adapter.py::test_commands_property_returns_registry_names asserts worker.commands == set(builtin_registry().names()); test_model_worker_drives_two_step_program_through_coordinator drives a 2-step program (define + calculate with DONE OUT.total == 12) through SequentialCoordinator with a ModelWorker -> succeeded with committed outputs and recorded events, proving duck-type compatibility including .commands satisfying validate_program's known_commands check."
+    },
+    {
+      "criterion": "Tier-based routing: contract RoutingPolicy.preferred_tier selects tier_models[tier] (keys 'T0'..'T3' or RoutingTier enum values), falling back to default_model",
+      "passed": true,
+      "evidence": "tests: test_preferred_tier_selects_model_from_tier_models (define, preferred T2, captures 'model-t2' passed to the transport), test_tier_models_accepts_enum_keys (RoutingTier.T2 key), test_unmapped_tier_falls_back_to_default_model (search, preferred T1 unmapped -> 'fallback-model'), test_missing_model_everywhere_raises_worker_error (clear WorkerError naming the tier and command)."
+    },
+    {
+      "criterion": "Prompt construction: purpose, inputs, outputs, done condition from the spec, resolved kwargs as JSON, and the strict JSON-only reply instruction incl. the coordinator's multi-target keying rule",
+      "passed": true,
+      "evidence": "tests: test_prompt_contains_contract_kwargs_and_json_only_instruction asserts spec.purpose, 'request:text' (declared input), spec.outputs[0], spec.done, json.dumps of the resolved kwargs, and 'Reply with ONLY a JSON object' all appear in the prompt; test_prompt_names_target_refs_when_known asserts the exact target refs and 'unique leaf names' appear when targets are passed."
+    },
+    {
+      "criterion": "Response handling: strict JSON parse (single optional ```json fence stripped); invalid/unparseable responses raise WorkerError carrying the raw response tail (last 500 chars); validation reuses map_results_to_targets from runtime.coordinator (imported, coordinator.py unmodified)",
+      "passed": true,
+      "evidence": "tests: test_plain_json_response_is_returned_parsed, test_single_optional_json_fence_is_stripped, test_bare_fence_is_stripped, test_invalid_json_raises_worker_error_with_raw_tail (700-char garbage -> excinfo.tail has len 500 and ends with the response's final characters), test_non_string_response_raises_worker_error; multi-target: test_multi_target_leaf_keys_pass_map_results_to_targets, test_multi_target_missing_key_raises_worker_error ('missing result keys: E.beta' with tail kept), test_multi_target_full_ref_keys_also_accepted. worker_adapter.py imports map_results_to_targets from tikhon.runtime.coordinator; git diff confirms coordinator.py untouched."
+    },
+    {
+      "criterion": "CLI: --worker model|deterministic on run and resume, default deterministic; with model, worker built from TIKHON_WORKER_TRANSPORT/TIKHON_MODEL/TIKHON_TIER_MODELS/TIKHON_API_BASE+TIKHON_API_KEY/TIKHON_EXEC_COMMAND; missing required env -> clear error, exit 1 BEFORE run creation; deterministic baseline unchanged; http = stdlib OpenAI-compatible chat/completions POST, exec = subprocess.run of the argv template with timeout",
+      "passed": true,
+      "evidence": "tests: test_cli_model_worker_without_env_exits_before_run (rc 1, 'TIKHON_WORKER_TRANSPORT' in stderr, store.events('r1') == () in the db — zero events, guard fired before creation), test_cli_model_worker_resume_guard_exits_before_store, test_cli_deterministic_baseline_unchanged (default and explicit --worker deterministic both succeed), test_cli_model_worker_rejects_bad_transport_env, test_build_model_worker_http_requires_credentials, test_build_model_worker_requires_some_model, test_build_model_worker_rejects_non_string_tier_mapping, test_build_model_worker_exec_transport_runs_subprocess (real local subprocess via the argv template: model captured from TIKHON_TIER_MODELS tier T0, full prompt flowed through {prompt}), test_exec_transport_nonzero_exit_raises (RuntimeError 'exited with 3'). No retries anywhere; temperature 0 single-user-message shape in the http transport."
+    },
+    {
+      "criterion": "test/edit/review handlers stay deterministic; model routing only affects DO results when the operator opts in",
+      "passed": true,
+      "evidence": "Under --worker model the CLI wraps the ModelWorker in _HybridModelWorker, which dispatches edit/test/review (DETERMINISTIC_UNDER_MODEL) to the existing deterministic handlers and everything else to the model. tests: test_hybrid_worker_routes_edit_deterministically (edit writes the file on disk, model transport never invoked), test_hybrid_worker_routes_other_commands_to_model, test_hybrid_worker_falls_back_to_model_for_unknown_deterministic_command. The deterministic handler code in cli.py is byte-identical to before (git diff shows only additions elsewhere)."
+    },
+    {
+      "criterion": "Full suite passes at the end; CI baseline (deterministic default) unchanged",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: baseline 484 passed before edits; final run 512 passed (484 + 28 new). One transient red wave (136 failures, NameError in src/tikhon/syntax/parser.py) came from the concurrent parser agent's mid-edit state and cleared after waiting ~90s and re-running, per the wave protocol; zero failures at completion."
+    },
+    {
+      "criterion": "Only allowed files touched; forbidden paths untouched",
+      "passed": true,
+      "evidence": "git status shows this run's changes confined to src/tikhon/cli.py (M), src/tikhon/worker_adapter.py (new), tests/test_worker_adapter.py (new), demo/runs/issue-08-model-worker/ (new). The worktree's src/tikhon/syntax/{parser,model,__init__}.py modifications and demo/runs/issue-03-if-branches/ belong to the concurrent parser agent and were never edited by this run; coordinator.py, registry/, events.py, tasks.py, resume.py, audit.py, and other demo runs are untouched."
+    },
+    {
+      "criterion": "Tikhon protocol honored: program.think sealed before source edits and never modified afterwards",
+      "passed": true,
+      "evidence": "seal.txt (d9e8e127e4fca46808beaedbda8fe65683682523663574a33ccac9a7fa79cd0a) was written via 'PYTHONPATH=src python3 -m tikhon seal' immediately after linting 'valid', before the first source edit; recomputing the digest after all edits reproduces it byte-for-byte."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "ModelWorker.execute accepts an optional third parameter targets (defaulting to None): the coordinator dispatches with exactly (command, resolved_kwargs) and validates the returned value itself, so the coordinator path is unaffected; the optional parameter lets direct callers get the same map_results_to_targets check (and refs named in the prompt) before the value is returned, which is how the issue's 'missing key -> WorkerError' multi-target behavior is realized.",
+    "Requirement 4 (test/edit/review stay deterministic under opt-in) is implemented with a small _HybridModelWorker wrapper in cli.py rather than inside ModelWorker: the issue pins the ModelWorker constructor signature and the module's class surface (ModelWorker + WorkerError), and the routing decision is a CLI wiring concern. remember/recall still route to the model under --worker model (only test/edit/review are pinned by the issue); extending the deterministic-under-model set is a one-line change.",
+    "timeout_seconds (default 120.0) is retained on the ModelWorker instance and used as the shared default deadline of the CLI-built transports; it cannot be passed through the pinned 2-arg transport seam, and per-command Budget.max_seconds is not yet enforced against the deadline.",
+    "The exec transport accepts TIKHON_EXEC_COMMAND as either a JSON array (precise 'argv template') or a shell-word string via shlex (ergonomic fallback); {model}/{prompt} are substituted per argv element with no shell interpolation, so prompts cannot inject commands.",
+    "The installed tikhon console script resolves a non-editable site-packages copy, so lint/seal ran via PYTHONPATH=src python3 -m tikhon against local source (same workaround as issues #6/#7).",
+    "A transient full-suite red wave (136 failures, NameError inside src/tikhon/syntax/parser.py) occurred while the concurrent parser agent was mid-edit; per the wave protocol the suite was re-run after ~90s and passed 512/512. This run shares no files with that agent."
+  ]
+}

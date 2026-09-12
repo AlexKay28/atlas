@@ -23,6 +23,7 @@ from tikhon.runtime import EventStore, EventType
 from tikhon.runtime.coordinator import (
     DeterministicWorker,
     SequentialCoordinator,
+    evaluate_condition,
     map_results_to_targets,
 )
 from tikhon.runtime.tasks import TaskStatus
@@ -1693,3 +1694,424 @@ def test_retire_within_protocol_expansion_reaches_caller_state(tmp_path):
         assert "E.context" not in state["nodes"]
         assert "ART.sources" in state["nodes"]
         assert state["nodes"]["E.trim"]["value"].startswith("brief of")
+
+
+# --------------------------------------------------------------------------
+# Issue #3: IF branches with deterministic expressions.
+# --------------------------------------------------------------------------
+
+REPAIR_PROGRAM = """\
+PROGRAM repair_defect VERSION 0.1
+INPUT
+    G.fix = "Observed behavior matches the contract"
+    C.scope = "Smallest root-cause fix"
+step.repro: DO define(goal = G.fix) -> E.repro
+step.pick: DO choose(options = E.repro, scope = C.scope) -> D.cause
+step.patch: DO define(goal = D.cause) -> ART.patch
+step.test: DO test_patch(target = ART.patch) -> V.tests
+step.review: DO review_patch(artifact = ART.patch) -> R.review
+IF V.tests.status != "passed" STOP failed(V.tests)
+IF count(R.review.blocking) > 0 STOP failed(R.review)
+step.final: DO verify(goal = G.fix, evidence = [V.tests, R.review]) -> V.result
+RETURN ART.patch, V.result
+"""
+
+BRANCH_PROGRAM = """\
+PROGRAM branch VERSION 1.0
+INPUT
+    G.flag = "go"
+    G.left = 20
+    G.right = 22
+step.mark: DO define(goal = G.flag) -> V.flag
+IF G.flag == "go" step.extra: DO calculate(left = G.left, right = G.right) -> OUT.total
+RETURN V.flag
+"""
+
+EARLY_RETURN_PROGRAM = """\
+PROGRAM early VERSION 1.0
+INPUT
+    G.flag = "early"
+step.mark: DO define(goal = G.flag) -> V.flag
+IF G.flag == "early" RETURN V.flag
+step.late: DO calculate(left = 1, right = 2) -> OUT.total
+RETURN V.flag, OUT.total
+"""
+
+GATE_PROGRAM = """\
+PROGRAM gate VERSION 1.0
+INPUT
+    V.mode = "deny"
+IF V.mode == "deny" STOP denied(V.mode)
+step.work: DO define(goal = V.mode) -> V.out
+RETURN V.out
+"""
+
+
+def choose_handler(options, scope):
+    return {"cause": f"root cause from {options}", "scope": scope}
+
+
+def verify_handler(goal, evidence):
+    return {"result": "verified", "goal": goal}
+
+
+def make_repair_worker(test_result, review_result):
+    return DeterministicWorker(
+        handlers={
+            "define": define_handler,
+            "choose": choose_handler,
+            "test_patch": lambda target: test_result,
+            "review_patch": lambda artifact: review_result,
+            "verify": verify_handler,
+        }
+    )
+
+
+def run_repair(store, run_id, test_result, review_result):
+    program = parse_program(REPAIR_PROGRAM)
+    coordinator = SequentialCoordinator(
+        store=store, worker=make_repair_worker(test_result, review_result)
+    )
+    return coordinator.execute(program, run_id=run_id)
+
+
+def test_reference_program_b_failing_check_stops_with_reason_payload(tmp_path):
+    # Reference Program B (docs/spec/04-completeness.md), flattened onto
+    # single lines: a failed check fires `IF V.tests.status != "passed"
+    # STOP failed(V.tests)` exactly like a bare STOP, with the mapping node
+    # as the resolved reason.
+    with EventStore(tmp_path / "events.db") as store:
+        result = run_repair(
+            store,
+            "run-repair-failed",
+            test_result={"status": "failed", "detail": "regression in parser"},
+            review_result={"blocking": [], "notes": "clean"},
+        )
+
+        assert result["status"] == "failed"
+        assert result["outputs"] == {}
+
+        history = store.events("run-repair-failed")
+        assert history[-1].event_type is EventType.RUN_FINISHED
+        assert history[-1].payload["status"] == "failed"
+        assert history[-1].payload["reason"] == {
+            "status": "failed",
+            "detail": "regression in parser",
+        }
+
+        # step.final never executed: no lifecycle events, task cancelled.
+        assert not [
+            event
+            for event in history
+            if event.invocation_id == "inv-6"
+        ]
+        ledger = store.task_ledger("run-repair-failed")
+        profile = ledger.profile()
+        assert profile["counts"]["total"] == 6
+        assert profile["counts"]["completed"] == 5
+        assert profile["counts"]["cancelled"] == 1
+        assert profile["counts"]["pending"] == 0
+        assert profile["counts"]["in_progress"] == 0
+        cancelled = [
+            task
+            for task in ledger.tasks.values()
+            if task.status is TaskStatus.CANCELLED
+        ]
+        assert [task.text for task in cancelled] == ["step.final: DO verify"]
+
+        # State commits stop at the review: V.tests exists, V.result not.
+        state = store.project_state("run-repair-failed")
+        assert state["nodes"]["V.tests"]["value"] == {
+            "status": "failed",
+            "detail": "regression in parser",
+        }
+        assert "V.result" not in state["nodes"]
+
+
+def test_reference_program_b_false_conditions_continue_to_return(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        result = run_repair(
+            store,
+            "run-repair-ok",
+            test_result={"status": "passed", "cases": 42},
+            review_result={"blocking": [], "notes": "clean"},
+        )
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"]["ART.patch"] is not None
+        assert result["outputs"]["V.result"] == {
+            "result": "verified",
+            "goal": "Observed behavior matches the contract",
+        }
+
+        history = store.events("run-repair-ok")
+        grouped = events_by_invocation(history)
+        assert [event.event_type for event in grouped["inv-6"]] == list(LIFECYCLE)
+        ledger = store.task_ledger("run-repair-ok")
+        profile = ledger.profile()
+        assert profile["counts"]["total"] == 6
+        assert profile["counts"]["completed"] == 6
+        assert profile["counts"]["cancelled"] == 0
+
+
+def test_count_condition_over_review_blockers_stops_with_review_reason(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        result = run_repair(
+            store,
+            "run-repair-blocking",
+            test_result={"status": "passed"},
+            review_result={"blocking": ["scope creep", "missing test"]},
+        )
+
+        assert result["status"] == "failed"
+        history = store.events("run-repair-blocking")
+        assert history[-1].payload["status"] == "failed"
+        assert history[-1].payload["reason"] == {
+            "blocking": ["scope creep", "missing test"]
+        }
+        ledger = store.task_ledger("run-repair-blocking")
+        assert ledger.profile()["counts"]["cancelled"] == 1
+
+
+def test_conditional_count_over_ref_list_value(tmp_path):
+    # count() reads a list-valued node committed by an earlier step.
+    program = parse_program(
+        """\
+PROGRAM counter VERSION 1.0
+INPUT
+    G.seed = 3
+step.collect: DO collect_items(seed = G.seed) -> E.items
+IF count(E.items) == 3 STOP blocked(E.items)
+RETURN E.items
+"""
+    )
+    worker = DeterministicWorker(
+        handlers={"collect_items": lambda seed: ["a", "b", "c"]}
+    )
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store=store, worker=worker).execute(
+            program, run_id="run-count"
+        )
+        assert result["status"] == "blocked"
+        assert store.events("run-count")[-1].payload["reason"] == ["a", "b", "c"]
+
+    program_false = parse_program(
+        """\
+PROGRAM counter VERSION 1.0
+INPUT
+    G.seed = 3
+step.collect: DO collect_items(seed = G.seed) -> E.items
+IF count(E.items) > 3 STOP blocked(E.items)
+RETURN E.items
+"""
+    )
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store=store, worker=worker).execute(
+            program_false, run_id="run-count-false"
+        )
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"E.items": ["a", "b", "c"]}
+
+
+def test_evaluate_condition_truth_tables():
+    values = {
+        "V.flag": "go",
+        "V.count": 2,
+        "V.none": None,
+        "E.items": ["a", "b"],
+        "V.on": True,
+    }
+    assert evaluate_condition('V.flag == "go"', values) is True
+    assert evaluate_condition('V.flag != "go"', values) is False
+    assert evaluate_condition('V.flag != "stop"', values) is True
+    assert evaluate_condition("count(E.items) == 2", values) is True
+    assert evaluate_condition("count(E.items) != 2", values) is False
+    assert evaluate_condition("count(E.items) < 3", values) is True
+    assert evaluate_condition("count(E.items) <= 2", values) is True
+    assert evaluate_condition("count(E.items) > 1", values) is True
+    assert evaluate_condition("count(E.items) >= 3", values) is False
+    assert evaluate_condition('V.flag == "go" AND V.count == 2', values) is True
+    assert evaluate_condition('V.flag == "go" AND V.count == 3', values) is False
+    assert evaluate_condition('V.flag == "stop" OR V.count == 2', values) is True
+    assert evaluate_condition('V.flag == "stop" OR V.count == 3', values) is False
+    assert evaluate_condition("NOT V.flag == \"go\"", values) is False
+    assert evaluate_condition("NOT V.flag == \"stop\"", values) is True
+    # Left-associative: (a AND b) OR c.
+    assert evaluate_condition(
+        'V.flag == "go" AND V.count == 3 OR V.flag == "go"', values
+    ) is True
+    # JSON-strict equality: a bool never equals 0/1 (same rule as DONE).
+    assert evaluate_condition("V.on == 1", values) is False
+    assert evaluate_condition("V.on == true", values) is True
+    assert evaluate_condition("V.none == null", values) is True
+
+
+def test_evaluate_condition_missing_or_non_list_refs_raise():
+    values = {"V.flag": "go"}
+    with pytest.raises(ValueError, match="V.missing.*not in run state"):
+        evaluate_condition('V.missing == "go"', values)
+    with pytest.raises(ValueError, match="count condition requires a list"):
+        evaluate_condition("count(V.flag) > 0", values)
+
+
+def test_invocation_inside_true_conditional_runs_full_lifecycle(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        program = parse_program(BRANCH_PROGRAM)
+        result = SequentialCoordinator(
+            store=store, worker=make_worker()
+        ).execute(program, run_id="run-branch-true")
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"V.flag": define_handler(goal="go")}
+
+        history = store.events("run-branch-true")
+        grouped = events_by_invocation(history)
+        # The conditional step went through the exact same lifecycle.
+        assert [event.event_type for event in grouped["inv-2"]] == list(LIFECYCLE)
+        dispatched = next(
+            event
+            for event in grouped["inv-2"]
+            if event.event_type is EventType.INVOCATION_DISPATCHED
+        )
+        assert dispatched.payload["args"] == {"left": 20, "right": 22}
+
+        ledger = store.task_ledger("run-branch-true")
+        assert ledger.profile()["counts"]["total"] == 2
+        assert ledger.profile()["counts"]["completed"] == 2
+        task = next(
+            task
+            for task in ledger.tasks.values()
+            if task.text == "step.extra: DO calculate"
+        )
+        assert task.status is TaskStatus.COMPLETED
+
+        state = store.project_state("run-branch-true")
+        assert state["nodes"]["OUT.total"]["value"] == 42
+        assert state["state_version"] == 2
+
+
+def test_invocation_inside_false_conditional_is_skipped_entirely(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        program = parse_program(
+            BRANCH_PROGRAM.replace('G.flag = "go"', 'G.flag = "stop"')
+        )
+        result = SequentialCoordinator(
+            store=store, worker=make_worker()
+        ).execute(program, run_id="run-branch-false")
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"]["V.flag"] == define_handler(goal="stop")
+
+        history = store.events("run-branch-false")
+        assert not [
+            event for event in history if event.invocation_id == "inv-2"
+        ]
+        # No task was ever created for the skipped branch: a false
+        # conditional performs no work.
+        ledger = store.task_ledger("run-branch-false")
+        profile = ledger.profile()
+        assert profile["counts"]["total"] == 1
+        assert profile["counts"]["completed"] == 1
+
+        state = store.project_state("run-branch-false")
+        assert "OUT.total" not in state["nodes"]
+        assert state["state_version"] == 1
+
+
+def test_failing_conditional_invocation_fails_run_atomically(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        program = parse_program(BRANCH_PROGRAM)
+        worker = DeterministicWorker(
+            handlers={
+                "define": define_handler,
+                "calculate": broken_calculate_handler,
+            }
+        )
+        result = SequentialCoordinator(store=store, worker=worker).execute(
+            program, run_id="run-branch-broken"
+        )
+
+        assert result["status"] == "failed"
+        assert "boom" in result["error"]
+        history = store.events("run-branch-broken")
+        grouped = events_by_invocation(history)
+        assert [event.event_type for event in grouped["inv-2"]][-1] is (
+            EventType.FAILED
+        )
+        assert store.project_state("run-branch-broken")["nodes"].keys() == {
+            "V.flag"
+        }
+        ledger = store.task_ledger("run-branch-broken")
+        # The failed conditional step's own task is cancelled by the
+        # standard failure batch, exactly like a failing bare invocation.
+        assert ledger.profile()["counts"]["cancelled"] == 1
+        assert ledger.profile()["counts"]["completed"] == 1
+
+
+def test_conditional_return_finishes_run_and_cancels_later_tasks(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        program = parse_program(EARLY_RETURN_PROGRAM)
+        result = SequentialCoordinator(
+            store=store, worker=make_worker()
+        ).execute(program, run_id="run-early")
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"V.flag": define_handler(goal="early")}
+
+        history = store.events("run-early")
+        assert history[-1].event_type is EventType.RUN_FINISHED
+        assert history[-1].payload == {"status": "succeeded"}
+        assert not [
+            event for event in history if event.invocation_id == "inv-2"
+        ]
+        ledger = store.task_ledger("run-early")
+        profile = ledger.profile()
+        assert profile["counts"]["total"] == 2
+        assert profile["counts"]["completed"] == 1
+        assert profile["counts"]["cancelled"] == 1
+
+
+def test_conditional_return_with_false_condition_falls_through(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        program = parse_program(
+            EARLY_RETURN_PROGRAM.replace('G.flag = "early"', 'G.flag = "late"')
+        )
+        result = SequentialCoordinator(
+            store=store, worker=make_worker()
+        ).execute(program, run_id="run-not-early")
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"]["OUT.total"] == 3
+        ledger = store.task_ledger("run-not-early")
+        assert ledger.profile()["counts"]["completed"] == 2
+
+
+def test_conditional_stop_before_any_invocation_gates_the_run(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        program = parse_program(GATE_PROGRAM)
+        result = SequentialCoordinator(
+            store=store, worker=make_worker()
+        ).execute(program, run_id="run-gate")
+
+        assert result["status"] == "denied"
+        history = store.events("run-gate")
+        assert history[-1].payload == {"status": "denied", "reason": "deny"}
+        assert not [
+            event for event in history if event.invocation_id == "inv-1"
+        ]
+        ledger = store.task_ledger("run-gate")
+        profile = ledger.profile()
+        assert profile["counts"]["total"] == 1
+        assert profile["counts"]["cancelled"] == 1
+
+
+def test_conditional_gate_open_runs_everything(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        program = parse_program(GATE_PROGRAM.replace('V.mode = "deny"', 'V.mode = "allow"'))
+        result = SequentialCoordinator(
+            store=store, worker=make_worker()
+        ).execute(program, run_id="run-gate-open")
+
+        assert result["status"] == "succeeded"
+        grouped = events_by_invocation(store.events("run-gate-open"))
+        assert [event.event_type for event in grouped["inv-1"]] == list(LIFECYCLE)

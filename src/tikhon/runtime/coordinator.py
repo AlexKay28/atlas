@@ -16,8 +16,17 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping
 from tikhon.runtime.events import EventStore, EventType, _Record
 from tikhon.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
 from tikhon.state import StateDelta
-from tikhon.syntax import is_typed_reference, load_protocol, validate_program
-from tikhon.syntax.model import Argument, Call, Declaration, Invocation, Program, Return, Stop
+from tikhon.syntax import is_typed_reference, load_protocol, parse_condition, validate_program
+from tikhon.syntax.model import (
+    Argument,
+    Call,
+    Conditional,
+    Declaration,
+    Invocation,
+    Program,
+    Return,
+    Stop,
+)
 
 if TYPE_CHECKING:
     from tikhon.memory import KnowledgeBase
@@ -27,6 +36,7 @@ __all__ = [
     "CrashInterrupt",
     "DeterministicWorker",
     "SequentialCoordinator",
+    "evaluate_condition",
     "evaluate_done_predicate",
     "map_results_to_targets",
 ]
@@ -61,6 +71,12 @@ class _PlanEntry:
     task_prefix: str = ""
     binds: tuple[tuple[str, tuple[Argument, ...], tuple[Declaration, ...]], ...] = ()
     finalizes: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # Issue #3: raw condition text for a DO invocation embedded in an ``IF``
+    # conditional.  ``None`` for unconditional entries.  Conditional entries
+    # sit after every unconditional entry in the plan (validation enforces
+    # the source rule) and create their ledger task lazily, only when the
+    # condition actually fires — a false branch performs no work.
+    condition: str | None = None
 
 _BUILTIN_REGISTRY_DIGEST: str | None = None
 _EFFECTFUL_COMMANDS: frozenset[str] | None = None
@@ -215,6 +231,103 @@ def evaluate_done_predicate(
             return True, ""
         return False, f"value {actual!r} does not match pattern {done.value!r}"
     raise ValueError(f"unknown DONE predicate {done.op!r}")
+
+
+def evaluate_condition(condition: str, values: Mapping[str, Any]) -> bool:
+    """Purely and deterministically evaluate an IF condition (issue #3).
+
+    Parses ``condition`` (the raw text stored on the ``Conditional``) and
+    evaluates the AST over the committed ``values`` mapping: no worker
+    calls, no clocks, no randomness, no I/O.  Equality is JSON-strict (a
+    bool never equals 0/1, matching DONE predicates).  Refs resolve like
+    invocation nodes with the spec's immutable field selection (a trailing
+    dotted segment reads a field of the committed node).  ``count``
+    requires a list-valued operand.  A ref that no longer resolves (or a
+    field selection that misses) raises ValueError — static validation
+    cannot see mid-run retirements or value shapes.
+    """
+    ast = parse_condition(condition)
+    return _eval_condition_node(ast, values)
+
+
+def _eval_condition_node(node: tuple, values: Mapping[str, Any]) -> bool:
+    kind = node[0]
+    if kind == "eq":
+        return _json_equal(_condition_operand(node[1], values), node[2])
+    if kind == "ne":
+        return not _json_equal(_condition_operand(node[1], values), node[2])
+    if kind == "count":
+        operand = _condition_operand(node[1], values)
+        if not isinstance(operand, list):
+            raise ValueError(
+                f"count condition requires a list-valued reference"
+                f" ({node[1]}), got {type(operand).__name__}"
+            )
+        return _compare(len(operand), node[2], node[3])
+    if kind == "not":
+        return not _eval_condition_node(node[1], values)
+    if kind == "and":
+        return _eval_condition_node(node[1], values) and _eval_condition_node(
+            node[2], values
+        )
+    if kind == "or":
+        return _eval_condition_node(node[1], values) or _eval_condition_node(
+            node[2], values
+        )
+    raise ValueError(f"unknown condition node {kind!r}")
+
+
+def _condition_operand(ref: str, values: Mapping[str, Any]) -> Any:
+    """Resolve a condition ref against committed state (issue #3).
+
+    A ref either names a committed node outright or — per the spec's
+    immutable field selection — addresses a field path into the longest
+    committed prefix of itself (``V.tests.status`` reads field ``status``
+    of node ``V.tests``).  Reading a field of a non-mapping node or a
+    missing field raises ValueError: conditions never guess.
+    """
+    if ref in values:
+        return values[ref]
+    segments = ref.split(".")
+    while len(segments) > 1:
+        segments.pop()
+        prefix = ".".join(segments)
+        if prefix in values:
+            operand: Any = values[prefix]
+            for field in ref.split(".")[len(segments):]:
+                if not isinstance(operand, Mapping):
+                    raise ValueError(
+                        f"condition field selection {ref!r} requires a"
+                        f" mapping at {prefix!r}, got"
+                        f" {type(operand).__name__}"
+                    )
+                if field not in operand:
+                    raise ValueError(
+                        f"condition field selection {ref!r} failed:"
+                        f" node {prefix!r} has no field {field!r}"
+                    )
+                operand = operand[field]
+            return operand
+    raise ValueError(
+        f"reference {ref} is not in run state (retired or undefined);"
+        " conditions read committed nodes only"
+    )
+
+
+def _compare(left: Any, op: str, right: Any) -> bool:
+    if op == "==":
+        return left == right
+    if op == "!=":
+        return left != right
+    if op == "<":
+        return left < right
+    if op == "<=":
+        return left <= right
+    if op == ">":
+        return left > right
+    if op == ">=":
+        return left >= right
+    raise ValueError(f"unknown comparison operator {op!r}")
 
 
 class DeterministicWorker:
@@ -394,6 +507,15 @@ class SequentialCoordinator:
             for statement in statements:
                 if isinstance(statement, Invocation):
                     entries.append(_PlanEntry(statement, prefix))
+                elif isinstance(statement, Conditional):
+                    # Issue #3: a conditional DO invocation occupies a plan
+                    # entry carrying its condition; STOP/RETURN conditionals
+                    # are not plan entries (no task, no worker call) and are
+                    # evaluated at their source anchor by _collect_anchors.
+                    if isinstance(statement.statement, Invocation):
+                        entries.append(
+                            _PlanEntry(statement.statement, prefix, condition=statement.condition)
+                        )
                 elif isinstance(statement, Call):
                     protocol = load_protocol(statement.protocol, self.protocols_dir)
                     before = len(entries)
@@ -435,6 +557,12 @@ class SequentialCoordinator:
         create_records: list[_Record] = []
         create_ledger = self.store.task_ledger(run_id)
         for idx, entry in enumerate(plan):
+            if entry.condition is not None:
+                # Issue #3: conditional entries are not part of the up-front
+                # creation batch — a false branch performs no work, so its
+                # ledger task exists only when the condition fires (created
+                # lazily in _drive_plan).
+                continue
             statement = entry.invocation
             task = create_ledger.create_task(
                 text=(
@@ -467,6 +595,189 @@ class SequentialCoordinator:
             f"{entry.task_prefix}{entry.invocation.step_id}:"
             f" DO {entry.invocation.command}"
         )
+
+    def _collect_anchors(self, program: Program) -> dict[int, list]:
+        """Map plan index -> STOP/RETURN conditionals at that source anchor.
+
+        An anchor value is the number of plan entries preceding the
+        conditional in source order, so anchor ``a`` conditionals are
+        evaluated right after plan entry ``a - 1`` commits (anchor 0 before
+        the loop starts, anchor ``len(plan)`` after it ends).  Conditional
+        DO invocations are plan entries themselves and are never anchors.
+        Computed per drive so the resume path (which drives the plan
+        directly) evaluates the same anchors.
+        """
+        anchors: dict[int, list] = {}
+
+        def walk(statements: tuple[object, ...]) -> int:
+            count = 0
+            for statement in statements:
+                if isinstance(statement, Invocation):
+                    count += 1
+                elif isinstance(statement, Conditional):
+                    if isinstance(statement.statement, Invocation):
+                        count += 1
+                    else:
+                        anchors.setdefault(count, []).append(statement)
+                elif isinstance(statement, Call):
+                    protocol = load_protocol(
+                        statement.protocol, self.protocols_dir
+                    )
+                    count += walk(protocol.statements)
+            return count
+
+        walk(program.statements)
+        return anchors
+
+    def _create_single_plan_task(self, run_id: str, entry: _PlanEntry) -> str:
+        """Create one ledger task for a lazily reached conditional entry.
+
+        The task text and creation record mirror ``_create_plan_tasks``
+        exactly, so a fired conditional step is indistinguishable in the
+        ledger from an unconditional one (issue #3).
+        """
+        statement = entry.invocation
+        ledger = self.store.task_ledger(run_id)
+        task = ledger.create_task(
+            text=self._task_text(entry),
+            creator="coordinator",
+        )
+        self.store.append(
+            run_id,
+            EventType.TASK_UPDATED,
+            task_id=task.id,
+            payload={
+                "kind": "task_created", "id": task.id, "text": task.text,
+                "priority": task.priority, "parent": task.parent,
+                "dependencies": task.dependencies, "creator": task.creator,
+            },
+        )
+        return task.id
+
+    def _cancel_pending_after(
+        self,
+        run_id: str,
+        plan: list[_PlanEntry],
+        statement_to_task: dict[int, str],
+        from_idx: int,
+    ) -> None:
+        """Cancel every created-but-unreached plan task from ``from_idx``.
+
+        Fired conditional STOP/RETURN terminals leave later invocations
+        unreached; their batch-created tasks are cancelled exactly like the
+        failure path.  Conditional tasks are created lazily, so absent
+        mappings are skipped — no task exists for work that never started.
+        """
+        records = [
+            _Record(
+                event_type=EventType.TASK_UPDATED,
+                task_id=statement_to_task[pending_idx],
+                payload={
+                    "kind": "task_cancelled",
+                    "id": statement_to_task[pending_idx],
+                },
+                store=self.store,
+            )
+            for pending_idx in range(from_idx, len(plan))
+            if pending_idx in statement_to_task
+        ]
+        if records:
+            self.store.append_batch(run_id, records)
+
+    def _terminal_return(
+        self, run_id: str, refs: tuple[str, ...], values: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Finish a run through a RETURN terminal (bare or conditional)."""
+        outputs: dict[str, Any] = {ref: values.get(ref) for ref in refs}
+        self.store.append(
+            run_id,
+            EventType.RUN_FINISHED,
+            payload={"status": "succeeded"},
+        )
+        return {"run_id": run_id, "status": "succeeded", "outputs": outputs}
+
+    def _terminal_stop(
+        self, run_id: str, stop: Stop, values: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Finish a run through a STOP terminal (bare or conditional).
+
+        ``completed`` maps to a succeeded run; every other kind is recorded
+        verbatim, with the referenced node's value as the reason payload
+        when the ref resolves.
+        """
+        if stop.kind == "completed":
+            run_status = "succeeded"
+        else:
+            run_status = stop.kind
+        reason = values.get(stop.ref) if stop.ref else None
+        finished_payload: dict[str, Any] = {"status": run_status}
+        if reason is not None:
+            finished_payload["reason"] = reason
+        self.store.append(
+            run_id,
+            EventType.RUN_FINISHED,
+            payload=finished_payload,
+        )
+        return {"run_id": run_id, "status": run_status, "outputs": {}}
+
+    def _fail_run(
+        self,
+        run_id: str,
+        plan: list[_PlanEntry],
+        statement_to_task: dict[int, str],
+        from_idx: int,
+        error: str,
+    ) -> dict[str, Any]:
+        """Fail a run without an owning invocation (issue #3).
+
+        A condition referencing a node retired mid-run cannot be tied to an
+        invocation task, so the run fails through a reduced batch: pending
+        tasks are cancelled and RUN_FINISHED carries the error.
+        """
+        self._cancel_pending_after(run_id, plan, statement_to_task, from_idx)
+        self.store.append(
+            run_id,
+            EventType.RUN_FINISHED,
+            payload={"status": "failed", "error": error},
+        )
+        return {"run_id": run_id, "status": "failed", "error": error, "outputs": {}}
+
+    def _run_conditionals(
+        self,
+        run_id: str,
+        conditionals: list,
+        values: dict[str, Any],
+        plan: list[_PlanEntry],
+        statement_to_task: dict[int, str],
+        cancel_from_idx: int,
+    ) -> dict[str, Any] | None:
+        """Evaluate source-anchored STOP/RETURN conditionals in order.
+
+        A false condition skips the embedded statement and execution
+        continues; a fired STOP/RETURN cancels the unreached plan tasks and
+        finishes the run through the existing terminal handling.  Returns
+        the terminal result dict, or ``None`` when no conditional fired.
+        Conditional DO invocations never appear here — they are plan
+        entries evaluated inside the loop itself.
+        """
+        for conditional in conditionals:
+            try:
+                fired = evaluate_condition(conditional.condition, values)
+            except ValueError as exc:
+                return self._fail_run(
+                    run_id, plan, statement_to_task, cancel_from_idx, str(exc)
+                )
+            if not fired:
+                continue
+            embedded = conditional.statement
+            self._cancel_pending_after(
+                run_id, plan, statement_to_task, cancel_from_idx
+            )
+            if isinstance(embedded, Stop):
+                return self._terminal_stop(run_id, embedded, values)
+            if isinstance(embedded, Return):
+                return self._terminal_return(run_id, embedded.refs, values)
+        return None
 
     def execute(
         self,
@@ -614,6 +925,9 @@ class SequentialCoordinator:
                     store=self.store,
                 )
                 for pending_idx in range(idx + 1, len(plan))
+                # Issue #3: conditional tasks are created lazily, so an
+                # unreached conditional entry may have no task to cancel.
+                if pending_idx in statement_to_task
             )
             records.append(_Record(
                 event_type=EventType.RUN_FINISHED,
@@ -625,11 +939,48 @@ class SequentialCoordinator:
         failed = False
         error_msg: str | None = None
 
+        # Issue #3: conditionals anchored before the first invocation (their
+        # refs can only be declared INPUT nodes) are evaluated up front.  On
+        # resume every anchor before start_idx was already handled before
+        # the crash and is deliberately not re-evaluated.
+        anchors = self._collect_anchors(program)
+        if start_idx == 0:
+            anchor_result = self._run_conditionals(
+                run_id,
+                anchors.get(0, ()),
+                values,
+                plan,
+                statement_to_task,
+                cancel_from_idx=0,
+            )
+            if anchor_result is not None:
+                return anchor_result
+
         for idx in range(start_idx, len(plan)):
             entry = plan[idx]
             statement = entry.invocation
             invocation_id = f"inv-{idx + 1}"
-            task_id = statement_to_task[idx]
+            if entry.condition is not None:
+                # Issue #3: a conditional DO invocation executes only when
+                # its condition holds over the committed state; a false
+                # condition skips the statement entirely — no task, no
+                # events, no state change.  A fired branch creates its
+                # ledger task here and then runs the exact same lifecycle
+                # as an unconditional entry below.
+                try:
+                    fired = evaluate_condition(entry.condition, values)
+                except ValueError as exc:
+                    return self._fail_run(
+                        run_id, plan, statement_to_task, idx, str(exc)
+                    )
+                if not fired:
+                    continue
+                task_id = statement_to_task.get(idx)
+                if task_id is None:
+                    task_id = self._create_single_plan_task(run_id, entry)
+                    statement_to_task[idx] = task_id
+            else:
+                task_id = statement_to_task[idx]
 
             # Issue #10: a resumed in-flight step carries pre-crash
             # lifecycle events.  Its task is already IN_PROGRESS
@@ -933,28 +1284,41 @@ class SequentialCoordinator:
                 ),
             ])
 
+            # Issue #3: conditionals anchored directly after this entry in
+            # source order are evaluated over the state it just committed;
+            # a fired STOP/RETURN ends the run here, so later entries never
+            # execute and their tasks stay cancelled.
+            anchor_result = self._run_conditionals(
+                run_id,
+                anchors.get(idx + 1, ()),
+                values,
+                plan,
+                statement_to_task,
+                cancel_from_idx=idx + 1,
+            )
+            if anchor_result is not None:
+                return anchor_result
+
         outputs: dict[str, Any] = {}
         if not failed:
+            # Issue #3: conditionals anchored after the last invocation run
+            # before the bare terminal scan (source order).
+            if len(plan) > 0:
+                anchor_result = self._run_conditionals(
+                    run_id,
+                    anchors.get(len(plan), ()),
+                    values,
+                    plan,
+                    statement_to_task,
+                    cancel_from_idx=len(plan),
+                )
+                if anchor_result is not None:
+                    return anchor_result
             for statement in program.statements:
                 if isinstance(statement, Return):
-                    for ref in statement.refs:
-                        outputs[ref] = values.get(ref)
-                    break
+                    return self._terminal_return(run_id, statement.refs, values)
                 if isinstance(statement, Stop):
-                    if statement.kind == "completed":
-                        run_status = "succeeded"
-                    else:
-                        run_status = statement.kind
-                    reason = values.get(statement.ref) if statement.ref else None
-                    finished_payload: dict[str, Any] = {"status": run_status}
-                    if reason is not None:
-                        finished_payload["reason"] = reason
-                    self.store.append(
-                        run_id,
-                        EventType.RUN_FINISHED,
-                        payload=finished_payload,
-                    )
-                    return {"run_id": run_id, "status": run_status, "outputs": outputs}
+                    return self._terminal_stop(run_id, statement, values)
 
         if failed:
             return {"run_id": run_id, "status": "failed", "error": error_msg or "", "outputs": {}}

@@ -1,0 +1,17 @@
+# Tikhon run for GitHub issue #3: IF branches with deterministic expressions.
+
+PROGRAM issue_03_if_branches VERSION 1.0
+
+INPUT
+    G.goal = "Implement single-line deterministic IF conditionals in the tikhon grammar: IF <expr> <statement> where the statement is STOP, RETURN, or a full DO invocation; conditions are ==/!= comparisons over committed node refs and JSON literals plus count(<ref>) ordering comparisons, combined with left-associative AND/OR and NOT; the coordinator evaluates each conditional in source order over committed state, executing the embedded statement only when the condition holds, and ELSE block forms stay unsupported"
+    C.scope = "src/tikhon/syntax/parser.py, src/tikhon/syntax/model.py, src/tikhon/syntax/__init__.py, src/tikhon/runtime/coordinator.py, tests/test_syntax.py, tests/test_coordinator.py, demo/runs/issue-03-if-branches/"
+    C.behavior = "IF is removed from the unsupported construct set and parses into a frozen Conditional(condition, statement, line) stored in program.statements in source position; conditions accept ref == json, ref != json, count(ref) with == != < <= > >= over list-valued refs, left-associative AND/OR and prefix NOT, and reject parentheses and ELSE with clear ParseErrors; condition refs must be declared INPUT nodes or targets of earlier steps; an IF DO conditional must appear after every unconditional invocation line; the coordinator evaluates conditions deterministically over committed values with no worker calls, fires STOP/RETURN through the existing terminal handling including reason resolution and cancellation of unreached tasks, and executes a true IF DO through the normal invocation lifecycle with a lazily created ledger task; false conditions skip the embedded statement and execution continues; programs without IF seal byte-identically"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.design: DO summarize(source_refs = E.sites, budget = 4000) -> P.design
+step.patch: DO report(committed_refs = P.design, format = "python_patch") -> ART.patch
+step.check: DO check(artifact = ART.patch, criteria = C.behavior) -> V.tests
+step.verify: DO verify(goal = G.goal, evidence = V.tests) -> V.result
+
+RETURN ART.patch, V.tests, V.result

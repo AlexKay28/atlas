@@ -32,12 +32,15 @@ import pytest
 
 from tikhon.syntax import (
     Call,
+    Conditional,
     DonePredicate,
     Invocation,
     ParseError,
     Program,
     Return,
+    Stop,
     canonical_json,
+    parse_condition,
     parse_program,
     protocol_file_path,
     seal_digest,
@@ -1230,3 +1233,404 @@ def test_clause_canonical_json_omits_empty_groups():
     with_clause = canonical_json(parse_program(CORRECTIONS_PROGRAM))
     assert '"revisions":["G.summary"]' in with_clause
     assert '"retirements":["E.stale"]' in with_clause
+
+
+# --------------------------------------------------------------------------
+# Issue #3: IF branches with deterministic expressions.
+# --------------------------------------------------------------------------
+
+IF_PROGRAM = """\
+PROGRAM gated VERSION 0.1
+
+INPUT
+  V.flag = "go"
+  E.items = [1, 2, 3]
+
+step.one: DO define(value = V.flag) -> V.out
+IF V.flag == "go" AND count(E.items) >= 2 STOP blocked(V.out)
+IF NOT V.flag != "no" OR count(E.items) < 1 RETURN V.out
+IF count(E.items) == 3 step.two: DO calculate(left = 1, right = 2) -> OUT.total
+RETURN V.out
+"""
+
+
+def _conditionals(program):
+    return [
+        statement
+        for statement in program.statements
+        if isinstance(statement, Conditional)
+    ]
+
+
+def test_if_condition_expression_forms_parse():
+    program = parse_program(IF_PROGRAM)
+    first, second, third = _conditionals(program)
+
+    assert first.condition == 'V.flag == "go" AND count(E.items) >= 2'
+    assert first.statement.kind == "blocked"
+    assert first.statement.ref == "V.out"
+    assert first.line == 8
+
+    assert second.condition == 'NOT V.flag != "no" OR count(E.items) < 1'
+    assert isinstance(second.statement, Return)
+    assert second.statement.refs == ("V.out",)
+
+    assert third.condition == "count(E.items) == 3"
+    assert isinstance(third.statement, Invocation)
+    assert third.statement.step_id == "step.two"
+    assert third.statement.command == "calculate"
+    assert third.statement.targets == ("OUT.total",)
+
+    # Conditionals keep their source position among the statements.
+    assert program.statements[1] is first
+    assert program.statements[3] is third
+
+
+def test_if_condition_ast_shape_and_left_associativity():
+    assert parse_condition('V.a == "x"') == ("eq", "V.a", "x")
+    assert parse_condition("V.a != 7") == ("ne", "V.a", 7)
+    for op, name in (("==", "eq"), ("!=", "ne"), ("<", "lt"), ("<=", "le"), (">", "gt"), (">=", "ge")):
+        ast = parse_condition(f"count(E.items) {op} 2")
+        assert ast == ("count", "E.items", op, 2), op
+    # Left-associative fold: a AND b OR c == ((a AND b) OR c).
+    ast = parse_condition('V.a == 1 AND V.b == 2 OR V.c == 3')
+    assert ast == (
+        "or",
+        ("and", ("eq", "V.a", 1), ("eq", "V.b", 2)),
+        ("eq", "V.c", 3),
+    )
+    assert parse_condition("NOT V.a == 1") == ("not", ("eq", "V.a", 1))
+    assert parse_condition("NOT NOT V.a == 1") == (
+        "not",
+        ("not", ("eq", "V.a", 1)),
+    )
+
+
+def test_if_condition_accepts_json_literal_right_hand_sides():
+    program = parse_program(
+        CANONICAL.replace(
+            "RETURN E.result",
+            'IF E.result == {"ok": true, "limit": 2} STOP completed()\nRETURN E.result',
+        )
+    )
+    (conditional,) = _conditionals(program)
+    assert conditional.condition == 'E.result == {"ok": true, "limit": 2}'
+    assert conditional.statement.kind == "completed"
+    assert conditional.statement.ref is None
+
+
+def test_if_statement_keywords_inside_json_literals_do_not_split():
+    program = parse_program(
+        CANONICAL.replace(
+            "RETURN E.result",
+            'IF E.result != "please STOP now AND RETURN" STOP blocked(E.result)\nRETURN E.result',
+        )
+    )
+    (conditional,) = _conditionals(program)
+    assert conditional.condition == 'E.result != "please STOP now AND RETURN"'
+    assert isinstance(conditional.statement, Stop)
+
+
+def test_if_condition_refs_validated_like_done_refs():
+    base = """\
+PROGRAM ordered VERSION 0.1
+
+INPUT
+  V.flag = "go"
+
+{lines}
+
+RETURN V.flag
+"""
+    # Declared INPUT ref: accepted.
+    program = parse_program(
+        base.format(lines="IF V.flag == \"go\" STOP completed()")
+    )
+    assert validate_program(program, known_commands=set()) is True
+    # Ref produced by an earlier step: accepted.
+    program = parse_program(
+        base.format(
+            lines='step.one: DO define(value = V.flag) -> E.out\n'
+            'IF E.out == "x" STOP completed()'
+        )
+    )
+    assert validate_program(program, known_commands={"define"}) is True
+    # Ref produced by a later step: rejected at the conditional's position.
+    program = parse_program(
+        base.format(
+            lines='IF E.out == "x" STOP completed()\n'
+            'step.one: DO define(value = V.flag) -> E.out'
+        )
+    )
+    with pytest.raises(ParseError, match="E.out.*used before definition"):
+        validate_program(program, known_commands={"define"})
+    # Undeclared ref: rejected.
+    program = parse_program(
+        base.format(lines='IF V.missing == "x" STOP completed()')
+    )
+    with pytest.raises(ParseError, match="V.missing.*used before definition"):
+        validate_program(program, known_commands=set())
+    # count() ref must exist too.
+    program = parse_program(
+        base.format(lines="IF count(V.missing) > 0 STOP completed()")
+    )
+    with pytest.raises(ParseError, match="V.missing.*used before definition"):
+        validate_program(program, known_commands=set())
+
+
+def test_if_else_block_forms_rejected():
+    for source in (
+        CANONICAL.replace("RETURN E.result", "ELSE STOP completed()"),
+        CANONICAL.replace(
+            "RETURN E.result", 'ELSE IF E.result == 1 STOP completed()'
+        ),
+    ):
+        with pytest.raises(
+            ParseError, match="unsupported control construct ELSE"
+        ):
+            parse_program(source)
+
+
+def test_if_parentheses_rejected():
+    with pytest.raises(
+        ParseError, match="parentheses are not supported in IF conditions"
+    ):
+        parse_program(
+            CANONICAL.replace(
+                "RETURN E.result",
+                "IF (E.result == 1) STOP completed()\nRETURN E.result",
+            )
+        )
+    with pytest.raises(
+        ParseError, match="parentheses are not supported in IF conditions"
+    ):
+        parse_program(
+            CANONICAL.replace(
+                "RETURN E.result",
+                "IF E.result == 1 AND (E.result != 2) STOP completed()\n"
+                "RETURN E.result",
+            )
+        )
+
+
+def test_if_do_must_come_after_every_unconditional_invocation():
+    base = """\
+PROGRAM ordered VERSION 0.1
+
+INPUT
+  V.flag = "go"
+
+step.one: DO define(value = V.flag) -> V.out
+{lines}
+RETURN V.out
+"""
+    # IF-DO followed by an unconditional invocation: rejected.
+    program = parse_program(
+        base.format(
+            lines='IF V.flag == "go" step.two: DO ping() -> E.pong\n'
+            "step.three: DO define(value = V.flag) -> V.late"
+        )
+    )
+    with pytest.raises(
+        ParseError,
+        match="step.three.*after an IF ... DO conditional",
+    ):
+        validate_program(program, known_commands={"define", "ping"})
+    # IF-DO followed by a CALL: rejected too.
+    program = parse_program(
+        base.format(
+            lines='IF V.flag == "go" step.two: DO ping() -> E.pong\n'
+            'CALL protocol.framing(request = V.flag) -> V.out'
+        )
+    )
+    with pytest.raises(
+        ParseError, match="CALL appears after an IF ... DO conditional"
+    ):
+        validate_program(program, known_commands={"define", "ping"})
+    # IF-DO as the last invocation before the terminal: accepted.
+    program = parse_program(
+        base.format(
+            lines='IF V.flag == "go" step.two: DO ping() -> E.pong'
+        )
+    )
+    assert validate_program(program, known_commands={"define", "ping"}) is True
+
+
+def test_if_malformed_conditions_rejected():
+    cases = [
+        # Bare ref without an operator.
+        'IF V.flag STOP completed()',
+        # Ordering comparison on a bare reference.
+        "IF V.flag > 1 STOP completed()",
+        "IF V.flag <= 1 STOP completed()",
+        # Ref-vs-ref comparison (right side must be a JSON literal).
+        "IF V.flag == V.other STOP completed()",
+        # Invalid JSON literal.
+        'IF V.flag == passed STOP completed()',
+        # THEN is not part of the grammar.
+        "IF V.flag == 1 THEN STOP completed()",
+        # Trailing junk after a well-formed condition.
+        "IF V.flag == 1 junk STOP completed()",
+        # count without a typed reference.
+        "IF count(3) > 0 STOP completed()",
+        "IF count(V.flag STOP completed()",
+        # count against a non-integer literal.
+        'IF count(V.flag) > "many" STOP completed()',
+        # Missing statement after the condition.
+        "IF V.flag == 1",
+    ]
+    for source in cases:
+        program_text = CANONICAL.replace("RETURN E.result", source)
+        with pytest.raises(ParseError):
+            parse_program(program_text), source
+
+
+def test_if_embedded_statement_validation_errors():
+    base = """\
+PROGRAM checked VERSION 0.1
+
+INPUT
+  V.flag = "go"
+
+{lines}
+
+RETURN V.flag
+"""
+    # Invalid embedded STOP kind.
+    program = parse_program(
+        base.format(lines='IF V.flag == "go" STOP exploded(V.flag)')
+    )
+    with pytest.raises(ParseError, match="invalid STOP kind exploded"):
+        validate_program(program, known_commands=set())
+    # Unresolved embedded STOP ref.
+    program = parse_program(
+        base.format(lines='IF V.flag == "go" STOP failed(V.missing)')
+    )
+    with pytest.raises(ParseError, match="unresolved STOP reference V.missing"):
+        validate_program(program, known_commands=set())
+    # Unresolved embedded RETURN ref.
+    program = parse_program(
+        base.format(lines='IF V.flag == "go" RETURN V.missing')
+    )
+    with pytest.raises(ParseError, match="unresolved return reference V.missing"):
+        validate_program(program, known_commands=set())
+    # Unknown command inside the embedded DO.
+    program = parse_program(
+        base.format(lines='IF V.flag == "go" step.x: DO teleport() -> E.out')
+    )
+    with pytest.raises(ParseError, match="unknown command teleport"):
+        validate_program(program, known_commands=set())
+    # Duplicate step id across bare and conditional invocations.
+    program = parse_program(
+        base.format(
+            lines="step.dup: DO ping() -> E.late\n"
+            'IF V.flag == "go" step.dup: DO ping() -> E.out'
+        )
+    )
+    with pytest.raises(ParseError, match="duplicate step step.dup"):
+        validate_program(program, known_commands={"ping"})
+    # Conditional target may not collide with an unconditional target.
+    program = parse_program(
+        base.format(
+            lines="step.base: DO ping() -> E.out\n"
+            'IF V.flag == "go" step.x: DO ping() -> E.out'
+        )
+    )
+    with pytest.raises(ParseError, match="duplicate target E.out"):
+        validate_program(program, known_commands={"ping"})
+    # Nor with another conditional's target.
+    program = parse_program(
+        base.format(
+            lines='IF V.flag == "go" step.x: DO ping() -> E.out\n'
+            'IF V.flag == "go" step.y: DO ping() -> E.out'
+        )
+    )
+    with pytest.raises(ParseError, match="duplicate target E.out"):
+        validate_program(program, known_commands={"ping"})
+    # Conditional targets are not referenceable by later statements: the
+    # branch may not run, so statically the node does not exist.  (The
+    # reading step must precede the IF-DO anyway per the ordering rule.)
+    program = parse_program(
+        base.format(
+            lines="step.y: DO define(value = E.out) -> V.late\n"
+            'IF V.flag == "go" step.x: DO ping() -> E.out'
+        )
+    )
+    with pytest.raises(ParseError, match="E.out.*used before definition"):
+        validate_program(program, known_commands={"ping", "define"})
+
+
+def test_if_conditional_is_frozen_dataclass():
+    program = parse_program(IF_PROGRAM)
+    conditional = _conditionals(program)[0]
+    assert dataclasses.is_dataclass(conditional)
+    assert conditional.line != 0
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        conditional.condition = "V.flag != 1"
+
+
+def test_if_canonical_json_is_deterministic_and_omits_source_line():
+    program = parse_program(IF_PROGRAM)
+    payload = canonical_json(program)
+    assert '"kind":"conditional"' in payload
+    assert '"condition":"V.flag == \\"go\\" AND count(E.items) >= 2"' in payload
+    assert '"statement":{"kind":"blocked","ref":"V.out"}' in payload
+    # Source locations are not part of the canonical form (like invocations).
+    conditional = _conditionals(program)[0]
+    assert conditional.line != 0
+    assert '"line"' not in payload
+    # Byte-identical across parses; sensitive to the condition text.
+    assert canonical_json(parse_program(IF_PROGRAM)) == payload
+    changed = IF_PROGRAM.replace('AND count(E.items) >= 2', 'AND count(E.items) >= 3')
+    assert seal_digest(parse_program(changed)) != seal_digest(program)
+
+
+def test_pre_if_programs_seal_byte_identically():
+    # A program without IF serializes exactly as before issue #3: no new
+    # keys, no conditional wrapping, same digest.
+    payload = canonical_json(parse_program(CANONICAL))
+    assert '"kind":"invocation"' in payload
+    assert '"kind":"conditional"' not in payload
+    expected_statements = (
+        '{"args":[{"name":"value","value":"G.goal"},'
+        '{"name":"limit","value":2}],"command":"define",'
+        '"done":{"op":"equals","ref":"E.result",'
+        '"value":{"limit":2,"ok":true}},"kind":"invocation",'
+        '"step_id":"step.one","targets":["E.result"]},'
+        '{"kind":"return","refs":["E.result"]}'
+    )
+    assert expected_statements in payload
+    # Regression pin: the exact digest a pre-issue-#3 checkout produced for
+    # CANONICAL (conditionals added no keys and changed no serialization;
+    # cross-checked against the sealed demo program in
+    # demo/runs/issue-03-if-branches/ whose digest was computed before any
+    # source edit and still reproduces).
+    assert (
+        seal_digest(parse_program(CANONICAL))
+        == "39c3a47a8c5ef5828713eafe943b94fd365357cafb09ad199e330399b702447b"
+    )
+
+
+def test_done_must_follow_an_invocation_not_a_conditional():
+    source = CANONICAL.replace(
+        "RETURN E.result",
+        "IF E.result == 1 STOP completed()\nDONE E.result == 1\nRETURN E.result",
+    )
+    with pytest.raises(ParseError, match="DONE must follow an invocation"):
+        parse_program(source)
+
+
+def test_conditional_terminal_alone_does_not_satisfy_terminal_requirement():
+    source = """\
+PROGRAM conditional VERSION 0.1
+
+INPUT
+  V.flag = "go"
+
+IF V.flag == "go" STOP completed()
+"""
+    program = parse_program(source)
+    with pytest.raises(
+        ParseError, match="program requires a terminal RETURN or STOP"
+    ):
+        validate_program(program, known_commands=set())

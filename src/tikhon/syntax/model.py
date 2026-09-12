@@ -74,6 +74,27 @@ class Call:
 
 
 @dataclass(frozen=True)
+class Conditional:
+    """Single-line deterministic conditional (issue #3): ``IF <expr> <statement>``.
+
+    ``condition`` is the raw condition text between ``IF`` and the embedded
+    statement — deterministic comparisons over committed node refs and JSON
+    literals (``<ref> == <json>``, ``<ref> != <json>``, ``count(<ref>) <op>
+    <int>`` for list-valued refs) combined with left-associative ``AND`` /
+    ``OR`` and prefix ``NOT``; no parentheses, no worker calls.  ``statement``
+    is the embedded statement object — a :class:`Stop`, a :class:`Return`, or
+    a full :class:`Invocation` (``step.<id>: DO ...``).  Block forms (ELSE,
+    ELSE IF) are not part of the grammar and are rejected at parse time.
+    The coordinator evaluates the condition purely over committed run state
+    and executes the embedded statement only when it holds.
+    """
+
+    condition: str
+    statement: object
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Return:
     refs: tuple[str, ...]
 

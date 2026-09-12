@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-from .model import Argument, Call, Declaration, DonePredicate, Invocation, Program, Return, Stop
+from .model import Argument, Call, Conditional, Declaration, DonePredicate, Invocation, Program, Return, Stop
 
 _NAME = r"[a-z][a-z0-9_]*"
 # Program header names allow hyphens after the first character (issue #15).
@@ -55,12 +55,26 @@ _PROTOCOL_PREFIX = "protocol."
 # Bounded recursion (issue #12): at most 8 nested protocol-call levels.
 _MAX_PROTOCOL_DEPTH = 8
 _PROTOCOLS_DIR_DEFAULT = "protocols"
+# Issue #3: IF is no longer reserved — it parses a single-line deterministic
+# conditional.  FIRST/SCATTER/GATHER/LOOP/TRY/AWAIT/APPROVE stay unsupported.
 _UNSUPPORTED = frozenset(
-    {"IF", "FIRST", "SCATTER", "GATHER", "LOOP", "TRY", "AWAIT", "APPROVE"}
+    {"FIRST", "SCATTER", "GATHER", "LOOP", "TRY", "AWAIT", "APPROVE"}
 )
 _STOP_KINDS = frozenset({"completed", "failed", "blocked", "denied", "cancelled", "unresolved"})
 _DONE_OPS = frozenset({"equals", "in", "matched"})
 _DONE_MATCHED_RE = re.compile(r"^matched\((?P<inner>.*)\)$", re.DOTALL)
+# Issue #3: block forms of the conditional (ELSE, ELSE IF) are out of scope
+# and rejected with a dedicated message; the keyword check sees the line's
+# first word, so both bare ELSE and "ELSE IF ..." report the ELSE construct.
+_ELSE_KEYWORDS = frozenset({"ELSE"})
+# Condition grammar (issue #3): ordering operators are only valid on
+# count(<ref>); the combined match list is longest-first so "<=" is not
+# read as "<".
+_CONDITION_ORDER_OPS = ("<=", ">=")
+_CONDITION_EQUALITY_OPS = ("==", "!=")
+_CONDITION_ALL_OPS = _CONDITION_EQUALITY_OPS + _CONDITION_ORDER_OPS + ("<", ">")
+_CONDITION_STEP_RE = re.compile(rf"step\.{_NAME}\s*:")
+_JSON_DECODER = json.JSONDecoder()
 
 
 class ParseError(Exception):
@@ -97,7 +111,7 @@ def parse_program(text: str) -> Program:
         raise ParseError("malformed PROGRAM header", header_line, 1)
 
     declarations: list[Declaration] = []
-    statements: list[Invocation | Return | Stop] = []
+    statements: list[Invocation | Return | Stop | Conditional] = []
     in_input = False
     terminal_seen = False
 
@@ -123,8 +137,15 @@ def parse_program(text: str) -> Program:
         keyword = line.split(None, 1)[0]
         if keyword in _UNSUPPORTED:
             raise ParseError(f"unsupported control construct {keyword}", line_no, 1)
+        if keyword in _ELSE_KEYWORDS:
+            # Issue #3: block conditionals (ELSE, ELSE IF) are out of scope.
+            raise ParseError("unsupported control construct ELSE", line_no, 1)
         if terminal_seen:
             raise ParseError("statement appears after terminal", line_no, 1)
+
+        if re.match(r"IF\b", line):
+            statements.append(_parse_conditional_line(line, line_no))
+            continue
 
         if re.match(r"DONE\b", line):
             expression = line[4:].strip()
@@ -171,40 +192,9 @@ def parse_program(text: str) -> Program:
         # Issue #7: strip the optional trailing REVISE/RETIRE clause before
         # matching the invocation itself; the clause only ever follows the
         # target refs, so an unmatched clause falls through to the ordinary
-        # malformed-invocation / target errors below.
-        revisions: tuple[str, ...] = ()
-        retirements: tuple[str, ...] = ()
-        corrections = _CORRECTIONS_RE.search(line)
-        if corrections is not None:
-            line = line[:corrections.start()]
-            revise_text = corrections.group("revise")
-            retire_text = (
-                corrections.group("retire_after_revise")
-                or corrections.group("retire")
-            )
-            if revise_text:
-                revisions = tuple(
-                    ref.strip() for ref in revise_text.split(",")
-                )
-            if retire_text:
-                retirements = tuple(
-                    ref.strip() for ref in retire_text.split(",")
-                )
-        step = _STEP_RE.fullmatch(line)
-        if step is None:
-            raise ParseError("malformed invocation", line_no, 1)
-        args = tuple(_parse_argument(item, line_no) for item in _split_top_level(step.group("args")))
-        targets = _parse_refs(step.group("targets"), line_no, "target")
-        statements.append(
-            Invocation(
-                step.group("step"),
-                step.group("command"),
-                args,
-                targets,
-                revisions=revisions,
-                retirements=retirements,
-            )
-        )
+        # malformed-invocation / target errors below.  Issue #3 shares the
+        # exact same line parser with IF-embedded DO invocations.
+        statements.append(_parse_invocation_text(line, line_no))
 
     program = Program(
         match.group("name"),
@@ -213,6 +203,370 @@ def parse_program(text: str) -> Program:
         tuple(statements),
     )
     return program
+
+
+def _parse_invocation_text(line: str, line_no: int) -> Invocation:
+    """Parse one full invocation line (issue #3 extracted the shared body).
+
+    ``step.<id>: DO <command>(args) -> targets`` with the optional trailing
+    REVISE/RETIRE correction clause (issue #7).  The clause only ever
+    follows the target refs, so an unmatched clause falls through to the
+    ordinary malformed-invocation / target errors.
+    """
+    revisions: tuple[str, ...] = ()
+    retirements: tuple[str, ...] = ()
+    corrections = _CORRECTIONS_RE.search(line)
+    if corrections is not None:
+        line = line[:corrections.start()]
+        revise_text = corrections.group("revise")
+        retire_text = (
+            corrections.group("retire_after_revise")
+            or corrections.group("retire")
+        )
+        if revise_text:
+            revisions = tuple(
+                ref.strip() for ref in revise_text.split(",")
+            )
+        if retire_text:
+            retirements = tuple(
+                ref.strip() for ref in retire_text.split(",")
+            )
+    step = _STEP_RE.fullmatch(line)
+    if step is None:
+        raise ParseError("malformed invocation", line_no, 1)
+    args = tuple(_parse_argument(item, line_no) for item in _split_top_level(step.group("args")))
+    targets = _parse_refs(step.group("targets"), line_no, "target")
+    return Invocation(
+        step.group("step"),
+        step.group("command"),
+        args,
+        targets,
+        revisions=revisions,
+        retirements=retirements,
+    )
+
+
+def _parse_conditional_line(line: str, line_no: int) -> Conditional:
+    """Parse one ``IF <expr> <statement>`` line (issue #3).
+
+    ``<statement>`` is exactly one of ``STOP <kind>(<ref?>)``, ``RETURN
+    <refs>``, or a full ``step.<id>: DO ...`` invocation line.  The raw
+    condition text is kept verbatim on the model; the coordinator re-parses
+    it with :func:`parse_condition` at evaluation time.
+    """
+    rest = line[2:].strip()
+    _condition_ast, statement_start = _parse_condition_head(rest, line_no)
+    # The raw condition text is kept on the model verbatim; validation and
+    # the coordinator re-parse it with parse_condition.
+    condition = rest[:statement_start].strip()
+    statement_text = rest[statement_start:].strip()
+    if not statement_text:
+        raise ParseError(
+            "IF requires a statement (STOP, RETURN, or a DO invocation)",
+            line_no,
+            len(rest) + 3,
+        )
+    if re.match(r"STOP\b", statement_text):
+        stop = _STOP_RE.fullmatch(statement_text)
+        if stop is None:
+            raise ParseError("malformed STOP in IF statement", line_no, 1)
+        embedded: object = Stop(stop.group("kind"), stop.group("ref"))
+    elif re.match(r"RETURN\b", statement_text):
+        embedded = Return(_parse_refs(statement_text[6:].strip(), line_no, "RETURN"))
+    elif _CONDITION_STEP_RE.match(statement_text):
+        embedded = _parse_invocation_text(statement_text, line_no)
+    else:
+        raise ParseError(
+            "IF statement must be STOP, RETURN, or a DO invocation"
+            " (step.<id>: DO ...)",
+            line_no,
+            1,
+        )
+    return Conditional(condition, embedded, line_no)
+
+
+def parse_condition(text: str, line_no: int = 0) -> tuple:
+    """Parse a deterministic IF-condition expression (issue #3).
+
+    Grammar — comparisons over committed node refs and JSON literals only,
+    no worker calls, no parentheses:
+
+    - ``<ref> == <json-literal>``
+    - ``<ref> != <json-literal>``
+    - ``count(<ref>) <op> <int>``  (op in ``== != < <= > >=``; count reads a
+      list-valued reference)
+    - ``<term> AND <term>``, ``<term> OR <term>``  (left-associative)
+    - ``NOT <term>``  (prefix, repeatable)
+
+    Returns a plain-tuple AST: ``("eq", ref, value)``, ``("ne", ref,
+    value)``, ``("count", ref, op, value)``, ``("and", left, right)``,
+    ``("or", left, right)``, ``("not", inner)``.  Raises ParseError on
+    parentheses, ordering operators on bare refs, and any malformed form.
+    The whole text must be one condition — a trailing STOP/RETURN/step
+    statement is rejected here (the IF-line parser splits it off first).
+    """
+    if not isinstance(text, str):
+        raise ParseError("IF condition must be text", line_no, 1)
+    scanner = _ConditionScanner(text, line_no)
+    if not scanner.source:
+        raise ParseError("IF condition is empty", line_no, 4)
+    return scanner.parse_full_condition()
+
+
+class _ConditionScanner:
+    """Scanner for deterministic IF-condition expressions (issue #3).
+
+    Comparisons over committed node refs and JSON literals, combined with
+    left-associative AND/OR and prefix NOT; no parentheses, no worker
+    calls.  Two entry points: :meth:`parse_full_condition` requires the
+    whole text to be one condition (:func:`parse_condition`), and
+    :meth:`parse_condition_prefix` stops at the embedded statement's
+    keyword (the IF-line parser).  JSON literals are consumed whole by
+    :meth:`parse_comparison`, so statement keywords inside quoted strings
+    never confuse the split.
+    """
+
+    def __init__(self, text: str, line_no: int) -> None:
+        self.source = text.strip()
+        self.line_no = line_no
+        self.n = len(self.source)
+        self.pos = 0
+
+    def skip_spaces(self) -> None:
+        while self.pos < self.n and self.source[self.pos].isspace():
+            self.pos += 1
+
+    def at_word(self, word: str) -> bool:
+        """Whether keyword ``word`` starts at ``pos`` with a word boundary."""
+        if not self.source.startswith(word, self.pos):
+            return False
+        end = self.pos + len(word)
+        return end == self.n or self.source[end].isspace()
+
+    def parse_full_condition(self) -> tuple:
+        """Parse the whole text as one condition; trailing text is an error."""
+        node = self.parse_expression()
+        self.skip_spaces()
+        if self.pos < self.n:
+            raise ParseError(
+                f"malformed IF condition near {self.source[self.pos:]!r}",
+                self.line_no,
+                self.pos + 1,
+            )
+        return node
+
+    def parse_condition_prefix(self) -> tuple:
+        """Parse one condition, stopping at the embedded statement keyword.
+
+        Returns ``(ast, index)`` with ``index`` at the first character of
+        the STOP / RETURN / ``step.<id>:`` statement that follows.
+        """
+        node = self.parse_expression(stop_at_statement=True)
+        return node, self.pos
+
+    def parse_expression(self, stop_at_statement: bool = False) -> tuple:
+        node = self.parse_term()
+        while True:
+            self.skip_spaces()
+            if self.at_word("AND"):
+                self.pos += 3
+                node = ("and", node, self.parse_term())
+            elif self.at_word("OR"):
+                self.pos += 2
+                node = ("or", node, self.parse_term())
+            else:
+                break
+        self.skip_spaces()
+        if stop_at_statement and self.at_statement_start():
+            return node
+        if self.pos < self.n:
+            raise ParseError(
+                f"malformed IF condition near {self.source[self.pos:]!r}",
+                self.line_no,
+                self.pos + 1,
+            )
+        return node
+
+    def at_statement_start(self) -> bool:
+        """Whether the embedded statement's keyword starts at ``pos``."""
+        if self.at_word("STOP") or self.at_word("RETURN"):
+            return True
+        return _CONDITION_STEP_RE.match(self.source, self.pos) is not None
+
+    def parse_term(self) -> tuple:
+        # Each prefix NOT wraps the comparison, so the AST preserves the
+        # written structure (NOT NOT x == 1 nests two "not" nodes; its
+        # evaluated value is still the comparison's own).
+        negations = 0
+        while True:
+            self.skip_spaces()
+            if self.at_word("NOT"):
+                negations += 1
+                self.pos += 3
+            else:
+                break
+        node = self.parse_comparison()
+        for _ in range(negations):
+            node = ("not", node)
+        return node
+
+    def parse_comparison(self) -> tuple:
+        self.skip_spaces()
+        if self.pos >= self.n:
+            raise ParseError(
+                "IF condition requires a comparison", self.line_no, self.pos + 1
+            )
+        if self.source[self.pos] == "(":
+            raise ParseError(
+                "parentheses are not supported in IF conditions",
+                self.line_no,
+                self.pos + 1,
+            )
+        if self.source.startswith("count(", self.pos):
+            return self.parse_count_comparison()
+        ref_match = re.compile(_REF_PATTERN).match(self.source, self.pos)
+        if ref_match is None:
+            raise ParseError(
+                "IF condition requires a comparison over a typed reference"
+                " or count(<ref>)",
+                self.line_no,
+                self.pos + 1,
+            )
+        ref = ref_match.group(0)
+        self.pos = ref_match.end()
+        self.skip_spaces()
+        op = None
+        for candidate in _CONDITION_EQUALITY_OPS:
+            if self.source.startswith(candidate, self.pos):
+                op = candidate
+                break
+        if op is None:
+            for candidate in _CONDITION_ORDER_OPS:
+                if self.source.startswith(candidate, self.pos):
+                    raise ParseError(
+                        f"ordering comparison {candidate} is only supported"
+                        " on count(<ref>), not on a bare reference",
+                        self.line_no,
+                        self.pos + 1,
+                    )
+            raise ParseError(
+                "IF comparison requires == or != on a typed reference",
+                self.line_no,
+                self.pos + 1,
+            )
+        self.pos += len(op)
+        self.skip_spaces()
+        value, end = _decode_condition_literal(
+            self.source, self.pos, self.line_no
+        )
+        self.pos = end
+        return ("eq" if op == "==" else "ne", ref, value)
+
+    def parse_count_comparison(self) -> tuple:
+        self.pos += len("count(")
+        self.skip_spaces()
+        ref_match = re.compile(_REF_PATTERN).match(self.source, self.pos)
+        if ref_match is None:
+            raise ParseError(
+                "count requires a typed reference: count(<ref>)",
+                self.line_no,
+                self.pos + 1,
+            )
+        ref = ref_match.group(0)
+        self.pos = ref_match.end()
+        self.skip_spaces()
+        if self.pos >= self.n or self.source[self.pos] != ")":
+            raise ParseError(
+                "count requires a closing parenthesis: count(<ref>)",
+                self.line_no,
+                self.pos + 1,
+            )
+        self.pos += 1
+        self.skip_spaces()
+        op = _match_condition_op(self.source, self.pos)
+        if op is None:
+            raise ParseError(
+                "count comparison requires one of ==, !=, <, <=, >, >=",
+                self.line_no,
+                self.pos + 1,
+            )
+        self.pos += len(op)
+        self.skip_spaces()
+        value, end = _decode_condition_literal(
+            self.source, self.pos, self.line_no
+        )
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ParseError(
+                "count comparison requires an integer literal",
+                self.line_no,
+                self.pos + 1,
+            )
+        self.pos = end
+        return ("count", ref, op, value)
+
+
+def _match_condition_op(source: str, pos: int) -> str | None:
+    for op in _CONDITION_ALL_OPS:
+        if source.startswith(op, pos):
+            return op
+    return None
+
+
+def _decode_condition_literal(source: str, pos: int, line_no: int) -> tuple[Any, int]:
+    try:
+        return _JSON_DECODER.raw_decode(source, pos)
+    except json.JSONDecodeError as exc:
+        raise ParseError(
+            f"invalid JSON literal in IF condition: {exc.msg}", line_no, pos + 1
+        ) from exc
+
+
+def _parse_condition_head(text: str, line_no: int) -> tuple[tuple, int]:
+    """Parse the condition prefix of an IF line.
+
+    Returns ``(ast, index)`` where ``index`` points at the embedded
+    statement's first keyword (STOP, RETURN, or ``step.<id>:``) in ``text``.
+    """
+    scanner = _ConditionScanner(text, line_no)
+    if not scanner.source:
+        raise ParseError("IF condition is empty", line_no, 4)
+    return scanner.parse_condition_prefix()
+
+
+def _condition_refs(node: tuple) -> tuple[str, ...]:
+    """Typed references read by a condition AST (issue #3).
+
+    Conditions are evaluated over committed run state, so every ref must
+    resolve before the conditional's source position — validation checks
+    them like DONE-predicate refs (declared INPUT or an earlier step's
+    target), with the spec's immutable field selection: a trailing dotted
+    segment may address a field of a committed node.
+    """
+    kind = node[0]
+    if kind in ("eq", "ne", "count"):
+        return (node[1],)
+    if kind == "not":
+        return _condition_refs(node[1])
+    if kind in ("and", "or"):
+        return _condition_refs(node[1]) + _condition_refs(node[2])
+    raise ParseError(f"unknown condition node {kind!r}")
+
+
+def _condition_ref_resolvable(ref: str, available: set[str]) -> bool:
+    """Whether a condition ref addresses an existing node or a field of one.
+
+    A dotted ref either names a committed node outright or names a field
+    path into the longest committed prefix of itself (``V.tests.status``
+    reads field ``status`` of node ``V.tests``, per the spec's immutable
+    field selection).  Validation therefore accepts a ref when any dotted
+    prefix of it is available at the conditional's source position.
+    """
+    segments = ref.split(".")
+    while segments:
+        if ".".join(segments) in available:
+            return True
+        segments.pop()
+    return False
 
 
 def _parse_argument(text: str, line_no: int) -> Argument:
@@ -508,6 +862,13 @@ def validate_program(
     the protocol's INPUT leaf names; CALL targets must be a subset of the
     protocol's RETURN refs; and protocols must not call themselves directly
     or transitively, with nested protocol-call chains bounded at depth 8.
+
+    Conditional statements (issue #3) validate their condition's refs at
+    the conditional's source position (declared INPUT or an earlier step's
+    target) and their embedded statement with the same rules as its bare
+    form.  A conditional DO invocation must come after every unconditional
+    invocation line; a bare terminal RETURN/STOP is still required (a
+    conditional STOP/RETURN is a possible exit, not a guaranteed one).
     """
     if not isinstance(program, Program):
         raise ParseError("expected Program")
@@ -527,99 +888,31 @@ def validate_program(
         available.add(declaration.ref)
 
     steps: set[str] = set()
+    conditional_targets: set[str] = set()
+    conditional_invocation_seen = False
     terminal = False
     for statement in program.statements:
         if terminal:
             raise ParseError("statement appears after terminal")
         if isinstance(statement, Invocation):
-            if statement.step_id in steps:
-                raise ParseError(f"duplicate step {statement.step_id}")
-            steps.add(statement.step_id)
-            if known is not None and statement.command not in known:
-                raise ParseError(f"unknown command {statement.command}")
-            for argument in statement.args:
-                for ref in _references_in(argument.value):
-                    # KB.* refs resolve from the KnowledgeBase at dispatch
-                    # time, so they need no run-local definition.
-                    if ref.startswith("KB."):
-                        continue
-                    if ref not in available:
-                        raise ParseError(
-                            f"reference {ref} used before definition",
-                            argument.line,
-                            1,
-                        )
-            # Issue #7: correction-clause validation, kept pragmatic:
-            # every revised/retired ref must be an existing node (declared
-            # in INPUT or produced by an earlier step), may not be the
-            # step's own target, and no ref may appear in both groups;
-            # KB.* refs are cross-run semantic memory, never run-local
-            # nodes.  REVISE pins the step to a single target because the
-            # revised nodes receive that target's value.  Whether a
-            # RETIREd ref is still RETURNed on this path remains the
-            # programmer's responsibility.
-            if statement.revisions and len(statement.targets) != 1:
+            # Issue #3 pragmatic rule: a conditional DO invocation must come
+            # after every unconditional invocation line, so an invocation
+            # following one is rejected.
+            if conditional_invocation_seen:
                 raise ParseError(
-                    f"REVISE on {statement.step_id} requires exactly one"
-                    " target (revised nodes are set to the step's single"
-                    f" target value); got {len(statement.targets)}"
+                    f"unconditional invocation {statement.step_id} appears"
+                    " after an IF ... DO conditional: a conditional DO"
+                    " invocation must come after every unconditional"
+                    " invocation line"
                 )
-            for kind, refs in (
-                ("REVISE", statement.revisions),
-                ("RETIRE", statement.retirements),
-            ):
-                for ref in refs:
-                    if ref.startswith("KB."):
-                        raise ParseError(
-                            f"{kind} reference {ref} cannot correct KB.*"
-                            " nodes: semantic memory is durable across runs"
-                            " and is written with remember, not revised"
-                        )
-                    if ref in statement.targets:
-                        raise ParseError(
-                            f"{kind} reference {ref} is one of the step's"
-                            " own targets; corrections apply to earlier"
-                            " nodes only"
-                        )
-                    if ref not in available:
-                        raise ParseError(
-                            f"{kind} reference {ref} used before definition:"
-                            " corrections must name an existing node"
-                            " (a declared INPUT or an earlier step's target)"
-                        )
-            overlap = sorted(
-                set(statement.revisions) & set(statement.retirements)
-            )
-            if overlap:
-                raise ParseError(
-                    f"reference(s) {', '.join(overlap)} appear in both"
-                    " REVISE and RETIRE"
-                )
-            for target in statement.targets:
-                if target.startswith("KB."):
-                    raise ParseError(
-                        f"KB reference {target} cannot be an invocation target:"
-                        " semantic memory is written with the remember command,"
-                        " not produced as a state node"
-                    )
-                if target in available:
-                    raise ParseError(f"duplicate target {target}")
-                available.add(target)
-            if statement.done is not None:
-                if statement.done.op not in _DONE_OPS:
-                    raise ParseError(
-                        f"unknown DONE predicate {statement.done.op}",
-                        statement.done.line,
-                        5,
-                    )
-                if statement.done.ref not in statement.targets:
-                    raise ParseError(
-                        f"DONE reference {statement.done.ref} must be one of the"
-                        f" step's targets ({', '.join(statement.targets)})",
-                        statement.done.line,
-                        5,
-                    )
+            _validate_invocation_statement(statement, known, available, steps)
         elif isinstance(statement, Call):
+            if conditional_invocation_seen:
+                raise ParseError(
+                    "CALL appears after an IF ... DO conditional: a"
+                    " conditional DO invocation must come after every"
+                    " unconditional invocation line"
+                )
             for argument in statement.args:
                 for ref in _references_in(argument.value):
                     # KB.* refs resolve from the KnowledgeBase at dispatch
@@ -656,11 +949,177 @@ def validate_program(
             if statement.ref is not None and statement.ref not in available:
                 raise ParseError(f"unresolved STOP reference {statement.ref}")
             terminal = True
+        elif isinstance(statement, Conditional):
+            # Issue #3: the condition's refs must exist at the conditional's
+            # source position — declared INPUT or an earlier step's target —
+            # exactly like DONE-predicate refs.  The embedded statement is
+            # validated with the same rules as its bare form; a conditional
+            # DO invocation's targets are recorded for duplicate detection
+            # but never added to `available`, because statically the branch
+            # may not run and later statements cannot rely on its nodes.
+            condition_ast = parse_condition(statement.condition, statement.line)
+            for ref in _condition_refs(condition_ast):
+                if not _condition_ref_resolvable(ref, available):
+                    raise ParseError(
+                        f"IF condition reference {ref} used before definition:"
+                        " conditions read committed nodes (a declared INPUT or"
+                        " an earlier step's target, or a field of one)",
+                        statement.line,
+                        1,
+                    )
+            embedded = statement.statement
+            if isinstance(embedded, Invocation):
+                _validate_invocation_statement(
+                    embedded,
+                    known,
+                    available,
+                    steps,
+                    extra_claimed=conditional_targets,
+                    commit_targets=False,
+                )
+                conditional_invocation_seen = True
+            elif isinstance(embedded, Return):
+                for ref in embedded.refs:
+                    if ref not in available:
+                        raise ParseError(
+                            f"unresolved return reference {ref}",
+                            statement.line,
+                            1,
+                        )
+            elif isinstance(embedded, Stop):
+                if embedded.kind not in _STOP_KINDS:
+                    raise ParseError(
+                        f"invalid STOP kind {embedded.kind}", statement.line, 1
+                    )
+                if embedded.ref is not None and embedded.ref not in available:
+                    raise ParseError(
+                        f"unresolved STOP reference {embedded.ref}",
+                        statement.line,
+                        1,
+                    )
+            else:
+                raise ParseError(
+                    "IF statement must embed STOP, RETURN, or a DO invocation"
+                )
         else:
             raise ParseError(f"unknown statement {type(statement).__name__}")
     if not terminal:
         raise ParseError("program requires a terminal RETURN or STOP")
     return True
+
+
+def _validate_invocation_statement(
+    statement: Invocation,
+    known: set[str] | None,
+    available: set[str],
+    steps: set[str],
+    extra_claimed: set[str] | None = None,
+    *,
+    commit_targets: bool = True,
+) -> None:
+    """Validate one invocation statement (issue #3 extracted the shared body).
+
+    Used for bare invocations and for invocations embedded in an ``IF``
+    conditional.  ``commit_targets=False`` (the IF-DO case) checks a
+    conditional target for duplicates against ``available`` and
+    ``extra_claimed`` (targets of earlier conditional invocations) but never
+    adds it to ``available``: statically the branch may not run, so later
+    statements cannot rely on its nodes.  Step ids are recorded in
+    ``steps`` either way, keeping ids unique across bare and conditional
+    invocations.
+    """
+    if statement.step_id in steps:
+        raise ParseError(f"duplicate step {statement.step_id}")
+    steps.add(statement.step_id)
+    if known is not None and statement.command not in known:
+        raise ParseError(f"unknown command {statement.command}")
+    for argument in statement.args:
+        for ref in _references_in(argument.value):
+            # KB.* refs resolve from the KnowledgeBase at dispatch
+            # time, so they need no run-local definition.
+            if ref.startswith("KB."):
+                continue
+            if ref not in available:
+                raise ParseError(
+                    f"reference {ref} used before definition",
+                    argument.line,
+                    1,
+                )
+    # Issue #7: correction-clause validation, kept pragmatic:
+    # every revised/retired ref must be an existing node (declared
+    # in INPUT or produced by an earlier step), may not be the
+    # step's own target, and no ref may appear in both groups;
+    # KB.* refs are cross-run semantic memory, never run-local
+    # nodes.  REVISE pins the step to a single target because the
+    # revised nodes receive that target's value.  Whether a
+    # RETIREd ref is still RETURNed on this path remains the
+    # programmer's responsibility.
+    if statement.revisions and len(statement.targets) != 1:
+        raise ParseError(
+            f"REVISE on {statement.step_id} requires exactly one"
+            " target (revised nodes are set to the step's single"
+            f" target value); got {len(statement.targets)}"
+        )
+    for kind, refs in (
+        ("REVISE", statement.revisions),
+        ("RETIRE", statement.retirements),
+    ):
+        for ref in refs:
+            if ref.startswith("KB."):
+                raise ParseError(
+                    f"{kind} reference {ref} cannot correct KB.*"
+                    " nodes: semantic memory is durable across runs"
+                    " and is written with remember, not revised"
+                )
+            if ref in statement.targets:
+                raise ParseError(
+                    f"{kind} reference {ref} is one of the step's"
+                    " own targets; corrections apply to earlier"
+                    " nodes only"
+                )
+            if ref not in available:
+                raise ParseError(
+                    f"{kind} reference {ref} used before definition:"
+                    " corrections must name an existing node"
+                    " (a declared INPUT or an earlier step's target)"
+                )
+    overlap = sorted(
+        set(statement.revisions) & set(statement.retirements)
+    )
+    if overlap:
+        raise ParseError(
+            f"reference(s) {', '.join(overlap)} appear in both"
+            " REVISE and RETIRE"
+        )
+    for target in statement.targets:
+        if target.startswith("KB."):
+            raise ParseError(
+                f"KB reference {target} cannot be an invocation target:"
+                " semantic memory is written with the remember command,"
+                " not produced as a state node"
+            )
+        if target in available or (
+            extra_claimed is not None and target in extra_claimed
+        ):
+            raise ParseError(f"duplicate target {target}")
+        if commit_targets:
+            available.add(target)
+        elif extra_claimed is not None:
+            extra_claimed.add(target)
+    if statement.done is not None:
+        if statement.done.op not in _DONE_OPS:
+            raise ParseError(
+                f"unknown DONE predicate {statement.done.op}",
+                statement.done.line,
+                5,
+            )
+        if statement.done.ref not in statement.targets:
+            raise ParseError(
+                f"DONE reference {statement.done.ref} must be one of the"
+                f" step's targets ({', '.join(statement.targets)})",
+                statement.done.line,
+                5,
+            )
 
 
 def _validate_call_contract(
@@ -884,6 +1343,16 @@ def _statement_dict(statement: object) -> dict[str, Any]:
         return {"kind": "return", **dataclasses.asdict(statement)}
     if isinstance(statement, Stop):
         return {"kind": "stop", **dataclasses.asdict(statement)}
+    if isinstance(statement, Conditional):
+        # Issue #3: the source line is not part of the canonical form (like
+        # invocations and calls), so pre-IF programs seal byte-identically
+        # and a conditional's seal depends only on its condition text and
+        # embedded statement.
+        return {
+            "kind": "conditional",
+            "condition": statement.condition,
+            "statement": _statement_dict(statement.statement),
+        }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 

@@ -10,7 +10,10 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
+import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,6 +24,7 @@ from tikhon.registry import builtin_registry
 from tikhon.resume import resume_run
 from tikhon.runtime import DeterministicWorker, EventStore, EventType, SequentialCoordinator
 from tikhon.syntax import ParseError, parse_program, seal_digest, validate_program
+from tikhon.worker_adapter import DEFAULT_TIMEOUT_SECONDS, ModelWorker
 
 
 def _load_source(path: str) -> str:
@@ -199,6 +203,157 @@ def _deterministic_handlers(
     }
 
 
+#: Commands whose handlers stay deterministic even under ``--worker model``
+#: (issue #8): edit/test are sandboxed effectful operations a model cannot
+#: perform, and review keeps the same deterministic result shape.
+DETERMINISTIC_UNDER_MODEL = frozenset({"edit", "test", "review"})
+
+
+class _HybridModelWorker:
+    """Duck-type worker: ``edit``/``test``/``review`` stay deterministic.
+
+    Wraps a ``ModelWorker`` (model routing for every other command) and a
+    ``DeterministicWorker`` built from the standard handlers, dispatching
+    the deterministic set to the handlers (issue #8 requirement 4).
+    """
+
+    def __init__(self, model_worker: Any, deterministic: DeterministicWorker):
+        self._model_worker = model_worker
+        self._deterministic = deterministic
+
+    @property
+    def commands(self) -> set[str]:
+        return self._model_worker.commands | self._deterministic.commands
+
+    def execute(self, command: str, resolved_kwargs: dict[str, Any]) -> Any:
+        if command in DETERMINISTIC_UNDER_MODEL and command in self._deterministic.commands:
+            return self._deterministic.execute(command, resolved_kwargs)
+        return self._model_worker.execute(command, resolved_kwargs)
+
+
+def _make_http_transport(api_base: str, api_key: str) -> Any:
+    """Minimal stdlib OpenAI-compatible chat-completions transport."""
+
+    def transport(model: str, prompt: str) -> str:
+        url = api_base.rstrip("/") + "/chat/completions"
+        payload = json.dumps(
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        return body["choices"][0]["message"]["content"]
+
+    return transport
+
+
+def _make_exec_transport(template: str) -> Any:
+    """Transport running an argv template via subprocess with a timeout."""
+
+    def transport(model: str, prompt: str) -> str:
+        try:
+            parsed = json.loads(template)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, list) and all(isinstance(part, str) for part in parsed):
+            argv_template = parsed
+        else:
+            argv_template = shlex.split(template)
+        argv = [
+            part.replace("{model}", model).replace("{prompt}", prompt)
+            for part in argv_template
+        ]
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"exec transport exited with {proc.returncode}:"
+                f" {(proc.stderr or '')[-500:]}"
+            )
+        return proc.stdout
+
+    return transport
+
+
+def _build_model_worker() -> ModelWorker:
+    """Build a ModelWorker from TIKHON_* environment configuration.
+
+    Raises ``ValueError`` with a clear message when required environment
+    is missing or malformed — the caller prints it and exits 1 before any
+    run is created (same guard style as ``--seal``).
+    """
+    transport_kind = os.environ.get("TIKHON_WORKER_TRANSPORT")
+    if transport_kind not in ("http", "exec"):
+        raise ValueError(
+            f"TIKHON_WORKER_TRANSPORT must be 'http' or 'exec',"
+            f" got {transport_kind!r}"
+        )
+
+    tier_models: dict[str, str] = {}
+    raw_tiers = os.environ.get("TIKHON_TIER_MODELS")
+    if raw_tiers:
+        try:
+            parsed_tiers = json.loads(raw_tiers)
+        except ValueError as exc:
+            raise ValueError(f"TIKHON_TIER_MODELS is not valid JSON: {exc}") from exc
+        if not isinstance(parsed_tiers, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in parsed_tiers.items()
+        ):
+            raise ValueError(
+                "TIKHON_TIER_MODELS must be a JSON object mapping"
+                " tier (T0..T3) to model name"
+            )
+        tier_models = parsed_tiers
+
+    default_model = os.environ.get("TIKHON_MODEL")
+    if not default_model and not tier_models:
+        raise ValueError(
+            "no model configured: set TIKHON_MODEL or TIKHON_TIER_MODELS"
+        )
+
+    if transport_kind == "http":
+        api_base = os.environ.get("TIKHON_API_BASE")
+        api_key = os.environ.get("TIKHON_API_KEY")
+        if not api_base or not api_key:
+            raise ValueError(
+                "http transport requires TIKHON_API_BASE and TIKHON_API_KEY"
+            )
+        transport = _make_http_transport(api_base, api_key)
+    else:
+        template = os.environ.get("TIKHON_EXEC_COMMAND")
+        if not template or not template.strip():
+            raise ValueError(
+                "exec transport requires TIKHON_EXEC_COMMAND"
+                " (argv template with {model} and {prompt} placeholders)"
+            )
+        transport = _make_exec_transport(template)
+
+    return ModelWorker(
+        registry=builtin_registry(),
+        transport=transport,
+        tier_models=tier_models,
+        default_model=default_model,
+    )
+
+
 def _cmd_lint(args: argparse.Namespace) -> int:
     try:
         text = _load_source(args.program)
@@ -251,6 +406,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # Guard before any run state exists: a misconfigured model worker must
+    # fail clearly without creating a run (same guard style as --seal).
+    model_worker: ModelWorker | None = None
+    if args.worker == "model":
+        try:
+            model_worker = _build_model_worker()
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
     try:
         store = EventStore(args.db)
     except Exception as exc:
@@ -267,11 +432,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
         else os.path.dirname(os.path.abspath(args.db))
     )
 
-    worker = DeterministicWorker(
+    deterministic = DeterministicWorker(
         _deterministic_handlers(
             memory=memory, run_id=args.run_id, workspace_root=workspace
         )
     )
+    if model_worker is not None:
+        worker = _HybridModelWorker(model_worker, deterministic)
+    else:
+        worker = deterministic
     coordinator = SequentialCoordinator(
         store, worker, memory=memory, workspace_root=workspace
     )
@@ -317,6 +486,15 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # Guard before touching the store: same guard style as --seal (issue #8).
+    model_worker: ModelWorker | None = None
+    if args.worker == "model":
+        try:
+            model_worker = _build_model_worker()
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
     try:
         store = EventStore(args.db)
     except Exception as exc:
@@ -333,11 +511,15 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         else os.path.dirname(os.path.abspath(args.db))
     )
 
-    worker = DeterministicWorker(
+    deterministic = DeterministicWorker(
         _deterministic_handlers(
             memory=memory, run_id=args.run_id, workspace_root=workspace
         )
     )
+    if model_worker is not None:
+        worker = _HybridModelWorker(model_worker, deterministic)
+    else:
+        worker = deterministic
 
     try:
         result = resume_run(
@@ -508,6 +690,15 @@ def _build_parser() -> argparse.ArgumentParser:
             " (default: the --db directory)"
         ),
     )
+    p_run.add_argument(
+        "--worker",
+        choices=["deterministic", "model"],
+        default="deterministic",
+        help=(
+            "Worker backend: deterministic handlers (default, CI baseline)"
+            " or model routing via TIKHON_* environment configuration"
+        ),
+    )
     p_run.set_defaults(func=_cmd_run)
 
     p_resume = sub.add_parser(
@@ -528,6 +719,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Workspace root for effectful commands like edit"
             " (default: the --db directory)"
+        ),
+    )
+    p_resume.add_argument(
+        "--worker",
+        choices=["deterministic", "model"],
+        default="deterministic",
+        help=(
+            "Worker backend: deterministic handlers (default, CI baseline)"
+            " or model routing via TIKHON_* environment configuration"
         ),
     )
     p_resume.set_defaults(func=_cmd_resume)
