@@ -2,7 +2,7 @@ import dataclasses
 
 import pytest
 
-from atlas.runtime.tasks import Task, TaskStatus, TaskLedger, TaskLedgerError
+from tahoe.runtime.tasks import Task, TaskStatus, TaskLedger, TaskLedgerError
 
 
 def make_task(**overrides):

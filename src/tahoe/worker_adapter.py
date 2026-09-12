@@ -7,7 +7,7 @@ Python handler.  All network/subprocess detail lives behind the
 ``transport`` callable — ``transport(model: str, prompt: str) -> str |
 TransportResult`` — so tests use stubs and the CLI wires real HTTP/exec
 transports from environment configuration (see
-``atlas.cli._build_model_worker``).
+``tahoe.cli._build_model_worker``).
 
 Issue #43 transport seam contract: a transport callable may return
 either a bare ``str`` (legacy — text only, no usage) or a
@@ -23,19 +23,19 @@ envelope changes are needed.  The CLI HTTP transport wiring (in
 body's ``usage`` dict — see the solution report for exact wiring.
 
 Issue #18 binding: every dispatch is rendered as a
-``atlas.envelope.TaskEnvelope`` — the resolved contract summary, pinned
+``tahoe.envelope.TaskEnvelope`` — the resolved contract summary, pinned
 resolved arguments, targets, DONE predicate and an input-digest
 idempotency key — and the prompt is built from that envelope (the
 envelope's canonical JSON is embedded in the prompt, so the worker sees
 the same binding a harness-neutral driver would submit).  The model's
-reply is parsed strictly and wrapped into a ``atlas.envelope.
+reply is parsed strictly and wrapped into a ``tahoe.envelope.
 ResultEnvelope`` (status ``succeeded``, payload, receipt with model
 identity and usage — ``None`` usage meaning telemetry unavailable, not
 zero) before its payload is returned.  Because the coordinator's pinned
 ``execute(command, resolved_kwargs)`` seam carries no run identity, the
 adapter renders a direct-dispatch envelope whose identity placeholders
-are the ``direct`` constants from ``atlas.envelope``; runs dispatched
-through ``atlas next`` carry real ``run/invocation/task`` identity in
+are the ``direct`` constants from ``tahoe.envelope``; runs dispatched
+through ``tahoe next`` carry real ``run/invocation/task`` identity in
 their envelopes instead.
 
 Routing picks the model per the command contract's ``RoutingPolicy``:
@@ -55,7 +55,7 @@ import dataclasses
 import json
 from typing import Any, Callable, Mapping, Sequence
 
-from atlas.envelope import (
+from tahoe.envelope import (
     DIRECT_DISPATCH_INVOCATION_ID,
     DIRECT_DISPATCH_RUN_ID,
     DIRECT_DISPATCH_TASK_ID,
@@ -66,9 +66,9 @@ from atlas.envelope import (
     build_task_envelope,
     envelope_input_digest,
 )
-from atlas.registry.enums import RoutingTier
-from atlas.registry.registry import Registry
-from atlas.runtime.coordinator import map_results_to_targets
+from tahoe.registry.enums import RoutingTier
+from tahoe.registry.registry import Registry
+from tahoe.runtime.coordinator import map_results_to_targets
 
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
@@ -262,7 +262,7 @@ class ModelWorker:
         """
         contract = envelope.contract
         lines = [
-            "You are the model worker executing one step of an ATLAS program.",
+            "You are the model worker executing one step of a TAHOE program.",
             "",
             "Task envelope (schema v1, canonical JSON):",
             envelope.to_json(),
@@ -296,7 +296,7 @@ class ModelWorker:
                 " .claude/skills.lock.json, then load. Record relied-on"
                 " skills in the plan's INPUT declarations."
                 ' Reply with ONLY a JSON object {"plan_text": "..."}'
-                " whose plan_text value is one complete ATLAS program in"
+                " whose plan_text value is one complete TAHOE program in"
                 " the canonical grammar: a PROGRAM header, INPUT"
                 " declarations binding the resolved arguments by their"
                 " leaf names (the goal argument binds the leaf name"

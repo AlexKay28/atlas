@@ -1,6 +1,6 @@
-"""Tests for the atlas CLI surface (docs/spec/02-command-catalog.md).
+"""Tests for the tahoe CLI surface (docs/spec/02-command-catalog.md).
 
-Contract under test (atlas.cli):
+Contract under test (tahoe.cli):
 
     main(argv=None) -> int
 
@@ -22,8 +22,8 @@ import re
 
 import pytest
 
-from atlas.cli import main
-from atlas.runtime import EventStore
+from tahoe.cli import main
+from tahoe.runtime import EventStore
 
 CANONICAL = """\
 PROGRAM demo VERSION 0.1

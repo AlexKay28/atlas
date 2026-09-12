@@ -4,7 +4,7 @@
 
 This document describes the Tier-B pilot scaffolding for the first
 end-to-end Protocol A/B evaluation: does wrapping the same model in the
-ATLAS protocol (sealed plan, registered handlers, DONE gates,
+TAHOE protocol (sealed plan, registered handlers, DONE gates,
 evidence worklog) improve task success, reliability, and recoverability
 vs a plain agent loop?
 
@@ -15,7 +15,7 @@ per #50 section 4:
 - **Arm 1 (react-baseline)**: plain agent/ReAct-style execution — no
   sealed-program scaffolding; the model runs unconstrained with a
   tool-loop baseline prompt.
-- **Arm 4 (atlas-core)**: ATLAS core, sequential execution, no learned
+- **Arm 4 (tahoe-core)**: TAHOE core, sequential execution, no learned
   protocols — the program is authored IN-LOOP by the model via the
   delegate authoring loop; every authoring attempt is COUNTED as a
   charged step per #50's authoring-parity clause.
@@ -25,12 +25,12 @@ resource ceilings per #50 section 4.
 
 ## What is built (scaffolding — no live spend)
 
-### src/atlas/eval.py
+### src/tahoe/eval.py
 
 The arm runner module, built on the #46 benchmark harness:
 
 - **`ArmSpec(name, kind)`**: names an arm and its kind (`"react"` or
-  `"atlas"`). Includes `worker_factory`, `max_workers`, `budget`.
+  `"tahoe"`). Includes `worker_factory`, `max_workers`, `budget`.
 - **`TaskManifest`**: one task in a pilot (task_id, description,
   expected_state, program_source, protocols, authoring_attempts_expected).
 - **`TrialRecord`**: durable per-trial record (task_id, arm, result,
@@ -59,7 +59,7 @@ The arm runner module, built on the #46 benchmark harness:
 
 ### tests/test_eval.py
 
-28 tests: TrialRecord roundtrips, authoring attempts charged on atlas
+28 tests: TrialRecord roundtrips, authoring attempts charged on tahoe
 arm, report to_json roundtrips, DBStateGrader works, full pilot on
 fake workers runs green via ONE entry point, crash handling, validation.
 
@@ -77,19 +77,19 @@ PYTHONPATH=src python3 -m pytest tests/test_eval.py -q
 PYTHONPATH=src python3 -m pytest -q
 ```
 
-### Live smoke (orchestrator post-merge with ATLAS_* env)
+### Live smoke (orchestrator post-merge with TAHOE_* env)
 
 This is the exact one-command invocation the orchestrator should run
-with ATLAS_* env to smoke-test the pilot with a live model:
+with TAHOE_* env to smoke-test the pilot with a live model:
 
 ```bash
 PYTHONPATH=src \
-  ATLAS_WORKER_TRANSPORT=http \
-  ATLAS_MODEL=glm-5-2 \
-  ATLAS_API_BASE=https://api.example.com \
-  ATLAS_API_KEY="$KEY" \
+  TAHOE_WORKER_TRANSPORT=http \
+  TAHOE_MODEL=glm-5-2 \
+  TAHOE_API_BASE=https://api.example.com \
+  TAHOE_API_KEY="$KEY" \
   python3 -c "
-from atlas.eval import run_pilot, ArmSpec, TaskManifest, DBStateGrader
+from tahoe.eval import run_pilot, ArmSpec, TaskManifest, DBStateGrader
 
 tasks = [
     TaskManifest(
@@ -108,7 +108,7 @@ RETURN OUT.answer
 ]
 arms = [
     ArmSpec(name='react-baseline', kind='react'),
-    ArmSpec(name='atlas-core', kind='atlas'),
+    ArmSpec(name='tahoe-core', kind='tahoe'),
 ]
 report = run_pilot(tasks, arms, grader=DBStateGrader())
 print(report.to_json())
@@ -122,7 +122,7 @@ print(report.to_json())
 | §1 Qualities | Correctness (grader), token/cost efficiency (usage dict on TrialRecord), repeated-run reliability (repetitions parameter for pass^k), authoring usability (authoring_attempts charged) |
 | §2 Benchmark shortlist | tau-bench retail subset (manifest stub with pinned task IDs placeholder); custom battery for deterministic validation |
 | §3 Tiered strategy | Tier B pilot (small real-model pilot); Tier A coverage via deterministic tests |
-| §4 Experimental conditions | Arms 1 (react) and 4 (atlas core, sequential); authoring parity: program authored IN-LOOP, every attempt charged |
+| §4 Experimental conditions | Arms 1 (react) and 4 (tahoe core, sequential); authoring parity: program authored IN-LOOP, every attempt charged |
 | §5 Analysis and reporting | Per-task results, usage/wall deltas, authoring attempts charged; paired task comparisons; pass^k via repetitions |
 | §6 Implementation deliverables | Task manifests, shared condition runner, durable trial records, JSON export, human-readable reports |
 
@@ -134,11 +134,11 @@ print(report.to_json())
   environment before live runs.
 - **Live GLM-5.2 smoke**: the scaffold uses deterministic fake workers
   (sleep+echo); the orchestrator runs the live smoke command above with
-  ATLAS_* env.
+  TAHOE_* env.
 - **Usage telemetry**: zero-filled in the deterministic path; live
   workers populate tokens/cost through the same TrialRecord shape.
 - **Arms 2, 3, 5, 6**: concise NL reasoning (Chain-of-Draft-style),
-  structured NL state/plan, ATLAS with learned protocols, and ATLAS
+  structured NL state/plan, TAHOE with learned protocols, and TAHOE
   with bounded parallel/nested are future arms per #50 section 4.
 - **Confidence intervals**: the pilot scaffolding records per-trial
   results; CI computation is a post-hoc analysis step per #50 section 5.

@@ -24,13 +24,13 @@ from typing import Any
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.budgets import ExecutionBudget
-from atlas.registry.registry import builtin_registry
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.coordinator import DeterministicWorker, SequentialCoordinator
-from atlas.runtime.tasks import TaskStatus
-from atlas.syntax import (
+from tahoe.audit import audit_run
+from tahoe.budgets import ExecutionBudget
+from tahoe.registry.registry import builtin_registry
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.coordinator import DeterministicWorker, SequentialCoordinator
+from tahoe.runtime.tasks import TaskStatus
+from tahoe.syntax import (
     ParseError,
     canonical_json,
     parse_program,

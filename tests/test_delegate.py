@@ -22,18 +22,18 @@ import json
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.budgets import ExecutionBudget
-from atlas.resume import resume_run
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.coordinator import (
+from tahoe.audit import audit_run
+from tahoe.budgets import ExecutionBudget
+from tahoe.resume import resume_run
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.coordinator import (
     CrashInterrupt,
     DeterministicWorker,
     SequentialCoordinator,
     delegate_plan_digest,
     delegate_plan_name,
 )
-from atlas.syntax import parse_program
+from tahoe.syntax import parse_program
 
 
 AUTHORED_PLAN = """\
@@ -76,7 +76,7 @@ step.inner: DO delegate(goal = G.goal, constraints = C.constraints) -> X.result
 RETURN X.result
 """
 
-MALFORMED_PLAN = "this is not an ATLAS program at all"
+MALFORMED_PLAN = "this is not an TAHOE program at all"
 
 HIDDEN_DELEGATE_PROTOCOL = """\
 PROGRAM sneaky VERSION 1.0

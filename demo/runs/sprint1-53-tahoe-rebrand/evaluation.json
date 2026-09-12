@@ -1,0 +1,52 @@
+{
+  "task": "GitHub issue #53: Rebrand ATLAS → TAHOE (Task-Aware Language Harness for Orchestrated Execution)",
+  "run_id": "sprint1-53-tahoe-rebrand",
+  "seal": "997379da0d810425cd7d5031c1f149ce2672418c825977f0954a31069e33eb84",
+  "terminal_status": "succeeded",
+  "steps_planned": 28,
+  "steps_executed": 28,
+  "acceptance": [
+    {
+      "criterion": "pip install -e . provides tahoe package + CLI",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m tahoe lint/seal/run all work correctly"
+    },
+    {
+      "criterion": "Suite green (857 tests)",
+      "passed": true,
+      "evidence": "857 passed in 22.28s"
+    },
+    {
+      "criterion": "39/39 historical seals verify byte-identically",
+      "passed": true,
+      "evidence": "40/40 seals verified (39 historical + 1 new) with tahoe seal"
+    },
+    {
+      "criterion": "Grep gate green for pre-rebrand name 'atlas'",
+      "passed": true,
+      "evidence": "git grep -i -c atlas over src/ tests/ README.md docs/ pyproject.toml .opencode/ (excluding test_branding.py) returns exit 1 (no matches)"
+    },
+    {
+      "criterion": "README renders TAHOE header/tagline",
+      "passed": true,
+      "evidence": "Line 1: # TAHOE — Task-Aware Language Harness for Orchestrated Execution; Line 3: *Make agent work executable.*"
+    },
+    {
+      "criterion": "CHANGELOG carries both rename entries",
+      "passed": true,
+      "evidence": "First Changed: tikhon → ATLAS; Second Changed: ATLAS → TAHOE"
+    },
+    {
+      "criterion": "git status shows only in-scope paths",
+      "passed": true,
+      "evidence": "All changed paths are under src/tahoe/, tests/, docs/, README.md, pyproject.toml, CHANGELOG.md, .opencode/skills/tahoe-demo/, demo/runs/sprint1-53-tahoe-rebrand/ — no forbidden paths touched"
+    },
+    {
+      "criterion": "Smoke test: tahoe lint on historical program.think",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m tahoe lint demo/runs/issue-26-benchmarks/program.think → valid (exit 0)"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": []
+}

@@ -1,8 +1,8 @@
-# ATLAS — Agent Task Language & Audit System
+# TAHOE — Task-Aware Language Harness for Orchestrated Execution
 
-*A language for durable agent work.*
+*Make agent work executable.*
 
-ATLAS is an executable text harness for durable AI-agent work. It turns a
+TAHOE is an executable text harness for durable AI-agent work. It turns a
 human-readable program into a sealed sequence of atomic tasks, validates worker
 results, and persists state, evidence, progress, and failures as an event log.
 
@@ -19,7 +19,7 @@ RETURN G.goal, OUT.total
 ## Why
 
 Natural-language agent prompts often hide control flow, completion conditions,
-and state mutation. ATLAS makes those decisions inspectable and replayable:
+and state mutation. TAHOE makes those decisions inspectable and replayable:
 
 - programs are linted and sealed before execution;
 - each `DO` instruction is one bounded task;
@@ -30,15 +30,15 @@ and state mutation. ATLAS makes those decisions inspectable and replayable:
 
 ## Quick Start
 
-ATLAS requires Python 3.10 or newer and has no runtime dependencies.
+TAHOE requires Python 3.10 or newer and has no runtime dependencies.
 
 ```bash
 python3 -m pip install .
-atlas lint examples/demo.think
-SEAL=$(atlas seal examples/demo.think)
-atlas run examples/demo.think --db demo.db --run-id demo-1 --seal "$SEAL"
-atlas status --db demo.db --run-id demo-1
-atlas events --db demo.db --run-id demo-1
+tahoe lint examples/demo.think
+SEAL=$(tahoe seal examples/demo.think)
+tahoe run examples/demo.think --db demo.db --run-id demo-1 --seal "$SEAL"
+tahoe status --db demo.db --run-id demo-1
+tahoe events --db demo.db --run-id demo-1
 ```
 
 The bundled CLI currently uses deterministic demonstration handlers. Real model
@@ -74,8 +74,8 @@ for the full command contract specification.
 ## Agent Demo
 
 `demo/tasks/` contains hard evaluation tasks. The project-local skill at
-`.opencode/skills/atlas-demo/SKILL.md` instructs OpenCode agents to author and
-seal an ATLAS plan before solving a task, then record step-level evidence under
+`.opencode/skills/tahoe-demo/SKILL.md` instructs OpenCode agents to author and
+seal a TAHOE plan before solving a task, then record step-level evidence under
 `demo/runs/`.
 
 ## Development

@@ -1,4 +1,4 @@
-"""Event-sourced task ledger for the ATLAS runtime."""
+"""Event-sourced task ledger for the TAHOE runtime."""
 
 from __future__ import annotations
 

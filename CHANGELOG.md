@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Renamed the project tikhon → ATLAS (Agent Task Language & Audit System); package `atlas`, CLI `atlas`.
 
+### Changed
+
+- Renamed the project ATLAS → TAHOE (Task-Aware Language Harness for Orchestrated Execution); package `tahoe`, CLI `tahoe`.
+
 Sprint 1 — repository hygiene, documentation, and tooling improvements.
 
 - **#28** — CLI reference documentation and README enhancement

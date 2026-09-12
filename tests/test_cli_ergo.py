@@ -15,14 +15,14 @@ import sys
 
 import pytest
 
-from atlas.cli import _deterministic_handlers, main
-from atlas.runtime import (
+from tahoe.cli import _deterministic_handlers, main
+from tahoe.runtime import (
     DeterministicWorker,
     EventStore,
     EventType,
     SequentialCoordinator,
 )
-from atlas.syntax import parse_program
+from tahoe.syntax import parse_program
 
 CANONICAL = """\
 PROGRAM demo VERSION 0.1

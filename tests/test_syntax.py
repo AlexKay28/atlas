@@ -1,6 +1,6 @@
-"""Focused tests for the canonical ATLAS syntax.
+"""Focused tests for the canonical TAHOE syntax.
 
-Grammar under test (the API expected from atlas.syntax):
+Grammar under test (the API expected from tahoe.syntax):
 
     PROGRAM <name> VERSION <semver>
 
@@ -30,7 +30,7 @@ import dataclasses
 
 import pytest
 
-from atlas.syntax import (
+from tahoe.syntax import (
     Call,
     Conditional,
     DonePredicate,
@@ -606,7 +606,7 @@ INPUT
   G.request = "frame the kb issue"
 
 step.ask: DO define(request = G.request) -> G.probe
-CALL protocol.framing(request = G.probe, scope = "src/atlas") -> G.plan, V.analysis
+CALL protocol.framing(request = G.probe, scope = "src/tahoe") -> G.plan, V.analysis
 step.wrap: DO summarize(source_refs = V.analysis, budget = 100) -> OUT.brief
 
 RETURN G.plan, V.analysis, OUT.brief
@@ -648,7 +648,7 @@ def test_call_statement_parses_with_args_and_targets():
     assert call.protocol == "protocol.framing"
     assert [(arg.name, arg.value) for arg in call.args] == [
         ("request", "G.probe"),
-        ("scope", "src/atlas"),
+        ("scope", "src/tahoe"),
     ]
     assert call.targets == ("G.plan", "V.analysis")
 
@@ -695,7 +695,7 @@ def test_call_seal_digest_deterministic_and_sensitive():
 )
 def test_malformed_call_rejected(line):
     source = CALL_PROGRAM.replace(
-        "CALL protocol.framing(request = G.probe, scope = \"src/atlas\") -> G.plan, V.analysis",
+        "CALL protocol.framing(request = G.probe, scope = \"src/tahoe\") -> G.plan, V.analysis",
         line,
     )
     with pytest.raises(ParseError, match="CALL|target"):
@@ -754,7 +754,7 @@ def test_call_target_outside_protocol_return_rejected(tmp_path):
 def test_call_missing_argument_for_protocol_input_rejected(tmp_path):
     write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
     source = CALL_PROGRAM.replace(
-        "CALL protocol.framing(request = G.probe, scope = \"src/atlas\") -> G.plan, V.analysis",
+        "CALL protocol.framing(request = G.probe, scope = \"src/tahoe\") -> G.plan, V.analysis",
         "CALL protocol.framing(request = G.probe) -> G.plan, V.analysis",
     )
     program = parse_program(source)
@@ -769,7 +769,7 @@ def test_call_missing_argument_for_protocol_input_rejected(tmp_path):
 def test_call_unknown_argument_rejected(tmp_path):
     write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
     source = CALL_PROGRAM.replace(
-        "CALL protocol.framing(request = G.probe, scope = \"src/atlas\")",
+        "CALL protocol.framing(request = G.probe, scope = \"src/tahoe\")",
         "CALL protocol.framing(request = G.probe, scope = \"s\", extra = 1)",
     )
     program = parse_program(source)
@@ -784,7 +784,7 @@ def test_call_unknown_argument_rejected(tmp_path):
 def test_call_duplicate_argument_rejected(tmp_path):
     write_protocol(tmp_path, "framing", FRAMING_PROTOCOL)
     source = CALL_PROGRAM.replace(
-        "CALL protocol.framing(request = G.probe, scope = \"src/atlas\")",
+        "CALL protocol.framing(request = G.probe, scope = \"src/tahoe\")",
         "CALL protocol.framing(request = G.probe, request = G.probe, scope = \"s\")",
     )
     program = parse_program(source)
@@ -861,8 +861,8 @@ def test_direct_self_call_rejected(tmp_path):
         SELF_LOOP_PROTOCOL,
     )
     source = CALL_PROGRAM.replace(
-        "CALL protocol.framing(request = G.probe, scope = \"src/atlas\") -> G.plan, V.analysis",
-        "CALL protocol.loop(request = G.probe, scope = \"src/atlas\") -> G.plan, E.context",
+        "CALL protocol.framing(request = G.probe, scope = \"src/tahoe\") -> G.plan, V.analysis",
+        "CALL protocol.loop(request = G.probe, scope = \"src/tahoe\") -> G.plan, E.context",
     ).replace(
         "RETURN G.plan, V.analysis, OUT.brief",
         "RETURN G.plan, E.context, OUT.brief",
@@ -942,8 +942,8 @@ def test_protocol_call_chain_beyond_depth_limit_rejected(tmp_path):
             )
         write_protocol(tmp_path, f"a{index}", body)
     source = CALL_PROGRAM.replace(
-        "CALL protocol.framing(request = G.probe, scope = \"src/atlas\") -> G.plan, V.analysis",
-        "CALL protocol.a1(request = G.probe, scope = \"src/atlas\") -> G.plan, E.child",
+        "CALL protocol.framing(request = G.probe, scope = \"src/tahoe\") -> G.plan, V.analysis",
+        "CALL protocol.a1(request = G.probe, scope = \"src/tahoe\") -> G.plan, E.child",
     ).replace(
         "RETURN G.plan, V.analysis, OUT.brief",
         "RETURN G.plan, E.child, OUT.brief",
@@ -1636,10 +1636,10 @@ IF V.flag == "go" STOP completed()
         validate_program(program, known_commands=set())
 
 
-def test_scatter_and_gather_exported_from_atlas_syntax():
+def test_scatter_and_gather_exported_from_tahoe_syntax():
     # Issue #4: the fan-out block models are part of the public syntax
     # surface and round-trip through parse_program.
-    import atlas.syntax as syntax_module
+    import tahoe.syntax as syntax_module
 
     assert syntax_module.Scatter is not None
     assert syntax_module.Gather is not None

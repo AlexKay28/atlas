@@ -1,11 +1,11 @@
 # CLI Reference
 
 - Status: Draft 0.1
-- Source: issue #49 (repo hygiene); command implementations in `src/atlas/cli.py`
+- Source: issue #49 (repo hygiene); command implementations in `src/tahoe/cli.py`
 
 ## Overview
 
-The `atlas` CLI provides 13 subcommands for linting, sealing, executing,
+The `tahoe` CLI provides 13 subcommands for linting, sealing, executing,
 inspecting, and auditing programs, plus external-driver and benchmark
 tooling. All subcommands use argparse and the standard library only.
 
@@ -36,7 +36,7 @@ tooling. All subcommands use argparse and the standard library only.
 - `seal` — produces the SHA-256 digest the runtime pins at `RUN_STARTED`.
 - `run` — executes a sealed program; verifies the seal before creating any
   run state. Worker selection: `deterministic` (default, CI baseline) or
-  `model` (via `ATLAS_*` environment configuration).
+  `model` (via `TAHOE_*` environment configuration).
 
 ### Run inspection
 
@@ -80,7 +80,7 @@ As of v0.1.0 the registry is frozen at **23 commands**: `calculate`,
 `verify`.
 
 The registry digest is recorded at `RUN_STARTED` and re-verified by
-`atlas audit`. See [02-command-catalog.md](spec/02-command-catalog.md) for
+`tahoe audit`. See [02-command-catalog.md](spec/02-command-catalog.md) for
 the full command contract specification and
 [01-reasoning-language-foundation.md](design/01-reasoning-language-foundation.md)
 for the design rationale behind the frozen vocabulary.

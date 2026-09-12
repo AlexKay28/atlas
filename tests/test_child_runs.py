@@ -21,15 +21,15 @@ import sqlite3
 
 import pytest
 
-from atlas.audit import audit_run
-from atlas.resume import resume_run
-from atlas.runtime import EventStore, EventType
-from atlas.runtime.coordinator import (
+from tahoe.audit import audit_run
+from tahoe.resume import resume_run
+from tahoe.runtime import EventStore, EventType
+from tahoe.runtime.coordinator import (
     CrashInterrupt,
     DeterministicWorker,
     SequentialCoordinator,
 )
-from atlas.syntax import parse_program, validate_program
+from tahoe.syntax import parse_program, validate_program
 
 
 ISOLATION_PROTOCOL = """\

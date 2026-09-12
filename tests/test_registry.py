@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from atlas.registry import (
+from tahoe.registry import (
     Budget,
     CommandSpec,
     ContractError,

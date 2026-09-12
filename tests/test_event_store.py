@@ -7,8 +7,8 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from atlas.runtime import EventStore, EventType
-from atlas.state import StateDelta
+from tahoe.runtime import EventStore, EventType
+from tahoe.state import StateDelta
 
 
 def make_delta() -> StateDelta:

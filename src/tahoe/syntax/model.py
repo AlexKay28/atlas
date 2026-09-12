@@ -1,4 +1,4 @@
-"""Syntax model for ATLAS programs."""
+"""Syntax model for TAHOE programs."""
 
 from dataclasses import dataclass
 
