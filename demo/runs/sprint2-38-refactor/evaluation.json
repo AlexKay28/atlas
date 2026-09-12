@@ -1,0 +1,53 @@
+{
+  "task": "GitHub issue #38: decompose the 6k-line coordinator — one failure-finalization module, a planning module, child/par/scatter/delegate engines, and drive-loop extraction",
+  "run_id": "sprint2-38-refactor",
+  "seal": "d424dad6d1fd65b42a4ec2c2a0fe3a908cb763f213e9444b7d5f2f67d2f81e3c",
+  "terminal_status": "succeeded",
+  "steps_planned": 4,
+  "steps_executed": 4,
+  "acceptance": [
+    {
+      "criterion": "Golden-event tests pass byte-identically after each extraction step",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q -> 938 passed at every step (baseline 938, after finalize 938, after planning 938, after engines 938, after driver 938); no golden-event divergence observed"
+    },
+    {
+      "criterion": "Failure-record assembly exists in exactly one module",
+      "passed": true,
+      "evidence": "src/tahoe/runtime/finalize.py (413 lines) contains all parametrized failure-record builders: fail_invocation, fail_invocation_concurrent, fail_run, fail_global_deadline_sequential, fail_global_deadline_concurrent, fail_run_from_exception, cancel_pending, cancel_task_if_unsettled; coordinator.py and all engine modules delegate to these functions"
+    },
+    {
+      "criterion": "coordinator.py shrinks to driver + wiring (<1500 lines)",
+      "passed": true,
+      "evidence": "coordinator.py: 6420 -> 929 lines (target <1500, achieved 929); contains SequentialCoordinator (inherits ChildEngine, ParEngine, ScatterEngine, DelegateEngine, DriveEngine), DeterministicWorker, CrashInterrupt, and backward-compatibility re-exports"
+    },
+    {
+      "criterion": "All seals unaffected",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m tahoe seal --check d424dad6d1fd65b42a4ec2c2a0fe3a908cb763f213e9444b7d5f2f67d2f81e3c demo/runs/sprint2-38-refactor/program.think -> 'seal matches' exit=0"
+    },
+    {
+      "criterion": "Full pytest suite green",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q -> 938 passed in 23.93s"
+    },
+    {
+      "criterion": "git status --porcelain shows ONLY owned files",
+      "passed": true,
+      "evidence": "git status --porcelain shows: M src/tahoe/runtime/coordinator.py, ?? demo/runs/sprint2-38-refactor/, ?? src/tahoe/runtime/{children,delegate,driver,finalize,helpers,par,planning,scatter}.py — all owned; no test files modified"
+    },
+    {
+      "criterion": "No git commit/push",
+      "passed": true,
+      "evidence": "No git commit or push performed"
+    }
+  ],
+  "unresolved": [
+    "The two drive loops (_drive_plan and _drive_plan_concurrent) were extracted into driver.py as-is rather than collapsed into one loop with a scheduling-strategy object; the extraction achieves the <1500 line target but the scheduling-strategy unification is deferred to a future PR"
+  ],
+  "protocol_deviations": [
+    "helpers.py was created as an additional module beyond the issue's named modules (finalize, planning, children, par, scatter, delegate) to avoid circular imports between coordinator.py and driver.py",
+    "src/atlas/ path references in the issue comment's program.think were rebranded to src/tahoe/ per issue #53; only string literals changed, logic identical; recorded as a protocol note in evaluation.json",
+    "The issue mentions six failure-assembly sites; post-#31 some were already consolidated, but all remaining sites now delegate to finalize.py"
+  ]
+}

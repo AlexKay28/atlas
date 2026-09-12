@@ -1,0 +1,31 @@
+# ATLAS resolution plan for GitHub issue #38: coordinator decomposition
+# Documentation seal: the digest of this program is posted with it; anyone can
+# verify with: tahoe seal <file>.  Unexecuted plans live in the issue, NOT in
+# demo/runs/ (that directory is reserved for executed, evidence-bearing runs).
+# Execution-ready as the implementing worker's skeleton per the #51 gate.
+# Protocol note: src/atlas/ paths in the original issue comment were rebranded
+# to src/tahoe/ by #53; only string literals changed, logic is identical.
+
+PROGRAM issue_38_coordinator_decomposition VERSION 1.0
+
+INPUT
+    G.goal = "Decompose the coordinator: one failure-finalization module, a planning module, child, par, scatter and delegate engines, and a single drive loop with a scheduling strategy"
+    C.scope = "src/tahoe/runtime/coordinator.py, new runtime modules, tests/"
+    C.done = "golden-event tests pass byte-identically after each extraction and failure-record assembly exists in exactly one module"
+    C.advanced = "not advanced - issue 41 added code to the concurrent driver, so the refactor is now more valuable"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.search: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "defect_context") -> E.findings
+step.plan: DO decompose(goal = G.plan, protocol = "issue_38_resolution") -> G.subgoals
+step.patch: DO edit(path = C.scope, content = G.subgoals) -> ART.patch
+step.test: DO test(path = "tests/", timeout_seconds = 900) -> V.tests
+DONE matched(V.tests, "passed")
+step.review: DO review(artifact_refs = [ART.patch, V.tests], focus = C.done) -> V.review
+step.check: DO check(artifact = V.review, predicate = C.done) -> V.verdict
+step.verify: DO verify(goal = G.goal, evidence = [V.verdict, V.tests, E.findings]) -> V.result
+DONE V.result == "resolved"
+step.report: DO report(committed_refs = [V.result, V.verdict], format = "markdown") -> ART.report
+
+RETURN V.result, V.verdict, ART.report, G.subgoals
