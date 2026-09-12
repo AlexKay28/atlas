@@ -119,6 +119,46 @@ class Scatter:
 
 
 @dataclass(frozen=True)
+class ParBranch:
+    """One heterogeneous branch line of a PAR block (issue #24).
+
+    A branch is exactly one of a full ``step.<id>: DO ...`` invocation
+    line (``invocation``) or a ``CALL protocol.name(...) -> targets``
+    line (``call``).  Branches carry no nested control of their own —
+    nested parallelism is expressed by a branch CALLing a protocol whose
+    program contains its own PAR block.  The branch's deterministic id
+    (``par<k>``, 1-based source order) is positional and therefore not
+    stored on the model.
+    """
+
+    invocation: Invocation | None = None
+    call: "Call | None" = None
+    line: int = 0
+
+
+@dataclass(frozen=True)
+class Par:
+    """Bounded heterogeneous parallel block (issue #24).
+
+    ``PAR MAX <n>`` followed by two or more indented branch lines and
+    terminated by a matching-dedent ``BARRIER`` line that optionally
+    declares the published targets (``BARRIER -> t1, t2``).  ``max_count``
+    is the local concurrency ceiling (more branches than ``MAX`` queue;
+    the ceiling is further bounded by the run's execution budget).
+    Branches execute concurrently as isolated child-scoped runs; the
+    barrier blocks until every branch is terminal.  When
+    ``barrier_targets`` is empty the published targets are the union of
+    the branches' own targets; when declared, the declaration must equal
+    that union exactly (validated), pinning the explicit adoption mapping.
+    """
+
+    max_count: int
+    branches: tuple[ParBranch, ...]
+    barrier_targets: tuple[str, ...] = ()
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Gather:
     """Explicit join (issue #4): ``GATHER <step-id> AS <alias> USING <mode>``.
 

@@ -229,6 +229,29 @@ def _check_invocation_ids(events: tuple[Event, ...]) -> list[AuditFinding]:
     for ev in events:
         if ev.event_type not in _INVOCATION_BOUND_TYPES:
             continue
+        # Issue #24 false-positive fix: a PAR barrier's entry-terminal
+        # SUCCEEDED commits the branches' adopted targets, and a
+        # join-level PAR failure (the artifact merge) carries the entry's
+        # positional invocation id — both under the "par" payload marker.
+        # A PAR block owns no ledger task of its own (the ledger carries
+        # one task per branch instead), so these events carry no task_id
+        # by design; the instruction_id requirement still applies.
+        if (
+            ev.event_type in (EventType.SUCCEEDED, EventType.FAILED)
+            and not ev.task_id
+            and isinstance(ev.payload, dict)
+            and "par" in ev.payload
+        ):
+            if not ev.instruction_id:
+                findings.append(AuditFinding(
+                    code="invocation_event_missing_ids",
+                    message=(
+                        f"{ev.event_type.value} at seq {ev.seq} is missing"
+                        " nonempty instruction_id"
+                    ),
+                    seqs=(ev.seq,),
+                ))
+            continue
         missing = [
             name for name, value in (("task_id", ev.task_id),
                                      ("instruction_id", ev.instruction_id))

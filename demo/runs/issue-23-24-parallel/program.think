@@ -1,0 +1,43 @@
+# Tikhon run for GitHub issues #23 + #24: branch workspaces with resource
+# claims and explicit artifact merge (#23), then PAR blocks with a barrier
+# (#24) — epic #27 step 4 tail ("then heterogeneous PAR; establish
+# effect/workspace isolation before concurrent editing").
+#
+# Sealed BEFORE any source edit. Uses only the grammar that exists at seal
+# time: plain DO steps over all 22 registered commands and one standalone
+# CALL protocol.framing(...) line. The issues' proposed branch/PAR syntax
+# is deliberately absent: the sealed program is the session's plan written
+# in the language of record, not a demo of the syntax being added.
+
+PROGRAM issue_23_24_parallel VERSION 1.0
+
+INPUT
+    G.goal = "Implement issues #23 and #24 in one session, #23 first: issue #23 adds branch workspaces (effectful commands inside PAR branches or scatter candidates get isolated <workspace_root>/branches/<branch_id>/ roots through the existing _workspace_root injection), an in-process ResourceLedger (src/tikhon/claims.py) whose exclusive claims are wired without new syntax (effectful branch dispatches claim workspace:<branch_id>, the artifact merge claims merge:<run_id>, DISPATCHED payloads carry resource_claims), and an explicit deterministic artifact merge after a join that adopts branch-produced ART.* nodes with full accounting and fails the run atomically on a cross-branch path collision instead of silently overwriting; issue #24 layers PAR MAX n blocks on top (2+ heterogeneous DO/CALL branch lines terminated by a BARRIER that optionally declares targets, deterministic par<k> branch ids, branches executing as isolated child-scoped runs <parent_run>:par<k> dispatched concurrently under MAX and the budget gate, an all-success barrier that adopts branch outputs via CHILD_ADOPTED plus a new PAR_JOINED event, sibling cancellation and atomic run failure on any branch failure, nested PAR bounded by child depth)"
+    C.scope = "src/tikhon/claims.py, src/tikhon/syntax/model.py, src/tikhon/syntax/parser.py, src/tikhon/syntax/__init__.py, src/tikhon/runtime/coordinator.py, src/tikhon/runtime/events.py, src/tikhon/audit.py, tests/test_claims.py, tests/test_par.py, demo/runs/issue-23-24-parallel/"
+    C.done = "Effectful commands inside branches write only into their branch workspace subdirectory while the parent workspace stays untouched; ResourceLedger.claim is exclusive in-process and thread-safe and release frees the hold; a cross-branch artifact path collision fails the run atomically with a clear error and disjoint artifacts integrate with every adopted path recorded in an explicit event payload; PAR blocks parse and seal with deterministic branch ids, run heterogeneous DO and CALL branches concurrently as isolated child runs, wait at the barrier until every branch is terminal, adopt all branch outputs only on all-success, cancel siblings and fail atomically on any branch failure, observe MAX as the dispatch ceiling, and leave programs without PAR byte-identical in behavior; the full suite passes with 687+ tests and no existing test modified"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "branch_isolation_and_par") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "claims_then_par") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.goal, evidence = E.findings) -> H.theses
+step.calculate: DO calculate(expression = "branch_bounds", values = {"par_max": 2, "max_child_depth": 8}) -> F.metrics
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue2324.parallel", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue2324.parallel") -> K.recalled
+step.solve: DO solve(problem = G.goal, domain = "workspace_isolation") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "claims_par") -> V.review
+step.design: DO summarize(source_refs = V.review, budget = 6000) -> P.design
+step.patch: DO edit(path = "src/tikhon/claims.py", content = P.design) -> ART.patch
+step.test: DO test(path = "tests/test_claims.py") -> V.tests
+step.check: DO check(artifact = V.tests, predicate = "suite_green") -> V.verdict
+step.report: DO report(committed_refs = V.verdict, format = "markdown") -> ART.report
+CALL protocol.framing(request = G.goal, scope = C.scope) -> E.context, V.analysis
+step.verify: DO verify(goal = G.goal, evidence = V.tests) -> V.result
+
+RETURN P.design, V.tests, V.verdict, V.result, E.context, V.analysis

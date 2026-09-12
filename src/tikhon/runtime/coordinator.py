@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import concurrent.futures
 import dataclasses
+import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from tikhon.budgets import BudgetDeadlineExceeded, BudgetGate, ExecutionBudget
+from tikhon.claims import ResourceLedger
 from tikhon.runtime.events import EventStore, EventType, _Record
 from tikhon.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
 from tikhon.state import StateDelta
@@ -27,6 +30,8 @@ from tikhon.syntax.model import (
     Declaration,
     Gather,
     Invocation,
+    Par,
+    ParBranch,
     Program,
     Return,
     Scatter,
@@ -70,6 +75,12 @@ def _monotonic() -> float:
 # these ids).
 _CANDIDATE_INVOCATION_RE = re.compile(r"^inv-(\d+)\.cand(\d+)$")
 
+# Issue #24: PAR branch invocations on the parent run carry ids "par<k>"
+# (1-based source order).  Like candidate ids they are excluded from the
+# positional success-set invariants (the PAR entry itself is the positional
+# unit), and resume validates them against the plan's PAR entries.
+_PAR_INVOCATION_RE = re.compile(r"^par(\d+)$")
+
 
 def candidate_invocation_id(scatter_invocation_id: str, candidate: int) -> str:
     """The invocation id of one candidate of a scatter entry (issue #4)."""
@@ -87,8 +98,43 @@ def candidate_node_id(alias_ref: str, candidate: int, target_leaf: str) -> str:
 
 
 def candidate_task_text(body: Invocation, candidate: int) -> str:
-    """The ledger task text for one candidate (issue #4: ``[candidate k]``)."""
+    """The ledger task text for one candidate of a scatter entry (issue #4: ``[candidate k]``)."""
     return f"{body.step_id}: DO {body.command} [candidate {candidate}]"
+
+
+def par_branch_invocation_id(branch: int) -> str:
+    """The parent-side invocation id of one PAR branch (issue #24)."""
+    return f"par{branch}"
+
+
+def par_branch_run_id(parent_run_id: str, branch: int) -> str:
+    """The isolated child run id of one PAR branch (issue #24)."""
+    return f"{parent_run_id}:{par_branch_invocation_id(branch)}"
+
+
+def par_branch_summary(branch: ParBranch) -> str:
+    """The canonical summary text of one PAR branch (task texts, events)."""
+    if branch.invocation is not None:
+        return f"{branch.invocation.step_id}: DO {branch.invocation.command}"
+    return f"CALL {branch.call.protocol}"
+
+
+def par_branch_task_text(branch: ParBranch, position: int) -> str:
+    """The ledger task text for one PAR branch (issue #24: one per branch)."""
+    return f"PAR branch {position}: {par_branch_summary(branch)}"
+
+
+def branch_workspace_dir(base: str | None, branch_id: str) -> str | None:
+    """The isolated workspace subdirectory for one branch (issue #23).
+
+    ``<base>/branches/<branch_id>/`` — nested branches (a PAR inside a
+    branch run) nest under the enclosing branch's own directory, keeping
+    each branch tree disjoint.  ``None`` base (no workspace declared)
+    means no branch isolation.
+    """
+    if base is None:
+        return None
+    return os.path.join(base, "branches", branch_id)
 
 
 def judge_score(result: Any) -> float:
@@ -157,6 +203,9 @@ class _PlanEntry:
     # its GATHER is the next plan entry and commits the alias node.
     scatter: "Scatter | None" = None
     gather: "Gather | None" = None
+    # Issue #24: a PAR block (branches + BARRIER) occupies one plan entry;
+    # its per-branch tasks and child runs are created during execution.
+    par: "Par | None" = None
     task_prefix: str = ""
     binds: tuple[tuple[str, tuple[Argument, ...], tuple[Declaration, ...]], ...] = ()
     finalizes: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -206,16 +255,31 @@ def _effectful_commands() -> frozenset[str]:
 def _uses_kb_refs(program: Program) -> bool:
     """Whether any invocation argument mentions a ``KB.`` reference."""
     for statement in program.statements:
+        # Issue #24: PAR branch DO lines resolve their arguments on the
+        # parent at dispatch, so their KB.* references count too.
+        if isinstance(statement, Par):
+            for branch in statement.branches:
+                if branch.invocation is not None and _invocation_uses_kb_refs(
+                    branch.invocation
+                ):
+                    return True
+            continue
         if not isinstance(statement, Invocation):
             continue
-        for arg in statement.args:
-            if isinstance(arg.value, str) and arg.value.startswith("KB."):
-                return True
-            if isinstance(arg.value, list) and any(
-                isinstance(item, str) and item.startswith("KB.")
-                for item in arg.value
-            ):
-                return True
+        if _invocation_uses_kb_refs(statement):
+            return True
+    return False
+
+
+def _invocation_uses_kb_refs(invocation: Invocation) -> bool:
+    for arg in invocation.args:
+        if isinstance(arg.value, str) and arg.value.startswith("KB."):
+            return True
+        if isinstance(arg.value, list) and any(
+            isinstance(item, str) and item.startswith("KB.")
+            for item in arg.value
+        ):
+            return True
     return False
 
 
@@ -225,6 +289,11 @@ def _uses_scatter(program: Program) -> bool:
         isinstance(statement, (Scatter, Gather))
         for statement in program.statements
     )
+
+
+def _uses_par(program: Program) -> bool:
+    """Whether the program contains PAR blocks (issue #24)."""
+    return any(isinstance(statement, Par) for statement in program.statements)
 
 
 def map_results_to_targets(
@@ -604,13 +673,19 @@ class SequentialCoordinator:
         parent_run_id: str,
         invocation_id: str,
         gate: "BudgetGate | None" = None,
+        claims: "ResourceLedger | None" = None,
+        branch_workspace: str | None = None,
+        branch_claim: str | None = None,
     ) -> dict[str, Any]:
         """Start, resume, or read back the CALL's isolated child run (issue #20).
 
         The child run id is ``"<parent_run_id>:<invocation_id>"`` —
         deterministic from the plan alone, collision-free in the run tree
         (repeated calls and nested calls get distinct ids), and identical
-        across resume attempts.
+        across resume attempts.  Issue #24: PAR CALL branches reuse this
+        machinery with ``invocation_id="par<k>"``; issue #23: a child run
+        inside a branch inherits the branch's isolated workspace root and
+        claim resource (``branch_workspace``/``branch_claim``).
 
         - Missing run: started fresh through :meth:`_execute_program` —
           same store/worker/memory/protocols_dir/workspace_root, its own
@@ -627,19 +702,55 @@ class SequentialCoordinator:
         protocol = load_protocol(call.protocol, self.protocols_dir)
         child_run_id = f"{parent_run_id}:{invocation_id}"
         child_values = self._bind_child_inputs(protocol, resolved)
+        result = self._execute_program_child(
+            protocol,
+            child_run_id,
+            parent_run_id,
+            call.protocol,
+            child_values,
+            gate,
+            claims=claims,
+            branch_workspace=branch_workspace,
+            branch_claim=branch_claim,
+        )
+        result["protocol"] = protocol
+        return result
+
+    def _execute_program_child(
+        self,
+        program: Program,
+        child_run_id: str,
+        parent_run_id: str,
+        call_name: str | None,
+        child_values: Mapping[str, Any],
+        gate: "BudgetGate | None",
+        claims: "ResourceLedger | None" = None,
+        branch_workspace: str | None = None,
+        branch_claim: str | None = None,
+    ) -> dict[str, Any]:
+        """Start, resume, or read back one isolated child run (issue #24).
+
+        Shared by CALL child runs (:meth:`_execute_call_child`) and PAR
+        branch child runs (a DO branch executes as a synthetic
+        single-invocation program): missing runs start fresh, terminal
+        runs read back without re-execution, non-terminal runs resume
+        at-least-once.
+        """
         try:
             self.store.run(child_run_id)
         except KeyError:
             result = self._execute_program(
-                protocol,
+                program,
                 child_run_id,
                 child_of=parent_run_id,
-                call_name=call.protocol,
-                initial_values=child_values,
+                call_name=call_name,
+                initial_values=dict(child_values),
                 gate=gate,
+                claims=claims,
+                branch_workspace=branch_workspace,
+                branch_claim=branch_claim,
             )
-            result["protocol"] = protocol
-            result["child_values"] = child_values
+            result["child_values"] = dict(child_values)
             return result
         events = self.store.events(child_run_id)
         finished = [
@@ -658,17 +769,21 @@ class SequentialCoordinator:
                 "run_id": child_run_id,
                 "status": payload.get("status", "unknown"),
                 "outputs": {},
-                "protocol": protocol,
-                "child_values": child_values,
+                "child_values": dict(child_values),
             }
             if "error" in payload:
                 result["error"] = payload["error"]
             return result
         result = self._resume_existing_run(
-            protocol, child_run_id, initial_values=child_values, gate=gate
+            program,
+            child_run_id,
+            initial_values=dict(child_values),
+            gate=gate,
+            claims=claims,
+            branch_workspace=branch_workspace,
+            branch_claim=branch_claim,
         )
-        result["protocol"] = protocol
-        result["child_values"] = child_values
+        result["child_values"] = dict(child_values)
         return result
 
     def _adopt_child_result(
@@ -706,6 +821,692 @@ class SequentialCoordinator:
             adopted_map[target] = target
         return adopted_nodes, adopted_map
 
+    def _adopt_branch_nodes(
+        self,
+        child_run_id: str,
+        child_values: Mapping[str, Any],
+        targets: tuple[str, ...],
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        """Map a PAR branch child's committed refs onto the parent (issue #24).
+
+        Same exact-string adoption as :meth:`_adopt_child_result`, reading
+        the branch run's committed state (seeded inputs plus replayed
+        SUCCEEDED deltas) so a fresh adoption and a resume-after-crash
+        adoption are identical.  A missing ref raises; the caller fails
+        the run through the standard atomic path.
+        """
+        values: dict[str, Any] = dict(child_values)
+        self._apply_committed_deltas(values, self.store.events(child_run_id))
+        adopted_nodes: list[dict[str, Any]] = []
+        adopted_map: dict[str, str] = {}
+        for target in targets:
+            if target not in values:
+                raise ValueError(
+                    f"branch run {child_run_id} did not commit reference"
+                    f" {target}"
+                )
+            adopted_nodes.append({"id": target, "value": values[target]})
+            adopted_map[target] = target
+        return adopted_nodes, adopted_map
+
+    def _build_branch_program(
+        self,
+        branch_invocation: Invocation,
+        resolved_kwargs: Mapping[str, Any],
+    ) -> Program:
+        """The synthetic single-invocation child program for a DO branch.
+
+        The branch executes in an isolated child run whose state namespace
+        is seeded only from its dispatch-resolved arguments: every
+        argument is rebound to a declared ``Q.<name>`` INPUT node carrying
+        the resolved value, so the child validates and executes without
+        seeing any parent state beyond the explicit bindings (the same
+        isolation rule as CALL child runs).  The branch's DONE predicate,
+        targets and corrections (the latter rejected at validation) ride
+        along unchanged.
+        """
+        declarations = tuple(
+            Declaration(f"Q.{name}", value)
+            for name, value in resolved_kwargs.items()
+        )
+        args = tuple(
+            Argument(name, f"Q.{name}", argument.line)
+            for name, argument in (
+                (argument.name, argument) for argument in branch_invocation.args
+            )
+        )
+        invocation = dataclasses.replace(branch_invocation, args=args)
+        return Program(
+            "par_branch",
+            "1.0",
+            declarations,
+            (invocation, Return(invocation.targets)),
+        )
+
+    # ------------------------------------------------------------------
+    # Explicit artifact merge (issue #23)
+    # ------------------------------------------------------------------
+
+    def _merge_branch_artifacts(
+        self,
+        run_id: str,
+        owner: str,
+        claims: "ResourceLedger | None",
+        artifacts: list[dict[str, Any]],
+        branch_dirs: Mapping[str, str | None],
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Integrate branch-produced artifacts into the parent workspace.
+
+        Deterministic: artifacts are visited in branch order, then target
+        order.  The merge holds the exclusive ``merge:<run_id>`` claim for
+        its duration (so merges serialize by contract).  A relative path
+        produced by two different branches is an explicit conflict: the
+        caller fails the run atomically instead of silently overwriting
+        (no last-writer-wins).  Each artifact file found in its branch
+        workspace is copied to the same relative path under the parent
+        workspace root; the returned accounting lists every adopted
+        artifact path with whether its file was integrated.
+        """
+        if not artifacts:
+            return [], None
+        resource = f"merge:{run_id}"
+        if claims is not None:
+            if not claims.claim(resource, owner):
+                return [], (
+                    f"resource claim failed: {resource} is held by"
+                    f" {claims.holder(resource)!r}"
+                )
+        try:
+            seen: dict[str, str] = {}
+            for artifact in artifacts:
+                path = artifact["path"]
+                prior = seen.get(path)
+                if prior is not None and prior != artifact["branch"]:
+                    return [], (
+                        f"artifact merge collision: relative path"
+                        f" {path!r} was produced by branches"
+                        f" {prior!r} and {artifact['branch']!r}; refusing"
+                        " to overwrite — integrate the branches explicitly"
+                    )
+                seen[path] = artifact["branch"]
+            merged: list[dict[str, Any]] = []
+            for artifact in artifacts:
+                entry: dict[str, Any] = {
+                    "branch": artifact["branch"],
+                    "node": artifact["node"],
+                    "path": artifact["path"],
+                }
+                branch_dir = branch_dirs.get(artifact["branch"])
+                if self.workspace_root is not None and branch_dir is not None:
+                    source = Path(branch_dir) / artifact["path"]
+                    if source.is_file():
+                        destination = Path(self.workspace_root) / artifact["path"]
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(source, destination)
+                        entry["copied"] = True
+                    else:
+                        entry["copied"] = False
+                merged.append(entry)
+            return merged, None
+        finally:
+            if claims is not None:
+                claims.release(resource, owner)
+
+    # ------------------------------------------------------------------
+    # PAR blocks (issue #24)
+    # ------------------------------------------------------------------
+
+    def _par_branch_task_ids(self, run_id: str, par: Par) -> list[str]:
+        """Branch-order ledger task ids for a PAR block's branches.
+
+        One task per branch, no block task (issue #24).  Existing tasks
+        (a resume after a crash inside the block) are found by their
+        canonical text; missing ones are created in one batch with the
+        same record shape as the plan's task-creation batch.
+        """
+        ledger = self.store.task_ledger(run_id)
+        by_text = {
+            task.text: task_id for task_id, task in ledger.tasks.items()
+        }
+        mapping: list[str] = []
+        create_records: list[_Record] = []
+        create_ledger = self.store.task_ledger(run_id)
+        for position, branch in enumerate(par.branches, 1):
+            text = par_branch_task_text(branch, position)
+            existing = by_text.get(text)
+            if existing is not None:
+                mapping.append(existing)
+                continue
+            task = create_ledger.create_task(text=text, creator="coordinator")
+            mapping.append(task.id)
+            create_records.append(_Record(
+                event_type=EventType.TASK_UPDATED,
+                task_id=task.id,
+                payload={
+                    "kind": "task_created", "id": task.id, "text": task.text,
+                    "priority": task.priority, "parent": task.parent,
+                    "dependencies": task.dependencies, "creator": task.creator,
+                },
+                store=self.store,
+            ))
+        if create_records:
+            self.store.append_batch(run_id, create_records)
+        return mapping
+
+    def _execute_par_entry(
+        self,
+        program: Program,
+        run_id: str,
+        entry: _PlanEntry,
+        idx: int,
+        invocation_id: str,
+        values: dict[str, Any],
+        plan: list[_PlanEntry],
+        statement_to_task: dict[int, str],
+        crash_hook: "Callable[[int], None] | None",
+        gate: "BudgetGate | None",
+        claims: "ResourceLedger | None",
+        branch_root: str | None,
+    ) -> dict[str, Any] | None:
+        """Execute one PAR plan entry (issue #24): branches + barrier.
+
+        Branches dispatch concurrently onto a pool capped at
+        ``min(MAX, branch count)`` (further capped tree-wide by the
+        budget's shared semaphore); each branch executes as an isolated
+        child-scoped run ``<run_id>:par<k>`` (state isolation for free
+        from the child-run machinery) whose effectful dispatches write
+        into the branch's isolated workspace subdirectory and hold the
+        branch's ``workspace:<branch run id>`` claim (issue #23).  Every
+        commit happens on the coordinator's single-writer thread.
+
+        The barrier blocks until every branch is terminal.  All
+        succeeded: the branch outputs are adopted by explicit target
+        mapping — one CHILD_ADOPTED per branch at its completion, then a
+        single entry-terminal SUCCEEDED committing every adopted target
+        in branch order (atomically published declared outputs) — the
+        explicit artifact merge integrates branch-produced ART.* paths,
+        and a PAR_JOINED event records the branch statuses and the merge
+        accounting.  Any branch failure: the standard atomic failure path
+        (one FAILED, sibling tasks cancelled, in-flight pool work drained
+        and discarded, RUN_FINISHED failed); sibling results are never
+        adopted.
+        """
+        par = entry.par
+        instruction_id = f"par.inv-{idx + 1}"
+        base = branch_root if branch_root is not None else self.workspace_root
+        branch_tasks = self._par_branch_task_ids(run_id, par)
+        branch_targets = [
+            (
+                branch.invocation.targets
+                if branch.invocation is not None
+                else branch.call.targets
+            )
+            for branch in par.branches
+        ]
+        published = list(par.barrier_targets) or [
+            target for targets in branch_targets for target in targets
+        ]
+
+        def fail_par(error: str, failed_position: int | None = None) -> dict[str, Any]:
+            """Fail the run at the PAR entry (standard atomic path).
+
+            A branch-attributable failure carries the branch's FAILED
+            event (invocation id ``par<k>``); a join-level failure (the
+            artifact merge) carries the PAR entry's positional invocation
+            id with the ``"par"`` payload marker — the PAR block owns no
+            ledger task of its own, so neither carries a task_id (the
+            audit exempts exactly these marked events).
+            """
+            records: list[_Record] = []
+            if failed_position is not None:
+                task_id = branch_tasks[failed_position - 1]
+                records.extend([
+                    _Record(
+                        event_type=EventType.FAILED,
+                        instruction_id=par_branch_summary(
+                            par.branches[failed_position - 1]
+                        ),
+                        invocation_id=par_branch_invocation_id(failed_position),
+                        task_id=task_id,
+                        payload={"error": error},
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={"kind": "task_started", "id": task_id},
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={
+                            "kind": "invocation_recorded", "id": task_id,
+                            "tokens": 0, "cost": 0.0, "retries": 0,
+                            "elapsed_seconds": 0.0,
+                        },
+                        store=self.store,
+                    ),
+                ])
+            else:
+                records.append(_Record(
+                    event_type=EventType.FAILED,
+                    instruction_id=instruction_id,
+                    invocation_id=invocation_id,
+                    payload={"error": error, "par": True},
+                    store=self.store,
+                ))
+            for position, task_id in enumerate(branch_tasks, 1):
+                self._cancel_task_if_unsettled(
+                    run_id, task_id, records,
+                    reason=(
+                        f"[branch {position}] {error}"
+                        if failed_position is not None
+                        and position != failed_position
+                        else None
+                    ),
+                )
+            for pending_idx in range(idx + 1, len(plan)):
+                if pending_idx in statement_to_task:
+                    records.append(_Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=statement_to_task[pending_idx],
+                        payload={
+                            "kind": "task_cancelled",
+                            "id": statement_to_task[pending_idx],
+                        },
+                        store=self.store,
+                    ))
+            records.append(_Record(
+                event_type=EventType.RUN_FINISHED,
+                payload={"status": "failed", "error": error},
+                store=self.store,
+            ))
+            self.store.append_batch(run_id, records)
+            return {
+                "run_id": run_id,
+                "status": "failed",
+                "error": error,
+                "outputs": {},
+            }
+
+        # Branch tasks already terminal from a crashed earlier drive keep
+        # their accounting; their outputs are re-read from the committed
+        # child state instead of re-dispatching (at-least-once, and the
+        # store's dup-SUCCEEDED guard stays untouched).
+        ledger = self.store.task_ledger(run_id)
+        already_joined: dict[int, list[dict[str, Any]]] = {}
+        pending_positions: list[int] = []
+        for position, task_id in enumerate(branch_tasks, 1):
+            task = ledger.tasks.get(task_id)
+            if task is not None and task.status is TaskStatus.COMPLETED:
+                already_joined[position] = []
+            else:
+                pending_positions.append(position)
+
+        adopted_by_branch: dict[int, list[dict[str, Any]]] = dict(already_joined)
+        branch_dirs: dict[str, str | None] = {
+            f"par{position}": branch_workspace_dir(base, f"par{position}")
+            for position in range(1, len(par.branches) + 1)
+        }
+        failure: dict[str, Any] | None = None
+        max_at_once = max(1, min(par.max_count, len(par.branches)))
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_at_once
+        ) as pool:
+            in_flight: dict[int, concurrent.futures.Future] = {}
+            queue = list(pending_positions)
+
+            def dispatch_branch(position: int) -> dict[str, Any] | None:
+                """Dispatch one branch; returns a failure result or None."""
+                branch = par.branches[position - 1]
+                branch_invocation_id = par_branch_invocation_id(position)
+                child_run_id = par_branch_run_id(run_id, position)
+                task_id = branch_tasks[position - 1]
+                summary = par_branch_summary(branch)
+                if gate is not None and gate.depth_exceeded(child_run_id):
+                    return fail_par(
+                        f"branch run {child_run_id} depth"
+                        f" {gate.depth_of(child_run_id)} exceeds budget"
+                        f" max_child_depth {gate.budget.max_child_depth}",
+                        failed_position=position,
+                    )
+                try:
+                    if branch.call is not None:
+                        resolved = self._resolve_call_arguments(branch.call, values)
+                    else:
+                        resolved = self._resolve_branch_arguments(
+                            branch.invocation, values
+                        )
+                except Exception as exc:
+                    return fail_par(
+                        f"PAR branch {position} ({summary}) failed to"
+                        f" resolve arguments: {exc}",
+                        failed_position=position,
+                    )
+                branch_workspace = branch_dirs[f"par{position}"]
+                branch_claim = (
+                    f"workspace:{child_run_id}"
+                    if branch_workspace is not None
+                    else None
+                )
+                self.store.append_batch(run_id, [
+                    _Record(
+                        event_type=EventType.INVOCATION_READY,
+                        instruction_id=summary,
+                        invocation_id=branch_invocation_id,
+                        task_id=task_id,
+                        payload={"command": summary},
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.INVOCATION_DISPATCHED,
+                        instruction_id=summary,
+                        invocation_id=branch_invocation_id,
+                        task_id=task_id,
+                        payload={
+                            "child_run_id": child_run_id,
+                            "branch_id": f"par{position}",
+                        },
+                        store=self.store,
+                    ),
+                ])
+                in_flight[position] = pool.submit(
+                    self._execute_par_branch,
+                    branch,
+                    resolved,
+                    run_id,
+                    position,
+                    gate,
+                    claims,
+                    branch_workspace,
+                    branch_claim,
+                )
+                return None
+
+            while queue or in_flight:
+                if failure is not None:
+                    break
+                while queue and len(in_flight) < max_at_once:
+                    position = queue.pop(0)
+                    failure = dispatch_branch(position)
+                    if failure is not None:
+                        break
+                if failure is not None or not in_flight:
+                    break
+                owner = {future: pos for pos, future in in_flight.items()}
+                done, _ = concurrent.futures.wait(
+                    list(in_flight.values()),
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in done:
+                    position = owner[future]
+                    del in_flight[position]
+                    if failure is not None:
+                        continue
+                    branch = par.branches[position - 1]
+                    task_id = branch_tasks[position - 1]
+                    child_run_id = par_branch_run_id(run_id, position)
+                    summary = par_branch_summary(branch)
+                    try:
+                        child = future.result()
+                    except Exception as exc:
+                        failure = fail_par(
+                            f"PAR branch {position} ({summary}) failed:"
+                            f" {exc}",
+                            failed_position=position,
+                        )
+                        continue
+                    child_status = child.get("status", "unknown")
+                    if child_status != "succeeded":
+                        child_error = child.get("error")
+                        error = (
+                            f"branch run {child_run_id} for"
+                            f" {summary} finished with status"
+                            f" {child_status!r}; the PAR branch cannot"
+                            " adopt its outputs"
+                        )
+                        if child_error:
+                            error = f"{error}: {child_error}"
+                        failure = fail_par(error, failed_position=position)
+                        continue
+                    targets = branch_targets[position - 1]
+                    try:
+                        adopted_nodes, adopted_map = self._adopt_branch_nodes(
+                            child_run_id, child["child_values"], targets
+                        )
+                    except Exception as exc:
+                        failure = fail_par(str(exc), failed_position=position)
+                        continue
+                    branch_artifacts = [
+                        {"branch": f"par{position}", "node": node["id"],
+                         "path": node["value"]}
+                        for node in adopted_nodes
+                        if node["id"].startswith("ART.")
+                        and isinstance(node["value"], str)
+                    ]
+                    self.store.append_batch(run_id, [
+                        _Record(
+                            event_type=EventType.RESULT_RECEIVED,
+                            instruction_id=summary,
+                            invocation_id=par_branch_invocation_id(position),
+                            task_id=task_id,
+                            payload={
+                                "child_run_id": child_run_id,
+                                "status": child_status,
+                            },
+                            store=self.store,
+                        ),
+                        _Record(
+                            event_type=EventType.CHILD_ADOPTED,
+                            instruction_id=summary,
+                            invocation_id=par_branch_invocation_id(position),
+                            task_id=task_id,
+                            payload={
+                                "child_run_id": child_run_id,
+                                "adopted": adopted_map,
+                                "child_status": child_status,
+                                "artifacts": branch_artifacts,
+                            },
+                            store=self.store,
+                        ),
+                        _Record(
+                            event_type=EventType.TASK_UPDATED,
+                            task_id=task_id,
+                            payload={"kind": "task_started", "id": task_id},
+                            store=self.store,
+                        ),
+                        _Record(
+                            event_type=EventType.TASK_UPDATED,
+                            task_id=task_id,
+                            payload={
+                                "kind": "invocation_recorded", "id": task_id,
+                                "tokens": 0, "cost": 0.0, "retries": 0,
+                                "elapsed_seconds": 0.0,
+                            },
+                            store=self.store,
+                        ),
+                        _Record(
+                            event_type=EventType.TASK_UPDATED,
+                            task_id=task_id,
+                            payload={
+                                "kind": "task_completed", "id": task_id,
+                                "evidence": (
+                                    f"PAR branch {position} ({child_run_id})"
+                                    f" -> {list(targets)}"
+                                ),
+                            },
+                            store=self.store,
+                        ),
+                    ])
+                    adopted_by_branch[position] = adopted_nodes
+
+        if failure is not None:
+            # In-flight branches are cancelled: not-yet-started branches
+            # were never dispatched; started child runs run to completion
+            # in their own histories while the pool drains, and their
+            # results are discarded uncommitted (never adopted).
+            return failure
+
+        # -- barrier: all branches terminal and succeeded ------------------
+        artifacts: list[dict[str, Any]] = []
+        for position in range(1, len(par.branches) + 1):
+            artifacts.extend(
+                {
+                    "branch": f"par{position}",
+                    "node": node["id"],
+                    "path": node["value"],
+                }
+                for node in adopted_by_branch.get(position, [])
+                if node["id"].startswith("ART.")
+                and isinstance(node["value"], str)
+            )
+        merged, merge_error = self._merge_branch_artifacts(
+            run_id,
+            f"{run_id}:{invocation_id}",
+            claims,
+            artifacts,
+            branch_dirs,
+        )
+        if merge_error is not None:
+            return fail_par(merge_error)
+
+        if crash_hook is not None:
+            # Crash window after every branch joined and the merge is
+            # decided, before the entry's terminal batch: resume re-derives
+            # the adoptions and the merge from committed state.
+            crash_hook(idx)
+
+        ordered_nodes: list[dict[str, Any]] = []
+        branch_statuses: dict[str, str] = {}
+        for position in range(1, len(par.branches) + 1):
+            branch_statuses[f"par{position}"] = "succeeded"
+            ordered_nodes.extend(adopted_by_branch.get(position, []))
+        for node in ordered_nodes:
+            values[node["id"]] = node["value"]
+
+        par_record = {
+            "max": par.max_count,
+            "branches": branch_statuses,
+            "targets": published,
+            "merged_artifacts": merged,
+        }
+        expected_sv = self.store._current_state_version(run_id)
+        self.store.append_batch(run_id, [
+            _Record(
+                event_type=EventType.PAR_JOINED,
+                instruction_id=instruction_id,
+                invocation_id=invocation_id,
+                payload={
+                    "branches": branch_statuses,
+                    "targets": published,
+                    "merged_artifacts": merged,
+                },
+                store=self.store,
+            ),
+            _Record(
+                event_type=EventType.SUCCEEDED,
+                instruction_id=instruction_id,
+                invocation_id=invocation_id,
+                expected_state_version=expected_sv,
+                payload={
+                    "delta": StateDelta(add_nodes=tuple(ordered_nodes)),
+                    "par": par_record,
+                },
+                store=self.store,
+            ),
+        ])
+        return None
+
+    def _execute_par_branch(
+        self,
+        branch: ParBranch,
+        resolved: Mapping[str, Any],
+        parent_run_id: str,
+        position: int,
+        gate: "BudgetGate | None",
+        claims: "ResourceLedger | None",
+        branch_workspace: str | None,
+        branch_claim: str | None,
+    ) -> dict[str, Any]:
+        """Execute one PAR branch as an isolated child run (issue #24).
+
+        A CALL branch loads its protocol and binds the resolved arguments
+        (exactly like a CALL child run); a DO branch executes a synthetic
+        single-invocation program whose INPUT declarations carry the
+        dispatch-resolved argument values.  Both run under the
+        deterministic child id ``<parent_run_id>:par<position>`` and
+        inherit the branch's isolated workspace root and claim resource.
+        """
+        child_run_id = par_branch_run_id(parent_run_id, position)
+        if branch.call is not None:
+            protocol = load_protocol(branch.call.protocol, self.protocols_dir)
+            child_values = self._bind_child_inputs(protocol, resolved)
+            result = self._execute_program_child(
+                protocol,
+                child_run_id,
+                parent_run_id,
+                branch.call.protocol,
+                child_values,
+                gate,
+                claims=claims,
+                branch_workspace=branch_workspace,
+                branch_claim=branch_claim,
+            )
+            result["protocol"] = protocol
+            return result
+        child_program = self._build_branch_program(
+            branch.invocation, resolved
+        )
+        child_values = {
+            declaration.ref: declaration.value
+            for declaration in child_program.declarations
+        }
+        return self._execute_program_child(
+            child_program,
+            child_run_id,
+            parent_run_id,
+            f"par:{branch.invocation.command}",
+            child_values,
+            gate,
+            claims=claims,
+            branch_workspace=branch_workspace,
+            branch_claim=branch_claim,
+        )
+
+    def _resolve_branch_arguments(
+        self,
+        invocation: Invocation,
+        values: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve a DO branch's arguments against the parent state.
+
+        Same resolution rules as a plain invocation dispatch (guard first,
+        bare refs and reference lists from ``values``, ``KB.*`` from the
+        knowledge base, literals through) — pinned at dispatch time so the
+        branch child observes exactly the committed state the PAR
+        dispatch saw.
+        """
+        resolved: dict[str, Any] = {}
+        for arg in invocation.args:
+            self._reject_unresolved_refs(arg.value, values)
+            if isinstance(arg.value, str) and arg.value in values:
+                resolved[arg.name] = values[arg.value]
+            elif isinstance(arg.value, str) and arg.value.startswith("KB."):
+                resolved[arg.name] = self._resolve_kb_ref(arg.value)
+            elif isinstance(arg.value, list):
+                resolved[arg.name] = [
+                    values[item] if isinstance(item, str) and item in values
+                    else self._resolve_kb_ref(item)
+                    if isinstance(item, str) and item.startswith("KB.")
+                    else item
+                    for item in arg.value
+                ]
+            else:
+                resolved[arg.name] = arg.value
+        return resolved
+
     def _build_plan(self, program: Program) -> list[_PlanEntry]:
         """Flatten the program into an execution plan.
 
@@ -742,6 +1543,11 @@ class SequentialCoordinator:
                     # execution (invocation ids hang off this entry's
                     # positional id as "inv-<K>.cand<k>").
                     entries.append(_PlanEntry(scatter=statement))
+                elif isinstance(statement, Par):
+                    # Issue #24: the PAR block (branches + barrier) is one
+                    # plan entry; its per-branch tasks and child runs are
+                    # created during execution (branch ids are "par<k>").
+                    entries.append(_PlanEntry(par=statement))
                 elif isinstance(statement, Gather):
                     entries.append(_PlanEntry(gather=statement))
 
@@ -767,6 +1573,11 @@ class SequentialCoordinator:
                 # creation batch — a false branch performs no work, so its
                 # ledger task exists only when the condition fires (created
                 # lazily in _drive_plan).
+                continue
+            if entry.par is not None:
+                # Issue #24: a PAR block creates no task of its own — the
+                # ledger carries one task per branch, created when the
+                # entry executes (_par_branch_task_ids).
                 continue
             task = create_ledger.create_task(
                 text=self._task_text(entry),
@@ -800,6 +1611,9 @@ class SequentialCoordinator:
                 f"SCATTER {scatter.item_ref} IN {scatter.collection_ref}"
                 f" MAX {scatter.max_count}"
             )
+        if entry.par is not None:
+            par = entry.par
+            return f"PAR MAX {par.max_count} BARRIER"
         if entry.gather is not None:
             gather = entry.gather
             return (
@@ -840,9 +1654,9 @@ class SequentialCoordinator:
                     # isolated child run), so anchors after it index on that
                     # single entry.
                     count += 1
-                elif isinstance(statement, (Scatter, Gather)):
-                    # Issue #4: scatter and gather entries are ordinary plan
-                    # entries for anchor indexing.
+                elif isinstance(statement, (Scatter, Gather, Par)):
+                    # Issue #4/#24: scatter, gather and PAR entries are
+                    # ordinary plan entries for anchor indexing.
                     count += 1
             return count
 
@@ -1134,6 +1948,8 @@ class SequentialCoordinator:
         statement_to_task: dict[int, str],
         crash_hook: "Callable[[int], None] | None",
         gate: "BudgetGate | None",
+        claims: "ResourceLedger | None" = None,
+        branch_root: str | None = None,
     ) -> dict[str, Any] | None:
         """Execute one SCATTER plan entry (issue #4).
 
@@ -1143,6 +1959,9 @@ class SequentialCoordinator:
         commits each candidate's delta to candidate-scoped nodes
         ``<alias>.c<k>.<leaf>``.  Returns a terminal/failed result dict, or
         ``None`` when execution continues with the next plan entry.
+        Issue #23: each candidate is a branch — its effectful dispatches
+        write into ``<base>/branches/cand<k>/`` and hold the candidate's
+        exclusive workspace claim.
         """
         scatter = entry.scatter
         gather = self._gather_for(program, scatter)
@@ -1298,6 +2117,8 @@ class SequentialCoordinator:
                 scatter_idx=idx,
                 crash_hook=crash_hook,
                 gate=gate,
+                claims=claims,
+                branch_root=branch_root,
             )
             status, payload_outcome, validation = outcome
             if status == "succeeded":
@@ -1466,6 +2287,8 @@ class SequentialCoordinator:
         scatter_idx: int,
         crash_hook: "Callable[[int], None] | None",
         gate: "BudgetGate | None",
+        claims: "ResourceLedger | None" = None,
+        branch_root: str | None = None,
     ) -> tuple[str, Any, Any]:
         """Run one per-candidate body step through the invocation machinery.
 
@@ -1474,6 +2297,9 @@ class SequentialCoordinator:
         the candidate-scoped delta).  Failures return
         ``("failed", error, validation_payload)`` without emitting failure
         events — the caller decides the mode-specific failure recording.
+        Issue #23: the candidate is a branch — its effectful dispatch
+        writes into its isolated workspace subdirectory and holds the
+        candidate's exclusive claim for the handler's duration.
         """
         body = scatter.body
         instruction_id = body.step_id
@@ -1545,30 +2371,57 @@ class SequentialCoordinator:
         except Exception as exc:
             return ("failed", str(exc), None)
 
+        # Issue #23: the candidate is a branch — its effectful dispatch
+        # writes into its isolated workspace subdirectory and holds the
+        # candidate's exclusive workspace claim for the handler's
+        # duration (annotated on the DISPATCHED payload).
+        dispatch_root = branch_root or self.workspace_root
+        branch_claim_held: str | None = None
         if (
-            self.workspace_root is not None
+            dispatch_root is not None
             and body.command in _effectful_commands()
         ):
-            resolved_kwargs["_workspace_root"] = self.workspace_root
+            resolved_kwargs["_workspace_root"] = branch_workspace_dir(
+                dispatch_root, f"cand{candidate}"
+            )
+            if claims is not None:
+                candidate_claim = f"workspace:{run_id}:{invocation_id}"
+                if claims.claim(candidate_claim, f"{run_id}:{invocation_id}"):
+                    branch_claim_held = candidate_claim
+                else:
+                    return (
+                        "failed",
+                        f"resource claim failed: {candidate_claim} is held"
+                        f" by {claims.holder(candidate_claim)!r}",
+                        None,
+                    )
 
         if EventType.INVOCATION_DISPATCHED not in prior_types:
+            dispatched_payload: dict[str, Any] = {
+                "args": resolved_kwargs,
+                "idempotency_key": f"{run_id}:{invocation_id}",
+                "candidate": candidate,
+            }
+            if branch_claim_held is not None:
+                dispatched_payload["resource_claims"] = [branch_claim_held]
             self.store.append(
                 run_id,
                 EventType.INVOCATION_DISPATCHED,
                 instruction_id=instruction_id,
                 invocation_id=invocation_id,
                 task_id=task_id,
-                payload={
-                    "args": resolved_kwargs,
-                    "idempotency_key": f"{run_id}:{invocation_id}",
-                    "candidate": candidate,
-                },
+                payload=dispatched_payload,
             )
 
         try:
             result = self._execute_worker_call(body.command, resolved_kwargs, gate)
         except Exception as exc:
             return ("failed", str(exc), None)
+        finally:
+            if branch_claim_held is not None:
+                claims.release(
+                    branch_claim_held, f"{run_id}:{invocation_id}"
+                )
 
         self.store.append(
             run_id,
@@ -1874,6 +2727,8 @@ class SequentialCoordinator:
         statement_to_task: dict[int, str],
         crash_hook: "Callable[[int], None] | None",
         gate: "BudgetGate | None",
+        claims: "ResourceLedger | None" = None,
+        branch_root: str | None = None,
     ) -> dict[str, Any] | None:
         """Execute one GATHER plan entry (issue #4): the explicit join.
 
@@ -1884,7 +2739,11 @@ class SequentialCoordinator:
         candidate order; ``any`` takes the first candidate-order success;
         ``ranked`` executes the judge step once per candidate (item and
         body-target bindings) and commits the max score, ties breaking to
-        the lowest candidate index.
+        the lowest candidate index.  Issue #23: when the body produced
+        ART.* artifacts inside branch workspaces, the explicit artifact
+        merge integrates the disjoint paths into the parent workspace and
+        records the accounting in the join's SUCCEEDED payload; a
+        cross-branch path collision fails the run atomically.
         """
         gather = entry.gather
         scatter = self._scatter_for(program, gather)
@@ -2175,6 +3034,42 @@ class SequentialCoordinator:
             # commits: resume re-derives the join deterministically.
             crash_hook(idx)
 
+        # Issue #23: explicit artifact merge for branch-produced ART.*
+        # nodes (workspace-gated, so pre-#23 programs without a declared
+        # workspace behave exactly as before).
+        merge_payload: dict[str, Any] | None = None
+        merge_base = branch_root or self.workspace_root
+        if merge_base is not None and any(
+            target.startswith("ART.") for target in body.targets
+        ):
+            merge_artifacts: list[dict[str, Any]] = []
+            merge_dirs: dict[str, str | None] = {}
+            for k in range(1, count + 1):
+                merge_dirs[f"cand{k}"] = branch_workspace_dir(
+                    merge_base, f"cand{k}"
+                )
+                for target in body.targets:
+                    if not target.startswith("ART."):
+                        continue
+                    node = candidate_node_id(alias, k, target.split(".")[-1])
+                    node_value = values.get(node)
+                    if isinstance(node_value, str):
+                        merge_artifacts.append({
+                            "branch": f"cand{k}",
+                            "node": node,
+                            "path": node_value,
+                        })
+            merged, merge_error = self._merge_branch_artifacts(
+                run_id,
+                f"{run_id}:{invocation_id}",
+                claims,
+                merge_artifacts,
+                merge_dirs,
+            )
+            if merge_error is not None:
+                return fail_gather(merge_error)
+            merge_payload = {"artifacts": merged}
+
         self.store.append(
             run_id,
             EventType.VALIDATION_PASSED,
@@ -2187,6 +3082,12 @@ class SequentialCoordinator:
         expected_sv = self.store._current_state_version(run_id)
         delta = StateDelta(add_nodes=({"id": alias, "value": alias_value},))
         values[alias] = alias_value
+        gather_succeeded_payload: dict[str, Any] = {
+            "delta": delta,
+            "gather": selection,
+        }
+        if merge_payload is not None:
+            gather_succeeded_payload["merge"] = merge_payload
         self.store.append_batch(run_id, [
             _Record(
                 event_type=EventType.SUCCEEDED,
@@ -2194,7 +3095,7 @@ class SequentialCoordinator:
                 invocation_id=invocation_id,
                 task_id=task_id,
                 expected_state_version=expected_sv,
-                payload={"delta": delta, "gather": selection},
+                payload=gather_succeeded_payload,
                 store=self.store,
             ),
             _Record(
@@ -2260,12 +3161,17 @@ class SequentialCoordinator:
                 f" got {type(budget).__name__}"
             )
         gate = BudgetGate(budget) if budget is not None else None
+        # Issue #23: one run-scoped resource ledger shared across the
+        # run's whole execution tree (branch workspace claims, merge
+        # claims).
+        claims = ResourceLedger()
         return self._execute_program(
             program,
             run_id,
             crash_hook=crash_hook,
             max_workers=max_workers,
             gate=gate,
+            claims=claims,
         )
 
     def _execute_program(
@@ -2279,6 +3185,9 @@ class SequentialCoordinator:
         initial_values: Mapping[str, Any] | None = None,
         max_workers: int = 1,
         gate: "BudgetGate | None" = None,
+        claims: "ResourceLedger | None" = None,
+        branch_workspace: str | None = None,
+        branch_claim: str | None = None,
     ) -> dict[str, Any]:
         """Start and drive one run (issue #20 parameterized start).
 
@@ -2292,6 +3201,11 @@ class SequentialCoordinator:
         ``concurrent`` (the flag the task-ledger replay reads to permit
         multiple IN_PROGRESS tasks) and drives the plan through the
         concurrent frontier instead of the sequential loop.
+
+        Issue #23: ``claims`` is the run tree's shared resource ledger
+        and ``branch_workspace``/``branch_claim`` carry the enclosing
+        branch's isolated workspace root and claim resource into child
+        runs (a PAR branch CALLing a protocol keeps the branch sandbox).
         """
         validate_program(
             program,
@@ -2316,7 +3230,11 @@ class SequentialCoordinator:
             "version": program.version,
             "registry_digest": registry_digest,
         }
-        concurrent_run = max_workers > 1 and not _uses_scatter(program)
+        concurrent_run = (
+            max_workers > 1
+            and not _uses_scatter(program)
+            and not _uses_par(program)
+        )
         if concurrent_run:
             metadata["concurrent"] = True
             metadata["max_workers"] = max_workers
@@ -2325,7 +3243,9 @@ class SequentialCoordinator:
             # loop (candidate fan-out semantics, loser cancellation and the
             # resume invariants are defined over candidate order); the
             # requested width is recorded but does not switch the plan
-            # frontier on.
+            # frontier on.  Issue #24: PAR programs likewise drive the
+            # sequential plan loop — a PAR entry brings its own bounded
+            # branch pool.
             metadata["max_workers"] = max_workers
         if child_of is not None:
             metadata["child_of"] = child_of
@@ -2375,6 +3295,9 @@ class SequentialCoordinator:
             start_idx=0,
             crash_hook=crash_hook,
             gate=gate,
+            claims=claims,
+            branch_root=branch_workspace,
+            branch_claim=branch_claim,
         )
 
     def _resume_existing_run(
@@ -2384,6 +3307,9 @@ class SequentialCoordinator:
         *,
         initial_values: Mapping[str, Any] | None = None,
         gate: "BudgetGate | None" = None,
+        claims: "ResourceLedger | None" = None,
+        branch_workspace: str | None = None,
+        branch_claim: str | None = None,
     ) -> dict[str, Any]:
         """Continue a non-terminal run (issue #10 core, shared with #20).
 
@@ -2430,12 +3356,18 @@ class SequentialCoordinator:
         # Issue #4: per-candidate SUCCEEDED events carry composite ids
         # ("inv-<K>.cand<k>") hanging off their scatter entry's positional
         # id; they are validated against the plan's scatter entries and
-        # excluded from the positional prefix invariant.
+        # excluded from the positional prefix invariant.  Issue #24: PAR
+        # branch parent-side events carry "par<k>" invocation ids but no
+        # SUCCEEDED events (branch adoptions commit under the PAR entry's
+        # positional id), so par<k> ids are defensively excluded from the
+        # positional set as well.
         candidate_success_ids: set[str] = set()
         positional_success_ids: set[str] = set()
         for invocation in succeeded_all:
             if _CANDIDATE_INVOCATION_RE.fullmatch(invocation):
                 candidate_success_ids.add(invocation)
+            elif _PAR_INVOCATION_RE.fullmatch(invocation):
+                continue
             else:
                 positional_success_ids.add(invocation)
         scatter_positions = {
@@ -2479,13 +3411,23 @@ class SequentialCoordinator:
                 )
 
         # -- ensure tasks exist (W0a: crash before the creation batch) -----
+        # Issue #24: PAR entries create no plan task of their own (the
+        # ledger carries one task per branch, created during execution),
+        # so resume aligns task ids with the plan positions that DO carry
+        # static tasks — every entry except PAR blocks.  Conditional
+        # entries keep their historical positional treatment (they trail
+        # the plan and their tasks are created here when missing).
         ledger = self.store.task_ledger(run_id)
         task_ids = list(ledger.tasks)
-        if len(task_ids) > len(plan):
+        static_positions = [
+            idx for idx, entry in enumerate(plan) if entry.par is None
+        ]
+        if len(task_ids) > len(static_positions):
             # Issue #4: tasks beyond the plan's own entries are per-candidate
             # fan-out tasks ("step.<id>: DO <command> [candidate k]") created
-            # while a scatter entry executed; anything else means the
-            # program does not match the run.
+            # while a scatter entry executed; issue #24 adds the PAR
+            # branches' per-branch tasks ("PAR branch <k>: <summary>");
+            # anything else means the program does not match the run.
             scatter_body_ids = sorted(
                 {
                     entry.scatter.body.step_id
@@ -2500,31 +3442,41 @@ class SequentialCoordinator:
                 )
                 for body_id in scatter_body_ids
             ]
-            for extra_id in task_ids[len(plan):]:
+            par_branch_text_res = [
+                re.compile(
+                    rf"^PAR branch \d+: (?:step\.[a-z][a-z0-9_]*: DO"
+                    rf" [a-z][a-z0-9_]*|CALL protocol\.[a-z][a-z0-9_.]*)$"
+                )
+                for _entry in plan
+                if _entry.par is not None
+            ]
+            for extra_id in task_ids[len(static_positions):]:
                 text = ledger.tasks[extra_id].text
                 if not any(
                     pattern.fullmatch(text)
-                    for pattern in candidate_text_res
+                    for pattern in candidate_text_res + par_branch_text_res
                 ):
                     raise ValueError(
                         f"run {run_id!r} has {len(task_ids)} tasks but the"
                         f" program plans {len(plan)} and task {extra_id!r}"
-                        f" ({text!r}) is not a scatter candidate task;"
-                        " refusing to resume a mismatched program"
+                        f" ({text!r}) is not a scatter candidate or PAR"
+                        " branch task; refusing to resume a mismatched"
+                        " program"
                     )
-        for idx, task_id in enumerate(task_ids[: len(plan)]):
-            expected_text = self._task_text(plan[idx])
+        for position, task_id in enumerate(task_ids[: len(static_positions)]):
+            plan_idx = static_positions[position]
+            expected_text = self._task_text(plan[plan_idx])
             if ledger.tasks[task_id].text != expected_text:
                 raise ValueError(
                     f"task {task_id!r} ({ledger.tasks[task_id].text!r}) does"
-                    f" not match plan step {idx} ({expected_text!r});"
+                    f" not match plan step {plan_idx} ({expected_text!r});"
                     " refusing to resume with a mismatched program"
                 )
-        if len(task_ids) < len(plan):
+        if len(task_ids) < len(static_positions):
             create_records: list[_Record] = []
             create_ledger = self.store.task_ledger(run_id)
-            for idx in range(len(task_ids), len(plan)):
-                entry = plan[idx]
+            for plan_idx in static_positions[len(task_ids):]:
+                entry = plan[plan_idx]
                 task = create_ledger.create_task(
                     text=self._task_text(entry),
                     creator="coordinator",
@@ -2542,7 +3494,10 @@ class SequentialCoordinator:
                 ))
             self.store.append_batch(run_id, create_records)
             task_ids = list(self.store.task_ledger(run_id).tasks)
-        statement_to_task = {idx: task_ids[idx] for idx in range(len(plan))}
+        statement_to_task = {
+            static_positions[position]: task_id
+            for position, task_id in enumerate(task_ids[: len(static_positions)])
+        }
 
         if concurrent_run:
             max_workers = int(
@@ -2567,6 +3522,9 @@ class SequentialCoordinator:
             statement_to_task,
             start_idx=start_idx,
             gate=gate,
+            claims=claims,
+            branch_root=branch_workspace,
+            branch_claim=branch_claim,
         )
 
     def _dispatch_worker_call(
@@ -2734,6 +3692,9 @@ class SequentialCoordinator:
         start_idx: int = 0,
         crash_hook: "Callable[[int], None] | None" = None,
         gate: "BudgetGate | None" = None,
+        claims: "ResourceLedger | None" = None,
+        branch_root: str | None = None,
+        branch_claim: str | None = None,
     ) -> dict[str, Any]:
         """Drive the plan's per-invocation loop from ``start_idx`` on.
 
@@ -2752,6 +3713,14 @@ class SequentialCoordinator:
         child-depth cap before a CALL dispatches, and a concurrency slot
         plus per-invocation deadline around each worker call.
         ``gate=None`` (the default) leaves every code path untouched.
+
+        ``claims``/``branch_root``/``branch_claim`` (issue #23/#24) carry
+        the run tree's resource ledger and the enclosing branch context:
+        inside a branch, effectful dispatches write into the branch
+        workspace subdirectory, hold the branch's claim for the handler's
+        duration, and annotate their DISPATCHED payload with the held
+        claims; a PAR entry nests its branches under the current branch
+        root.
         """
         # -- batch all task-creation records --------------------------
 
@@ -2853,8 +3822,14 @@ class SequentialCoordinator:
             call = entry.call
             # Issue #4: scatter and gather entries execute through their own
             # machinery (candidate expansion / explicit join) and never fall
-            # through to the plain invocation path below.
-            if entry.scatter is not None or entry.gather is not None:
+            # through to the plain invocation path below.  Issue #24: a PAR
+            # entry executes its branches concurrently through the child-run
+            # machinery and joins at its barrier.
+            if (
+                entry.scatter is not None
+                or entry.gather is not None
+                or entry.par is not None
+            ):
                 # Issue #22: the global deadline is checked before each
                 # dispatch, mirroring the other entry kinds.
                 if gate is not None and gate.global_expired():
@@ -2862,7 +3837,7 @@ class SequentialCoordinator:
                         run_id, plan, statement_to_task, idx
                     )
                 invocation_id = f"inv-{idx + 1}"
-                task_id = statement_to_task[idx]
+                task_id = statement_to_task.get(idx)
                 if entry.scatter is not None:
                     result = self._execute_scatter_entry(
                         program,
@@ -2876,8 +3851,10 @@ class SequentialCoordinator:
                         statement_to_task,
                         crash_hook,
                         gate,
+                        claims,
+                        branch_root,
                     )
-                else:
+                elif entry.gather is not None:
                     result = self._execute_gather_entry(
                         program,
                         run_id,
@@ -2890,6 +3867,23 @@ class SequentialCoordinator:
                         statement_to_task,
                         crash_hook,
                         gate,
+                        claims,
+                        branch_root,
+                    )
+                else:
+                    result = self._execute_par_entry(
+                        program,
+                        run_id,
+                        entry,
+                        idx,
+                        invocation_id,
+                        values,
+                        plan,
+                        statement_to_task,
+                        crash_hook,
+                        gate,
+                        claims,
+                        branch_root,
                     )
                 if result is not None:
                     return result
@@ -3053,7 +4047,14 @@ class SequentialCoordinator:
                     )
 
                 child_result = self._execute_call_child(
-                    call, resolved_call_args, run_id, invocation_id, gate=gate
+                    call,
+                    resolved_call_args,
+                    run_id,
+                    invocation_id,
+                    gate=gate,
+                    claims=claims,
+                    branch_workspace=branch_root,
+                    branch_claim=branch_claim,
                 )
                 child_status = child_result.get("status", "unknown")
                 if child_status != "succeeded":
@@ -3225,25 +4226,48 @@ class SequentialCoordinator:
                 )
                 break
 
+            # WorkspacePolicy (issue #9) + branch isolation (issue #23):
+            # effectful dispatches learn the declared workspace root so
+            # handlers can sandbox their writes; inside a branch the root
+            # is the branch's isolated subdirectory and the dispatch holds
+            # the branch's exclusive claim for the handler's duration,
+            # annotated on the DISPATCHED payload (no new event types).
+            dispatch_root = branch_root or self.workspace_root
+            branch_claim_held: str | None = None
             if (
-                self.workspace_root is not None
+                dispatch_root is not None
                 and statement.command in _effectful_commands()
             ):
-                # WorkspacePolicy: effectful dispatches learn the declared
-                # workspace root so handlers can sandbox their writes.
-                resolved_kwargs["_workspace_root"] = self.workspace_root
+                resolved_kwargs["_workspace_root"] = dispatch_root
+                if branch_root is not None and claims is not None:
+                    branch_claim_held = branch_claim
+                    owner = f"{run_id}:{invocation_id}"
+                    if not claims.claim(branch_claim_held, owner):
+                        failed = True
+                        error_msg = (
+                            f"resource claim failed: {branch_claim_held} is"
+                            f" held by {claims.holder(branch_claim_held)!r}"
+                        )
+                        finish_failed_invocation(
+                            idx, statement.step_id, invocation_id, task_id,
+                            error_msg,
+                        )
+                        break
 
             if EventType.INVOCATION_DISPATCHED not in prior_types:
+                dispatched_payload: dict[str, Any] = {
+                    "args": resolved_kwargs,
+                    "idempotency_key": f"{run_id}:{invocation_id}",
+                }
+                if branch_claim_held is not None:
+                    dispatched_payload["resource_claims"] = [branch_claim_held]
                 self.store.append(
                     run_id,
                     EventType.INVOCATION_DISPATCHED,
                     instruction_id=statement.step_id,
                     invocation_id=invocation_id,
                     task_id=task_id,
-                    payload={
-                        "args": resolved_kwargs,
-                        "idempotency_key": f"{run_id}:{invocation_id}",
-                    },
+                    payload=dispatched_payload,
                 )
 
             try:
@@ -3257,6 +4281,14 @@ class SequentialCoordinator:
                     idx, statement.step_id, invocation_id, task_id, error_msg
                 )
                 break
+            finally:
+                # The branch claim covers exactly the handler's duration;
+                # releasing twice is a no-op (only the holder can release).
+                if branch_claim_held is not None:
+                    claims.release(
+                        branch_claim_held, f"{run_id}:{invocation_id}"
+                    )
+                    branch_claim_held = None
 
             self.store.append(
                 run_id,

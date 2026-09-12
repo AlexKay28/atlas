@@ -17,6 +17,8 @@ from .model import (
     DonePredicate,
     Gather,
     Invocation,
+    Par,
+    ParBranch,
     Program,
     Return,
     Scatter,
@@ -81,6 +83,14 @@ _SCATTER_RE = re.compile(
 _GATHER_RE = re.compile(
     rf"^GATHER\s+(?P<step_id>(?:step\.)?{_NAME})\s+AS\s+(?P<alias>{_REF_PATTERN})\s+"
     rf"USING\s+(?P<mode>{_NAME})(?:\s+JUDGE\s+step\.(?P<judge_id>{_NAME}))?$"
+)
+# Issue #24: PAR block grammar.  The header is ``PAR MAX <n>`` followed by
+# two or more indented branch lines (each a full DO invocation or a CALL
+# line) and terminated by a matching-dedent BARRIER line that optionally
+# declares the published targets.
+_PAR_RE = re.compile(rf"^PAR\s+MAX\s+(?P<max>\d+)$")
+_BARRIER_RE = re.compile(
+    rf"^BARRIER(?:\s*->\s*(?P<targets>{_REF_LIST_PATTERN}))?$"
 )
 # Canonical join rules (issue #27 naming resolution): the draft spec's
 # all/any/ranked are canonical; the issue body's first/best are accepted
@@ -233,6 +243,21 @@ def parse_program(text: str) -> Program:
         if re.match(r"GATHER\b", line):
             statements.append(_parse_gather_line(line, line_no, lines))
             continue
+
+        # Issue #24: bounded heterogeneous parallel block.  The PAR line
+        # consumes the following indented branch lines plus the terminating
+        # (matching-dedent) BARRIER line; a stray BARRIER outside a PAR
+        # block is rejected here and by validation.
+        if re.match(r"PAR\b", line):
+            statements.append(_parse_par_block(line, line_no, lines))
+            continue
+
+        if re.match(r"BARRIER\b", line):
+            raise ParseError(
+                "BARRIER is only valid as the terminator of a PAR block",
+                line_no,
+                1,
+            )
 
         # Issue #7: strip the optional trailing REVISE/RETIRE clause before
         # matching the invocation itself; the clause only ever follows the
@@ -435,6 +460,70 @@ def _parse_gather_line(line: str, line_no: int, lines) -> Gather:
         judge,
         line_no,
     )
+
+
+def _parse_par_block(line: str, line_no: int, lines) -> Par:
+    """Parse one ``PAR MAX <n>`` block (issue #24).
+
+    The header is followed by two or more indented branch lines — each a
+    full ``step.<id>: DO ... -> <targets>`` invocation or a
+    ``CALL protocol.name(...) -> targets`` line — and terminated by the
+    matching-dedent ``BARRIER`` line, which optionally declares the
+    published targets (``BARRIER -> t1, t2``).  Branch ids (``par<k>``)
+    are positional in source order and assigned by the runtime.
+    """
+    match = _PAR_RE.fullmatch(line)
+    if match is None:
+        raise ParseError(
+            "malformed PAR (expected PAR MAX <int>)", line_no, 1
+        )
+    max_count = int(match.group("max"))
+    if max_count < 1:
+        raise ParseError("PAR MAX must be a positive integer", line_no, 1)
+    branches: list[ParBranch] = []
+    barrier_targets: tuple[str, ...] = ()
+    while True:
+        try:
+            next_line_no, next_raw, next_line = next(lines)
+        except StopIteration:
+            raise ParseError(
+                "PAR block requires a terminating BARRIER line", line_no, 1
+            ) from None
+        if next_raw[:1].isspace():
+            if re.match(r"CALL\b", next_line):
+                call = _CALL_RE.fullmatch(next_line)
+                if call is None:
+                    raise ParseError("malformed CALL in PAR branch", next_line_no, 1)
+                args = tuple(
+                    _parse_argument(item, next_line_no)
+                    for item in _split_top_level(call.group("args"))
+                )
+                targets = _parse_refs(call.group("targets"), next_line_no, "target")
+                branches.append(
+                    ParBranch(call=Call(call.group("protocol"), args, targets, next_line_no))
+                )
+            else:
+                invocation = _parse_invocation_text(next_line, next_line_no)
+                branches.append(ParBranch(invocation=invocation, line=next_line_no))
+            continue
+        barrier = _BARRIER_RE.fullmatch(next_line)
+        if barrier is None:
+            raise ParseError(
+                "PAR block must be terminated by a BARRIER line (bare or"
+                " 'BARRIER -> <refs>')",
+                next_line_no,
+                1,
+            )
+        if barrier.group("targets") is not None:
+            barrier_targets = _parse_refs(
+                barrier.group("targets"), next_line_no, "BARRIER target"
+            )
+        break
+    if len(branches) < 2:
+        raise ParseError(
+            "PAR block requires at least two branch lines", line_no, 1
+        )
+    return Par(max_count, tuple(branches), barrier_targets, line_no)
 
 
 def parse_condition(text: str, line_no: int = 0) -> tuple:
@@ -1065,6 +1154,27 @@ def validate_program(
                 )
             _validate_scatter_statement(statement, known, available, steps)
             pending_scatter = statement
+        elif isinstance(statement, Par):
+            if conditional_invocation_seen:
+                raise ParseError(
+                    "PAR block appears after an IF ... DO conditional: a"
+                    " conditional DO invocation must come after every"
+                    " unconditional invocation line"
+                )
+            _validate_par_statement(
+                statement, known, available, steps, protocols_dir,
+                _protocol_stack,
+            )
+            # The branches' targets commit only at the barrier (all-success
+            # adoption); after the join, later statements may read them.
+            for branch in statement.branches:
+                targets = (
+                    branch.invocation.targets
+                    if branch.invocation is not None
+                    else branch.call.targets
+                )
+                for target in targets:
+                    available.add(target)
         elif isinstance(statement, Gather):
             _validate_gather_statement(
                 statement, pending_scatter, known, available, steps
@@ -1462,6 +1572,89 @@ def _validate_gather_statement(
             )
 
 
+def _validate_par_statement(
+    statement: Par,
+    known: set[str] | None,
+    available: set[str],
+    steps: set[str],
+    protocols_dir: str | Path | None,
+    stack: tuple[str, ...],
+) -> None:
+    """Validate one PAR block (issue #24).
+
+    Every branch line validates like its bare form against the namespace
+    available BEFORE the block (sibling-output reads before the join are
+    rejected: branch targets never join ``available`` during branch
+    validation).  Branch DO invocations may not use REVISE/RETIRE —
+    corrections address parent-namespace nodes while a branch's state is
+    isolated.  Target checks: every branch target is a fresh name (no
+    collision with the parent namespace, no two branches producing the
+    same target — "duplicate parent output targets" fail validation), and
+    a declared ``BARRIER -> ...`` target list must equal the union of the
+    branches' targets exactly, pinning the explicit adoption mapping.
+    """
+    if statement.max_count < 1:
+        raise ParseError("PAR MAX must be a positive integer")
+    if len(statement.branches) < 2:
+        raise ParseError("PAR block requires at least two branch lines")
+    produced: list[tuple[int, tuple[str, ...]]] = []
+    for position, branch in enumerate(statement.branches, 1):
+        if branch.invocation is not None:
+            if branch.invocation.revisions or branch.invocation.retirements:
+                raise ParseError(
+                    f"PAR branch {branch.invocation.step_id} cannot use"
+                    " REVISE/RETIRE: corrections address parent-namespace"
+                    " nodes while a branch's state is isolated"
+                )
+            _validate_invocation_statement(
+                branch.invocation, known, available, steps,
+                commit_targets=False,
+            )
+            produced.append((position, branch.invocation.targets))
+        else:
+            call = branch.call
+            for argument in call.args:
+                for ref in _references_in(argument.value):
+                    if ref.startswith("KB."):
+                        continue
+                    if ref not in available:
+                        raise ParseError(
+                            f"reference {ref} used before definition"
+                            f" (PAR branch {position})",
+                            argument.line,
+                            1,
+                        )
+            _validate_call_contract(call, known, protocols_dir, stack)
+            produced.append((position, call.targets))
+    seen: dict[str, int] = {}
+    for position, targets in produced:
+        for target in targets:
+            if target.startswith("KB."):
+                raise ParseError(
+                    f"PAR branch {position} target {target} cannot address"
+                    " KB.* nodes: semantic memory is written with the"
+                    " remember command, not produced as a state node"
+                )
+            if target in available:
+                raise ParseError(f"duplicate target {target}")
+            if target in seen:
+                raise ParseError(
+                    f"duplicate target {target}: branches {seen[target]}"
+                    f" and {position} both produce it; duplicate parent"
+                    " output targets are rejected"
+                )
+            seen[target] = position
+    if statement.barrier_targets:
+        union = sorted(seen)
+        declared = sorted(statement.barrier_targets)
+        if declared != union:
+            raise ParseError(
+                "BARRIER targets must be exactly the union of the PAR"
+                f" branches' targets ({', '.join(union)}); declared:"
+                f" {', '.join(declared)}"
+            )
+
+
 def _validate_call_contract(
     call: Call,
     known_commands: Iterable[str] | None,
@@ -1513,7 +1706,8 @@ def _validate_call_contract(
             " the protocol's RETURN refs to the caller's targets)"
         )
     if not any(
-        isinstance(statement, Invocation) for statement in protocol.statements
+        isinstance(statement, (Invocation, Scatter, Par))
+        for statement in protocol.statements
     ):
         raise ParseError(
             f"protocol {call.protocol} contains no invocations to execute"
@@ -1702,6 +1896,23 @@ def _statement_dict(statement: object) -> dict[str, Any]:
             "collection_ref": statement.collection_ref,
             "max": statement.max_count,
             "body": _statement_dict(statement.body),
+        }
+    if isinstance(statement, Par):
+        # Issue #24: the source line is not part of the canonical form;
+        # the block seals as its header fields, the branch statements in
+        # source order (branch ids are positional), and the declared
+        # barrier targets in their written order.
+        return {
+            "kind": "par",
+            "max": statement.max_count,
+            "branches": [
+                _statement_dict(
+                    branch.invocation if branch.invocation is not None
+                    else branch.call
+                )
+                for branch in statement.branches
+            ],
+            "barrier": list(statement.barrier_targets),
         }
     if isinstance(statement, Gather):
         # Issue #4: the mode serializes in its canonical spelling (first/

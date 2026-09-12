@@ -61,6 +61,12 @@ class EventType(str, Enum):
     # state delta of its own — the adopted values commit inside the same
     # batch's SUCCEEDED delta, keeping the parent's state changes atomic.
     CHILD_ADOPTED = "child.adopted"
+    # Issue #24: a PAR block's barrier joined — every branch reached a
+    # terminal state.  Carries no state delta of its own (the branches'
+    # adopted targets commit in the same batch's entry-terminal SUCCEEDED
+    # delta); the payload records the per-branch terminal statuses and the
+    # merged-artifact accounting.
+    PAR_JOINED = "par.joined"
     TASK_UPDATED = "task.updated"
 
 

@@ -1,0 +1,109 @@
+{
+  "task": "GitHub issues #23 + #24 in one session, #23 first: branch workspaces, resource claims and explicit artifact merge (#23), then PAR blocks — concurrent heterogeneous CALL/DO branches with an explicit barrier (#24) — epic #27 step 4 tail",
+  "run_id": "issue-23-24-parallel",
+  "seal": "5f166a324a93bd67faabd2f35a473f227f90923e13cfb07cfd7868b8d470669c",
+  "terminal_status": "succeeded",
+  "steps_planned": 23,
+  "steps_executed": 23,
+  "acceptance": [
+    {
+      "criterion": "#23: Sealed program created before any source edit (Tikhon protocol steps 1-2)",
+      "passed": true,
+      "evidence": "demo/runs/issue-23-24-parallel/program.think linted valid and sealed to 5f166a324a93bd67f... at 2026-09-12T17:42Z before the first source edit; uses plain DO steps over all 22 registered commands plus one standalone CALL protocol.framing line; re-sealed after every source edit with the identical digest recorded in seal.txt; the sealed program was executed through the runtime into run.sqlite (210 parent events, 38 child events, both runs audit clean, ledger 23/23 completed)"
+    },
+    {
+      "criterion": "#23: Two editing children cannot overwrite each other's files or parent state directly (branch workspace isolation)",
+      "passed": true,
+      "evidence": "tests/test_claims.py::test_par_branches_editing_the_same_relative_path_stay_isolated (two PAR branches editing same.txt each write their own copy under branches/par1|par2/, the parent workspace root is untouched, and the merge refuses the collision); ::test_scatter_candidates_get_isolated_branch_workspaces (same isolation for scatter candidates); ::test_no_branch_program_behavior_unchanged (top-level root injection unchanged)"
+    },
+    {
+      "criterion": "#23: Disjoint patches integrate; overlapping/stale patches produce an explicit conflict",
+      "passed": true,
+      "evidence": "tests/test_claims.py::test_disjoint_branch_artifacts_integrate_into_the_parent_workspace (both files land in the parent workspace with full per-artifact accounting in the PAR_JOINED payload), ::test_scatter_disjoint_candidate_artifacts_integrate (gather SUCCEEDED carries the merge accounting); conflicts: ::test_collision_fails_the_run_atomically_without_partial_publication and the same-path isolation tests (atomic failure naming the path and both branches, nothing after the barrier executes, no silent overwrite)"
+    },
+    {
+      "criterion": "#23: Shared-resource claims serialize conflicting work and allow independent resources concurrently",
+      "passed": true,
+      "evidence": "tests/test_claims.py::test_claim_is_exclusive_and_release_frees_the_hold (second claim rejected, only the holder can release, released resource claimable), ::test_independent_resources_are_claimed_concurrently, ::test_claims_serialize_conflicting_work_across_threads (cross-thread serialization: hold -> conflicting claim rejected -> release -> serialized claim succeeds); runtime wiring: ::test_effectful_branch_dispatches_claim_and_annotate (branch effectful dispatches hold workspace:<branch identity> and annotate resource_claims on DISPATCHED; no new event types), ::test_merge_failure_releases_the_merge_claim (merge:<run_id> held and released on every path)"
+    },
+    {
+      "criterion": "#23: Cancellation preserves accepted artifacts/evidence and reports known partial effects",
+      "passed": true,
+      "evidence": "branch child runs keep their own durable histories (audit-clean) even when the run fails after them; the merge accounting and branch subdirectories preserve accepted artifact evidence (tests/test_claims.py collision tests assert the branch files remain); external effects are not rolled back by design (recorded in solution.md deviations and the claims.py docstring)"
+    },
+    {
+      "criterion": "#23: Tests cover custom commands with unknown effect metadata and shared KB access",
+      "passed": true,
+      "evidence": "tests/test_claims.py::test_custom_command_without_registry_effect_metadata_is_undeclared (a custom command unknown to the builtin registry carries no effect metadata: treated as undeclared — never automatically pure — with no workspace root injected and no claim annotated), ::test_shared_kb_writes_from_branches_are_recorded_and_isolated (two PAR branches writing the shared knowledge base through remember, a durable write per the registry: both in-branch dispatches hold their branch claims and both writes land in the shared KB); the ResourceLedger plus merge:<run_id>/workspace:<branch> claims are the resource-level coordination mechanism this wave delivers, with dedicated KB-resource serialization recorded as future work per the issue body"
+    },
+    {
+      "criterion": "#24: Sealed program predates and survives all source edits",
+      "passed": true,
+      "evidence": "seal digest 5f166a324a93bd67f... re-verified identical after all source edits (seal.txt); full dogfood execution of the sealed program succeeded through the runtime with the finished machinery"
+    },
+    {
+      "criterion": "#24: Independent heterogeneous branches overlap, then synthesis observes both accepted outputs",
+      "passed": true,
+      "evidence": "tests/test_par.py::test_branches_overlap_up_to_the_max (a threading.Barrier(2) only met by truly simultaneous branch execution), ::test_heterogeneous_do_and_call_branches_execute_and_combine (a DO branch and a CALL protocol branch adopt E.code/E.context/V.analysis, then step.combine reads both), ::test_barrier_waits_for_the_slow_branch_before_adopting (fast branch's output is NOT adoptable while the slow branch holds the barrier — neither output in parent state mid-barrier)"
+    },
+    {
+      "criterion": "#24: Invalid cross-branch references and output collisions fail validation",
+      "passed": true,
+      "evidence": "tests/test_par.py::test_sibling_output_read_before_the_join_rejected, ::test_duplicate_parent_output_targets_rejected, ::test_branch_target_colliding_with_parent_node_rejected, ::test_barrier_targets_must_equal_the_branch_union, ::test_branch_revise_retire_rejected"
+    },
+    {
+      "criterion": "#24: Empty/single/nested scopes have documented behavior and tests",
+      "passed": true,
+      "evidence": "empty scopes are impossible by grammar (2+ branch lines enforced at parse: tests/test_par.py::test_par_requires_at_least_two_branches; a PAR with no branches cannot be written); single-branch PAR rejected (::test_par_requires_at_least_two_branches covers the one-branch case); nested PAR via a CALL branch's protocol succeeds under the default budget and fails atomically under max_child_depth=1 (::test_nested_par_bounded_by_budget_child_depth); behavior documented in solution.md and module docstrings"
+    },
+    {
+      "criterion": "#24: Completion-order permutations and failures preserve specified state/replay semantics",
+      "passed": true,
+      "evidence": "tests/test_par.py::test_completion_order_permutations_preserve_the_final_state (slow-first and fast-first produce identical projected nodes and state_version), ::test_replay_identity_after_reopen (identical event tuples and projection after store reopen), ::test_branch_failure_cancels_sibling_and_fails_run_atomically (failed branch -> FAILED, sibling tasks cancelled, sibling output never adopted, nothing after the barrier, audit clean)"
+    },
+    {
+      "criterion": "#24: MAX observed as the dispatch ceiling; branches dispatch concurrently under it",
+      "passed": true,
+      "evidence": "tests/test_par.py::test_max_cap_bounds_concurrent_branch_dispatch (PAR MAX 1 -> peak handler concurrency exactly 1), ::test_branches_overlap_up_to_the_max (PAR MAX 2 -> true 2-way overlap); the budget's shared semaphore further caps tree-wide (nested-PAR test exercises the depth cap through the same gate)"
+    },
+    {
+      "criterion": "#24: PAR adoption recorded with CHILD_ADOPTED per branch and a PAR_JOINED event; one task per branch, no block task",
+      "passed": true,
+      "evidence": "tests/test_par.py::test_heterogeneous_do_and_call_branches_execute_and_combine (CHILD_ADOPTED for par1 and par2; one PAR_JOINED with branch statuses and declared targets; entry-terminal SUCCEEDED commits all adopted targets in branch order), ::test_ledger_has_one_task_per_branch_and_no_block_task (tasks 'PAR branch <k>: ...' all completed, no PAR MAX task)"
+    },
+    {
+      "criterion": "#24: Workspace isolation from #23 active inside PAR branches",
+      "passed": true,
+      "evidence": "tests/test_par.py::test_workspace_isolation_active_inside_par_branches (branch edits land in branches/par1|par2/, merge integrates disjoint paths into the parent root); claim annotations inside branch child runs asserted in tests/test_claims.py::test_effectful_branch_dispatches_claim_and_annotate"
+    },
+    {
+      "criterion": "#24: Audit clean for parent, branch and nested runs; audit.py touched only for false positives",
+      "passed": true,
+      "evidence": "every PAR test asserts audit_run(...).ok for the parent run (and the nested test for the CALL child run); the audit.py diff is exactly the scoped false-positive fix exempting the task-less PAR barrier commit / join-level failure (recognized by the 'par' payload marker) from the task_id requirement"
+    },
+    {
+      "criterion": "Existing non-PAR program seals and behavior remain compatible; all 687 baseline tests pass unmodified",
+      "passed": true,
+      "evidence": "full suite: 687 baseline tests unmodified and passing + 38 new (15 test_claims.py, 23 test_par.py) = 725 passed; tests/test_par.py::test_pre_par_programs_seal_byte_identically and ::test_non_par_programs_behave_identically pin compatibility; DISPATCHED payloads of non-branch dispatches carry no resource_claims key (tests/test_claims.py::test_top_level_effectful_dispatch_stays_unclaimed_and_unannotated, ::test_no_branch_program_behavior_unchanged)"
+    },
+    {
+      "criterion": "Hard-constraint scope respected and protocol artifacts complete",
+      "passed": true,
+      "evidence": "git status shows exactly: M audit.py (false-positive fix only), M runtime/coordinator.py, M runtime/events.py (PAR_JOINED), M syntax/__init__.py, M syntax/model.py, M syntax/parser.py, ?? claims.py, ?? tests/test_claims.py, ?? tests/test_par.py, ?? demo/runs/issue-23-24-parallel/; cli.py, registry/, budgets.py, resume.py, envelope.py, worker_adapter.py, memory.py, protocols/, docs/ untouched; WORKLOG.md (per-step sections per issue), solution.md, evaluation.json, seal.txt, program.think, run.sqlite present; nothing committed"
+    }
+  ],
+  "unresolved": [
+    "Mid-PAR crash resume re-emits parent-side branch accounting events (RESULT_RECEIVED/CHILD_ADOPTED) for branches re-driven from a pre-adoption window; state stays correct (dup-SUCCEEDED guard + single entry-terminal delta) but the duplicated accounting is noisy — a prior-adoption skip keyed on committed CHILD_ADOPTED events would clean it up",
+    "Budgets are not re-instated on resume (pre-existing #22 gap, unchanged)",
+    "Cancellation remains cooperative: started child runs finish in their own histories with results discarded; external effects of cancelled branches are not compensated (issue #23 itself does not promise rollback of external effects)",
+    "Shared KB writes (remember) coordinate only through the generic effect-class claim mechanism; dedicated KB-resource serialization and adapter idempotency are future work per the issue body",
+    "Branch workspace directories are reused across sequential blocks with the same shape; merges only integrate each joining block's declared ART paths, but cross-block dir contents are not cleaned up"
+  ],
+  "protocol_deviations": [
+    "None in the sealing protocol: program.think was written, linted and sealed before the first source edit, never modified afterwards, and re-seals to the identical digest; seal.txt written at seal time (2026-09-12T17:42Z)",
+    "The sealed program was executed through the runtime with stub handlers (recorded in run.sqlite) after implementation so the 23 plan steps — including the isolated CALL child run issue-23-24-parallel:inv-22 with CHILD_ADOPTED of E.context/V.analysis — have a real persisted execution record; the WORKLOG narrates the same 23 steps as the agent's engineering record, matching the dogfooding convention of prior issue runs",
+    "During the first dogfood execution the stub edit handler ran with no declared workspace root and clobbered the untracked src/tikhon/claims.py (the exact failure mode issue #23 prevents); the file was restored by hand, the re-run declared a scratch workspace, and the incident is recorded in claims.py's docstring note and WORKLOG step.challenge C4",
+    "Resume gaps for PAR are documented in solution.md/unresolved rather than fixed in resume.py, per the task's hard constraints (resume.py read-only)",
+    "A pre-existing audit false positive of the same shape was observed and deliberately NOT fixed: the issue #3 invocation-less failure path (_fail_run, e.g. an IF condition over a retired ref) finishes a run 'failed' with no FAILED event and trips run_finished_status_mismatch; the PAR join-level failure avoids this by emitting a marked FAILED event, but the pre-existing path was left untouched as out of scope"
+  ]
+}
