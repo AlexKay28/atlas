@@ -1310,14 +1310,23 @@ class SequentialCoordinator:
         # Branch tasks already terminal from a crashed earlier drive keep
         # their accounting; their outputs are re-read from the committed
         # child state instead of re-dispatching (at-least-once, and the
-        # store's dup-SUCCEEDED guard stays untouched).
+        # store's dup-SUCCEEDED guard stays untouched).  Issue #29: the
+        # adoption is re-derived exactly as the live path does
+        # (_adopt_branch_nodes on the terminal child run — a pure read of
+        # committed state), not stored as an empty list.
         ledger = self.store.task_ledger(run_id)
         already_joined: dict[int, list[dict[str, Any]]] = {}
         pending_positions: list[int] = []
         for position, task_id in enumerate(branch_tasks, 1):
             task = ledger.tasks.get(task_id)
             if task is not None and task.status is TaskStatus.COMPLETED:
-                already_joined[position] = []
+                child_run_id = par_branch_run_id(run_id, position)
+                targets = branch_targets[position - 1]
+                child_values: dict[str, Any] = {}
+                adopted_nodes, _ = self._adopt_branch_nodes(
+                    child_run_id, child_values, targets
+                )
+                already_joined[position] = adopted_nodes
             else:
                 pending_positions.append(position)
 
@@ -1368,16 +1377,32 @@ class SequentialCoordinator:
                     if branch_workspace is not None
                     else None
                 )
-                self.store.append_batch(run_id, [
-                    _Record(
+                # Issue #29: a resumed branch dispatched before the crash
+                # carries pre-crash lifecycle events — never re-emit them
+                # (same prior_types guard the plain-invocation path uses).
+                branch_prior_types: set[EventType] = set()
+                branch_task = ledger.tasks.get(task_id)
+                if (
+                    branch_task is not None
+                    and branch_task.status is TaskStatus.IN_PROGRESS
+                ):
+                    branch_prior_types = {
+                        event.event_type
+                        for event in self.store.events(run_id)
+                        if event.invocation_id == branch_invocation_id
+                    }
+                ready_records: list[_Record] = []
+                if EventType.INVOCATION_READY not in branch_prior_types:
+                    ready_records.append(_Record(
                         event_type=EventType.INVOCATION_READY,
                         instruction_id=summary,
                         invocation_id=branch_invocation_id,
                         task_id=task_id,
                         payload={"command": summary},
                         store=self.store,
-                    ),
-                    _Record(
+                    ))
+                if EventType.INVOCATION_DISPATCHED not in branch_prior_types:
+                    ready_records.append(_Record(
                         event_type=EventType.INVOCATION_DISPATCHED,
                         instruction_id=summary,
                         invocation_id=branch_invocation_id,
@@ -1387,8 +1412,9 @@ class SequentialCoordinator:
                             "branch_id": f"par{position}",
                         },
                         store=self.store,
-                    ),
-                ])
+                    ))
+                if ready_records:
+                    self.store.append_batch(run_id, ready_records)
                 in_flight[position] = pool.submit(
                     self._execute_par_branch,
                     branch,
