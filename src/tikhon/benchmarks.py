@@ -21,6 +21,7 @@ by the same harness — same programs, same accounting — once configured.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import tempfile
 import time
@@ -38,10 +39,14 @@ from tikhon.syntax.model import Invocation, Program
 __all__ = [
     "BenchmarkCase",
     "BenchmarkReport",
+    "CaseRegistry",
     "CaseResult",
     "RunMetrics",
     "SideSummary",
+    "UsageStats",
     "builtin_cases",
+    "builtin_registry_names",
+    "register_case",
     "run_benchmark",
     "sleep_worker",
 ]
@@ -66,6 +71,52 @@ DELEGATE_SAMPLE_PLAN = (
     "\n"
     "RETURN P.plan, F.metrics\n"
 )
+
+
+@dataclasses.dataclass(frozen=True)
+class UsageStats:
+    """Usage telemetry from a worker's RESULT_RECEIVED receipt.
+
+    Default zero-shaped so the deterministic sleep-simulated path is
+    unaffected; a live worker factory that reports usage in its result
+    dict populates these fields, which flow into ``RunMetrics`` and
+    through to the JSON/markdown outputs.  All fields default to 0/0.0
+    so a ``UsageStats()`` is a valid "no usage reported" sentinel.
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+
+    @classmethod
+    def zero(cls) -> "UsageStats":
+        """A zero-shaped sentinel for runs that report no usage."""
+        return cls()
+
+    @classmethod
+    def from_result(cls, result: Any) -> "UsageStats | None":
+        """Extract usage from a worker's RESULT_RECEIVED result value.
+
+        A usage-reporting worker factory includes a ``"usage"`` key in
+        the result dict returned by each handler; the value is a mapping
+        with optional ``prompt_tokens``, ``completion_tokens``,
+        ``total_tokens`` (ints) and ``cost_usd`` (float).  Returns
+        ``None`` when no usage key is present (the deterministic path).
+        """
+        if not isinstance(result, dict):
+            return None
+        usage = result.get("usage")
+        if usage is None:
+            return None
+        if not isinstance(usage, dict):
+            return None
+        return cls(
+            prompt_tokens=int(usage.get("prompt_tokens", 0)),
+            completion_tokens=int(usage.get("completion_tokens", 0)),
+            total_tokens=int(usage.get("total_tokens", 0)),
+            cost_usd=float(usage.get("cost_usd", 0.0)),
+        )
 
 
 def sleep_worker(latency_seconds: float = 0.04) -> DeterministicWorker:
@@ -179,6 +230,7 @@ class RunMetrics:
     child_tasks: int
     authored_plans: int
     authored_steps: int
+    usage: UsageStats | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -201,6 +253,7 @@ class SideSummary:
     child_tasks: int
     authored_plans: int
     authored_steps: int
+    usage: UsageStats | None = None
 
     @property
     def avg_steps_per_child(self) -> float:
@@ -227,6 +280,13 @@ class CaseResult:
     @property
     def envelope_delta_bytes(self) -> int:
         return self.variant.envelope_bytes - self.baseline.envelope_bytes
+
+    @property
+    def usage_delta_tokens(self) -> int:
+        """Total-token delta (variant - baseline); 0 when neither reports."""
+        base = self.baseline.usage.total_tokens if self.baseline.usage else 0
+        var = self.variant.usage.total_tokens if self.variant.usage else 0
+        return var - base
 
 
 @dataclasses.dataclass(frozen=True)
@@ -358,15 +418,106 @@ class BenchmarkReport:
         lines.append("")
         return "\n".join(lines)
 
+    def to_json(self) -> str:
+        """JSON-serializable form of the report.
+
+        Every number in the JSON output is identical to the number
+        rendered in :meth:`to_markdown` — wall times, event/task/
+        dispatch/envelope counts, child-run accounting, authored-plan
+        steps, speedup, envelope delta, and (when present) usage tokens
+        and cost.  The output roundtrips through ``json.loads``.
+        """
+        cases_json: list[dict[str, Any]] = []
+        for case in self.cases:
+            base, variant = case.baseline, case.variant
+            cases_json.append({
+                "name": case.name,
+                "configuration": {
+                    "sequential": {
+                        "max_workers": base.max_workers,
+                        "budget_workers": base.budget_workers,
+                    },
+                    "variant": {
+                        "max_workers": variant.max_workers,
+                        "budget_workers": variant.budget_workers,
+                    },
+                    "repetitions": base.repetitions,
+                },
+                "speedup": {
+                    "sequential_mean_ms": _round1(base.wall_mean_seconds),
+                    "sequential_min_ms": _round1(base.wall_min_seconds),
+                    "sequential_max_ms": _round1(base.wall_max_seconds),
+                    "variant_mean_ms": _round1(variant.wall_mean_seconds),
+                    "variant_min_ms": _round1(variant.wall_min_seconds),
+                    "variant_max_ms": _round1(variant.wall_max_seconds),
+                    "speedup": round(case.speedup, 2),
+                },
+                "context_cost": {
+                    "dispatches": base.dispatches,
+                    "sequential_bytes": base.envelope_bytes,
+                    "variant_bytes": variant.envelope_bytes,
+                    "delta_bytes": case.envelope_delta_bytes,
+                },
+                "delegation_granularity": {
+                    "child_runs": variant.child_runs,
+                    "child_events": variant.child_events,
+                    "tasks_per_child_mean": round(variant.avg_steps_per_child, 2),
+                    "authored_plans": variant.authored_plans,
+                    "authored_steps": variant.authored_steps,
+                    "steps_per_plan": (
+                        round(variant.authored_steps / variant.authored_plans, 2)
+                        if variant.authored_plans > 0
+                        else None
+                    ),
+                },
+                "usage": _usage_json(base, variant),
+            })
+        report = {
+            "label": "Tikhon Benchmark Report (deterministic, sleep-simulated)",
+            "repetitions": self.repetitions,
+            "cases": cases_json,
+        }
+        return json.dumps(report, indent=2, sort_keys=False)
+
 
 def _ms(seconds: float) -> str:
     return f"{seconds * 1000.0:.1f} ms"
+
+
+def _round1(seconds: float) -> float:
+    """Round seconds to milliseconds with 1 decimal place (matches _ms)."""
+    return round(seconds * 1000.0, 1)
 
 
 def _per_plan(plans: int, steps: int) -> str:
     if plans == 0:
         return "n/a"
     return f"{steps / plans:.2f} avg"
+
+
+def _usage_json(base: SideSummary, variant: SideSummary) -> dict[str, Any] | None:
+    """Usage block for JSON output; None when neither side reports."""
+    base_usage = base.usage if base.usage is not None else UsageStats.zero()
+    var_usage = variant.usage if variant.usage is not None else UsageStats.zero()
+    if base_usage == UsageStats.zero() and var_usage == UsageStats.zero():
+        return None
+    return {
+        "sequential": {
+            "prompt_tokens": base_usage.prompt_tokens,
+            "completion_tokens": base_usage.completion_tokens,
+            "total_tokens": base_usage.total_tokens,
+            "cost_usd": round(base_usage.cost_usd, 6),
+        },
+        "variant": {
+            "prompt_tokens": var_usage.prompt_tokens,
+            "completion_tokens": var_usage.completion_tokens,
+            "total_tokens": var_usage.total_tokens,
+            "cost_usd": round(var_usage.cost_usd, 6),
+        },
+        "delta_total_tokens": (
+            var_usage.total_tokens - base_usage.total_tokens
+        ),
+    }
 
 
 def _walk_run_tree(store: EventStore, root_run_id: str) -> list[str]:
@@ -535,6 +686,7 @@ def _measure_run(
         child_tasks = 0
         child_runs = 0
         authored_texts: list[str] = []
+        usage_stats: list[UsageStats] = []
         for node_id in tree:
             try:
                 node_events = store.events(node_id)
@@ -550,6 +702,14 @@ def _measure_run(
                     )
                     if isinstance(payload.get("plan_text"), str):
                         authored_texts.append(payload["plan_text"])
+                if event.event_type.value == "invocation.result_received":
+                    payload = (
+                        event.payload if isinstance(event.payload, dict) else {}
+                    )
+                    result = payload.get("result")
+                    extracted = UsageStats.from_result(result)
+                    if extracted is not None:
+                        usage_stats.append(extracted)
             if node_id != run_id:
                 child_runs += 1
                 child_events += len(node_events)
@@ -572,6 +732,14 @@ def _measure_run(
             f"benchmark case {case.name!r} run {run_id!r} finished with"
             f" status {status!r}; benchmarks measure succeeded runs only"
         )
+    run_usage: UsageStats | None = None
+    if usage_stats:
+        run_usage = UsageStats(
+            prompt_tokens=sum(u.prompt_tokens for u in usage_stats),
+            completion_tokens=sum(u.completion_tokens for u in usage_stats),
+            total_tokens=sum(u.total_tokens for u in usage_stats),
+            cost_usd=sum(u.cost_usd for u in usage_stats),
+        )
     return RunMetrics(
         wall_seconds=wall_seconds,
         events=events,
@@ -583,6 +751,7 @@ def _measure_run(
         child_tasks=child_tasks,
         authored_plans=len(authored_programs),
         authored_steps=authored_steps,
+        usage=run_usage,
     )
 
 
@@ -595,6 +764,19 @@ def _summarize(
 ) -> SideSummary:
     walls = [run.wall_seconds for run in metrics]
     first = metrics[0]
+    any_usage = any(run.usage is not None for run in metrics)
+    side_usage: UsageStats | None = None
+    if any_usage:
+        per_run = [
+            run.usage if run.usage is not None else UsageStats.zero()
+            for run in metrics
+        ]
+        side_usage = UsageStats(
+            prompt_tokens=sum(u.prompt_tokens for u in per_run),
+            completion_tokens=sum(u.completion_tokens for u in per_run),
+            total_tokens=sum(u.total_tokens for u in per_run),
+            cost_usd=sum(u.cost_usd for u in per_run),
+        )
     return SideSummary(
         label=label,
         max_workers=max_workers,
@@ -614,6 +796,7 @@ def _summarize(
         child_tasks=first.child_tasks,
         authored_plans=first.authored_plans,
         authored_steps=first.authored_steps,
+        usage=side_usage,
     )
 
 
@@ -751,7 +934,11 @@ RETURN ART.report
 def builtin_cases(
     latency_seconds: float = 0.04,
 ) -> list[BenchmarkCase]:
-    """The three built-in benchmark cases (issue #26).
+    """The built-in benchmark cases from the case registry (issue #46).
+
+    Returns one :class:`BenchmarkCase` per registered factory, in
+    insertion order.  The default registry holds the three built-in
+    cases from issue #26:
 
     1. ``linear-independent-6`` — six independent steps; the concurrent
        frontier overlaps them (speedup case).
@@ -761,27 +948,124 @@ def builtin_cases(
     3. ``par-heterogeneous-4`` — PAR MAX 4 with two DO branches, one
        CALL branch and one delegate branch; the baseline serializes the
        pool through a 1-slot budget, the variant releases 4 slots.
+
+    Callers can extend the registry via :func:`register_case` before
+    calling ``builtin_cases()`` to add custom cases without editing this
+    module's internals, or pass an explicit list to
+    :func:`run_benchmark` for one-off case sets.
     """
-    return [
-        BenchmarkCase(
-            name="linear-independent-6",
-            program=_LINEAR_PROGRAM,
-            max_workers=6,
-            latency_seconds=latency_seconds,
-        ),
-        BenchmarkCase(
-            name="scatter-gather-8",
-            program=_SCATTER_PROGRAM,
-            max_workers=4,
-            budget=ExecutionBudget(max_concurrent_workers=4),
-            latency_seconds=latency_seconds,
-        ),
-        BenchmarkCase(
-            name="par-heterogeneous-4",
-            program=_PAR_PROGRAM,
-            max_workers=4,
-            budget=ExecutionBudget(max_concurrent_workers=4),
-            protocols={"framing": _PAR_PROTOCOL},
-            latency_seconds=latency_seconds,
-        ),
-    ]
+    return _default_registry.build_all(latency_seconds=latency_seconds)
+
+
+# ----------------------------------------------------------------------
+# Case registry (issue #46): builtin_cases() is backed by a registry
+# of name → factory that callers can extend without editing this module's
+# internals.  register_case() adds a factory; get_case() retrieves one;
+# builtin_registry_names() lists registered names.
+# ----------------------------------------------------------------------
+
+_CaseFactory = Callable[..., BenchmarkCase]
+
+
+class CaseRegistry:
+    """A name → factory registry for benchmark cases.
+
+    The default registry holds the three built-in cases under their
+    canonical names.  Callers extend it via :func:`register_case` or
+    by constructing their own ``CaseRegistry`` and calling
+    :meth:`register` / :meth:`build` on it.
+    """
+
+    def __init__(self) -> None:
+        self._factories: dict[str, _CaseFactory] = {}
+
+    def register(
+        self, name: str, factory: _CaseFactory
+    ) -> None:
+        """Register ``factory`` under ``name`` (overwrites if present)."""
+        if not name or not name.strip():
+            raise ValueError("CaseRegistry.register name must be nonempty")
+        if not callable(factory):
+            raise ValueError("CaseRegistry.register factory must be callable")
+        self._factories[name] = factory
+
+    def names(self) -> list[str]:
+        """Registered names in insertion order."""
+        return list(self._factories)
+
+    def build(self, name: str, **kwargs: Any) -> BenchmarkCase:
+        """Build a case from the factory registered under ``name``."""
+        if name not in self._factories:
+            raise KeyError(
+                f"no benchmark case registered as {name!r};"
+                f" known: {', '.join(self._factories) or '(none)'}"
+            )
+        return self._factories[name](**kwargs)
+
+    def build_all(self, **kwargs: Any) -> list[BenchmarkCase]:
+        """Build every registered case (insertion order)."""
+        return [self.build(name, **kwargs) for name in self._factories]
+
+
+_default_registry = CaseRegistry()
+
+
+def _linear_factory(
+    latency_seconds: float = 0.04, **kwargs: Any
+) -> BenchmarkCase:
+    return BenchmarkCase(
+        name="linear-independent-6",
+        program=_LINEAR_PROGRAM,
+        max_workers=6,
+        latency_seconds=latency_seconds,
+        **kwargs,
+    )
+
+
+def _scatter_factory(
+    latency_seconds: float = 0.04, **kwargs: Any
+) -> BenchmarkCase:
+    return BenchmarkCase(
+        name="scatter-gather-8",
+        program=_SCATTER_PROGRAM,
+        max_workers=4,
+        budget=ExecutionBudget(max_concurrent_workers=4),
+        latency_seconds=latency_seconds,
+        **kwargs,
+    )
+
+
+def _par_factory(
+    latency_seconds: float = 0.04, **kwargs: Any
+) -> BenchmarkCase:
+    return BenchmarkCase(
+        name="par-heterogeneous-4",
+        program=_PAR_PROGRAM,
+        max_workers=4,
+        budget=ExecutionBudget(max_concurrent_workers=4),
+        protocols={"framing": _PAR_PROTOCOL},
+        latency_seconds=latency_seconds,
+        **kwargs,
+    )
+
+
+_default_registry.register("linear-independent-6", _linear_factory)
+_default_registry.register("scatter-gather-8", _scatter_factory)
+_default_registry.register("par-heterogeneous-4", _par_factory)
+
+
+def register_case(
+    name: str, factory: _CaseFactory, *, registry: CaseRegistry | None = None
+) -> None:
+    """Register a custom benchmark case factory.
+
+    By default adds to the module-level default registry shared by
+    :func:`builtin_cases`; pass ``registry=`` to target a private one.
+    """
+    target = registry if registry is not None else _default_registry
+    target.register(name, factory)
+
+
+def builtin_registry_names() -> list[str]:
+    """Names registered in the default case registry."""
+    return _default_registry.names()

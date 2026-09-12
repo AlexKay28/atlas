@@ -1,0 +1,37 @@
+# Tikhon run for GitHub issue #46: benchmark harness extensibility —
+# case registry, JSON export, usage metrics.
+#
+# Sealed BEFORE any source edit (tikhon protocol step 2). Uses only the
+# canonical grammar and registered commands that exist at seal time.
+# Every argument is a single typed reference or a JSON literal.
+
+PROGRAM issue_46_bench_registry VERSION 1.0
+
+INPUT
+    G.goal = "Extend the benchmark harness (src/tikhon/benchmarks.py) with a case registry callers can extend, a JSON export on BenchmarkReport, and an optional usage block on RunMetrics sourced from RESULT_RECEIVED receipts when a worker factory reports it; existing three deterministic cases stay as defaults, run_benchmark keeps working, and the committed evidence numbers remain reproducible"
+    C.scope = "src/tikhon/benchmarks.py, tests/test_benchmarks.py, demo/runs/sprint1-46-bench-registry/"
+    C.done = "builtin_cases becomes a registry of name to factory callers can extend; BenchmarkReport.to_json roundtrips through json.loads with numbers matching to_markdown; optional usage block on RunMetrics sourced from RESULT_RECEIVED receipt usage when a worker factory reports it; existing three cases unchanged; full pytest suite green"
+    Q.parts = ["case_registry", "json_export", "usage_metrics", "determinism"]
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "benchmark_extensibility") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "bench_registry") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.goal, evidence = E.findings) -> H.theses
+step.calculate: DO calculate(expression = "test_count_delta", values = {"baseline": 760, "new": 4}) -> F.metrics
+step.compare: DO compare(options = H.theses, criteria = C.done) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.done) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue46-bench-registry", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue46-bench-registry") -> K.recalled
+step.solve: DO solve(problem = G.goal, domain = "benchmarking") -> U.solution
+step.prove: DO prove(statement = C.done, language = "tikhon_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "registry_json_usage") -> V.review
+step.check: DO check(artifact = V.review, predicate = "acceptance_covered") -> V.verdict
+step.test: DO test(path = "tests/test_benchmarks.py", timeout_seconds = 600) -> V.tests
+step.report: DO report(committed_refs = [V.verdict, F.metrics], format = "markdown") -> ART.report
+step.verify: DO verify(goal = G.goal, evidence = [V.tests, V.verdict, F.metrics]) -> V.result
+
+RETURN ART.report, V.result, V.verdict, F.metrics, K.recalled, U.solution, A.proof
