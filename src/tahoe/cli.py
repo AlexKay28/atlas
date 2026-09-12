@@ -638,6 +638,29 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     return 0 if status == "succeeded" else 2
 
 
+def _run_terminal_status(store: "EventStore", run_id: str) -> tuple[str, str | None]:
+    """Read RUN_FINISHED from the event store for *run_id*.
+
+    Returns ``(status, error)`` where *status* is one of
+    ``"succeeded"``, ``"failed"``, or other recorded statuses.
+    When there is no RUN_FINISHED event the run is non-terminal
+    (running or crashed): returns ``("running", None)``.
+    """
+    events = store.events(run_id)
+    finished = [
+        ev for ev in events if ev.event_type is EventType.RUN_FINISHED
+    ]
+    if not finished:
+        return ("running", None)
+    ev = finished[-1]
+    payload = ev.payload if isinstance(ev.payload, dict) else {}
+    status = payload.get("status", "unknown")
+    error = payload.get("error") or payload.get("reason")
+    if isinstance(error, str) and error.strip():
+        return (status, error)
+    return (status, None)
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     try:
         store = EventStore(args.db)
@@ -654,46 +677,79 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
     ledger = store.task_ledger(args.run_id)
     profile = ledger.profile()
+
+    terminal_status, terminal_error = _run_terminal_status(store, args.run_id)
     store.close()
 
     total = profile["counts"]["total"]
     completed = profile["counts"]["completed"]
     percent = profile["percent_complete"]
+    in_progress_ids: list[str] = profile.get("in_progress_tasks", [])
     current_task = profile["current_task"]
 
+    def _task_text(task_id: str) -> str:
+        task = ledger.tasks.get(task_id)
+        return task.text if task else task_id
+
+    def _status_line() -> str:
+        if terminal_status == "running":
+            if in_progress_ids:
+                return "status: running"
+            return "status: running"
+        if terminal_status == "succeeded":
+            return "status: succeeded"
+        if terminal_status == "failed":
+            if terminal_error:
+                return f"status: failed: {terminal_error}"
+            return "status: failed"
+        return f"status: {terminal_status}"
+
     if args.json:
-        task_text = None
+        in_progress_list = [
+            {"id": tid, "text": _task_text(tid)} for tid in in_progress_ids
+        ]
+        current_task_text = None
         if current_task:
-            task = ledger.tasks.get(current_task)
-            task_text = task.text if task else current_task
-        elif total > 0 and completed == total:
+            current_task_text = _task_text(current_task)
+        elif total > 0 and completed == total and ledger.tasks:
             last_task = list(ledger.tasks.values())[-1]
-            task_text = last_task.text
+            current_task_text = last_task.text
         payload = {
             "run_id": args.run_id,
-            "status": run_info.get("status", "unknown") if isinstance(run_info, dict) else "unknown",
+            "status": terminal_status,
             "percent_complete": round(percent, 1) if isinstance(percent, (int, float)) else 0,
             "completed": completed,
             "total": total,
             "current_task": current_task,
-            "current_task_text": task_text,
+            "current_task_text": current_task_text,
+            "in_progress_tasks": in_progress_list,
+            "error": terminal_error,
+            "hint": "tahoe resume" if terminal_status == "running" else None,
         }
         print(json.dumps(payload, sort_keys=True))
         return 0
+
+    print(_status_line())
 
     bar_width = 20
     filled = int(bar_width * completed / total) if total else 0
     bar = "=" * filled + "-" * (bar_width - filled)
     print(f"[{bar}] {percent:.0f}% completed {completed}/{total}")
-    if current_task:
-        task = ledger.tasks.get(current_task)
-        task_text = task.text if task else current_task
-        print(f"current task: {task_text}")
-    elif total > 0 and completed == total:
+
+    if len(in_progress_ids) > 1:
+        for tid in in_progress_ids:
+            print(f"  in progress: {_task_text(tid)}")
+    elif current_task:
+        print(f"current task: {_task_text(current_task)}")
+    elif total > 0 and completed == total and ledger.tasks:
         last_task = list(ledger.tasks.values())[-1]
         print(f"current task: {last_task.text}")
     else:
         print("current task: (none)")
+
+    if terminal_status == "running":
+        print("hint: tahoe resume")
+
     return 0
 
 
