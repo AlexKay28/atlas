@@ -1,0 +1,41 @@
+{
+    "task": "GitHub issue #32: seal canonicalization — store parsed condition AST instead of raw text and normalize barrier spelling so semantically identical programs seal identically; ship as a versioned digest (v1 unchanged, v2 canonical) to preserve the 39+ historical seals",
+    "run_id": "sprint2-32-seal-v2",
+    "seal": "2be6fa9bcecc3bab1d7a9f279ad0485575cc3d2e26f8742f7226a3a4e56f25af",
+    "terminal_status": "succeeded",
+    "steps_planned": 10,
+    "steps_executed": 10,
+    "acceptance": [
+        {
+            "criterion": "(1) v2 seals equal for programs differing only in condition spacing",
+            "passed": true,
+            "evidence": "tests/test_seal_v2.py::test_v2_condition_spacing_invariant — BASE_IF vs SPACED_IF (extra spaces around operators) produce the same v2 seal digest; counter-test ::test_v1_condition_spacing_sensitive confirms v1 is still spacing-sensitive"
+        },
+        {
+            "criterion": "(2) bare-BARRIER vs explicit-union seal identically under v2",
+            "passed": true,
+            "evidence": "tests/test_seal_v2.py::test_v2_bare_barrier_matches_explicit_barrier and ::test_v2_reordered_barrier_matches_bare — bare BARRIER, BARRIER -> E.a, E.b, and BARRIER -> E.b, E.a all produce the same v2 seal; counter-test ::test_v1_bare_barrier_differs_from_explicit confirms v1 is still barrier-sensitive"
+        },
+        {
+            "criterion": "(3) ALL 39 historical seals still verify under the default v1 path",
+            "passed": true,
+            "evidence": "tests/test_seal_v2.py::test_all_historical_seals_verify_v1 — loops all 42 demo/runs/*/seal.txt files (>=39 required), parses each program.think, computes seal_digest(program, version=1), and asserts equality; all 42 pass"
+        },
+        {
+            "criterion": "(4) v2 canonical json contains no raw condition string",
+            "passed": true,
+            "evidence": "tests/test_seal_v2.py::test_v2_canonical_json_has_no_raw_condition_string — asserts condition is a list (AST), not a string; and the raw condition text pattern is absent from the JSON; ::test_v2_canonical_json_condition_is_ast_list verifies the AST structure; tests/test_syntax.py::test_v2_re_derives_condition_ast_from_raw_text confirms AST is re-derived from raw text"
+        },
+        {
+            "criterion": "(5) report exact README/docs deltas for the two digest versions",
+            "passed": true,
+            "evidence": "docs/cli-reference.md currently documents seal as producing 'the sealed SHA-256 digest' (line 17, 36). The delta is: (a) seal subcommand table row should add '--v2' to the Optional flags column; (b) the 'Program lifecycle' section should note two digest versions: v1 (default, raw condition text, written-order barrier) and v2 (canonical, parsed condition AST, sorted-union barrier); (c) run/resume/next/submit/ready/claim should note they accept both v1 and v2 digests. These docs are NOT in the owned-files set, so the deltas are reported here rather than applied."
+        }
+    ],
+    "unresolved": [],
+    "protocol_deviations": [
+        "The issue's sealed plan references src/atlas/ paths; these were updated to src/tahoe/ per the #53 rebrand (logic unchanged, only string literals updated). The seal digest differs from the issue's 17bd48... because of this path rename — verified that our program.think seals to 2be6fa9b... and that this is the correct digest for the rebranded version.",
+        "CLI --v2 flag and dual-version run verification: the issue requests CLI 'tahoe seal --v2' and 'run verification accepts both versions', but src/tahoe/cli.py is not in the owned files. The v2 API is fully exposed via seal_digest(program, version=2) and canonical_json_v2(program) in tahoe.syntax. The CLI changes are documented as a limitation.",
+        "Model change: the issue suggests storing the condition AST on Conditional, but src/tahoe/syntax/model.py is not in the owned files. The v2 path re-derives the AST from the raw condition text using parse_condition at sealing time. Functionally equivalent — the canonical form is identical whether the AST is stored or re-derived."
+    ]
+}
