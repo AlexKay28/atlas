@@ -1,0 +1,47 @@
+{
+  "task": "issue #48: CLI ergonomics — --json modes, distinct exit codes, consistent program/--seal args, seal --check from #49",
+  "run_id": "sprint1-48-cli-ergo",
+  "seal": "a0729bcb3ea0184d1bcd9db9d26b46e813f8b5ac80076527c7ab98cad647a0b5",
+  "terminal_status": "succeeded",
+  "steps_planned": 18,
+  "steps_executed": 18,
+  "acceptance": [
+    {
+      "criterion": "--json outputs parse with json.tool for all five commands (status, audit, learn, bench, run)",
+      "passed": true,
+      "evidence": "tests/test_cli_ergo.py: test_json_status_parses, test_json_audit_parses, test_json_bench_parses, test_json_run_parses, test_json_learn_parses — all pass"
+    },
+    {
+      "criterion": "one test per exit code (0/1/2/3/4)",
+      "passed": true,
+      "evidence": "test_exit_code_0_success, test_exit_code_1_usage_error, test_exit_code_2_run_failed, test_exit_code_3_real_audit_violation, test_exit_code_4_seal_mismatch — all pass"
+    },
+    {
+      "criterion": "run without --seal fails at argparse (exit 2, usage shown)",
+      "passed": true,
+      "evidence": "test_run_without_seal_fails_at_argparse — asserts SystemExit(2) and usage in stderr"
+    },
+    {
+      "criterion": "seal --check correct -> 0, tampered -> 4",
+      "passed": true,
+      "evidence": "test_seal_check_correct (rc == 0, 'seal matches'), test_seal_check_tampered (rc == 4, 'drifted')"
+    },
+    {
+      "criterion": "existing suite green (update exit-code assertions where semantics changed)",
+      "passed": true,
+      "evidence": "826 passed in 20.05s (809 existing + 17 new); 5 existing test files updated with new exit codes"
+    },
+    {
+      "criterion": "--out confirmations routed to stderr",
+      "passed": true,
+      "evidence": "test_bench_out_confirmation_on_stderr, test_learn_out_confirmation_on_stderr — both pass"
+    },
+    {
+      "criterion": "git status --porcelain shows ONLY owned files",
+      "passed": true,
+      "evidence": "git status shows: cli.py, learn.py, test_cli_ergo.py, demo/runs/sprint1-48-cli-ergo/, and 5 existing test files with exit-code updates"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": []
+}

@@ -428,7 +428,7 @@ class TestCliResume:
             "--seal", "0" * 64 if seal != "0" * 64 else "1" * 64,
         ])
         err = capsys.readouterr().err
-        assert rc == 1
+        assert rc == 4
         assert "seal digest mismatch" in err
         assert not (tmp_path / "events.db").exists() or True
         # the store was never created for the resume call
@@ -436,13 +436,14 @@ class TestCliResume:
 
     def test_resume_requires_seal(self, tmp_path, capsys):
         self._seal(tmp_path, capsys)
-        rc = cli_main([
-            "resume", "--db", str(tmp_path / "events.db"),
-            "--run-id", "cli-run", "--program", str(tmp_path / "demo.think"),
-        ])
+        with pytest.raises(SystemExit) as exc_info:
+            cli_main([
+                "resume", "--db", str(tmp_path / "events.db"),
+                "--run-id", "cli-run", "--program", str(tmp_path / "demo.think"),
+            ])
+        assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert rc == 1
-        assert "--seal is required" in err
+        assert "--seal" in err or "required" in err
 
     def test_sealed_program_digest_stable(self, tmp_path):
         program = parse_three_step()

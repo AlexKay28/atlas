@@ -160,7 +160,7 @@ def test_edit_traversal_fails_the_run_coherently(tmp_path, program):
     workspace.mkdir()
     db, rc = run_program(tmp_path, program, workspace=workspace)
 
-    assert rc == 1
+    assert rc == 2
     events = events_of(db, "run-1")
     assert events[-1].event_type is EventType.RUN_FINISHED
     assert events[-1].payload["status"] == "failed"
@@ -193,7 +193,7 @@ def test_traversal_failure_cancels_following_steps(tmp_path):
         tmp_path, TRAVERSAL_PROGRAM, workspace=workspace, run_id="run-esc"
     )
 
-    assert rc == 1
+    assert rc == 2
     events = events_of(db, "run-esc")
     assert not (tmp_path / "escaped.txt").exists()
     echo_events = [

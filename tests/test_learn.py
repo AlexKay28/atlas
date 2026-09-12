@@ -236,8 +236,8 @@ def test_cli_learn_out_writes_file(synthetic_runs: Path, capsys: pytest.CaptureF
     out_path = tmp_path / "report.md"
     rc = main(["learn", "--runs", str(synthetic_runs), "--out", str(out_path)])
     assert rc == 0
-    out = capsys.readouterr().out
-    assert str(out_path) in out
+    captured = capsys.readouterr()
+    assert str(out_path) in captured.err
     written = out_path.read_text(encoding="utf-8")
     assert "tikhon learn — mined run report" in written
     assert written == mine_run_directory(synthetic_runs).to_markdown()

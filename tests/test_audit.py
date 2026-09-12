@@ -384,7 +384,7 @@ def test_cli_audit_violated_run_exits_one_with_seq_refs(tmp_path, capsys):
     rc = main(["audit", "--db", str(tmp_path / "events.db"),
                "--run-id", RUN_ID])
     captured = capsys.readouterr()
-    assert rc == 1
+    assert rc == 3
     assert "validation_passed_after_failed" in captured.out
     assert str(injected.seq) in captured.out
     assert str(failed.seq) in captured.out

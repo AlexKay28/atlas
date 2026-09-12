@@ -1,7 +1,28 @@
 """Command-line interface for tikhon (docs/spec/02-command-catalog.md).
 
-Commands: lint, seal, run, resume, status, events, audit, learn, next,
-submit, ready, claim, renew.  Uses argparse and the standard library only.
+Commands: lint, seal, run, resume, status, events, audit, learn, bench,
+next, submit, ready, claim, renew.  Uses argparse and the standard library
+only.
+
+Exit codes (issue #48):
+    0  success
+    1  usage / input error (missing file, bad argument value, malformed program)
+    2  program execution failed (run/resume coordinator raised, worker error)
+    3  audit violations found
+    4  seal digest mismatch
+
+argparse itself exits 2 for syntax errors (missing required arguments,
+unknown options); this is distinct from the application-level exit 2 for
+run failures.
+
+Program argument: ``run`` accepts a positional ``program`` argument;
+all other subcommands use ``--program``.  ``--seal`` is required at the
+argparse level on every subcommand that verifies it (run, resume, next,
+ready, claim, renew).
+
+``--json`` is available on status, audit, learn, bench, and run: it emits
+machine-readable JSON on stdout.  ``--out`` file-path confirmations are
+always routed to stderr so stdout stays single-format.
 """
 
 from __future__ import annotations
@@ -418,15 +439,22 @@ def _cmd_seal(args: argparse.Namespace) -> int:
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(seal_digest(program))
+    digest = seal_digest(program)
+    if args.check is not None:
+        if digest == args.check:
+            print("seal matches")
+            return 0
+        else:
+            print(
+                f"error: seal drifted: expected {digest}, got {args.check}",
+                file=sys.stderr,
+            )
+            return 4
+    print(digest)
     return 0
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    if not args.seal:
-        print("error: --seal is required for run", file=sys.stderr)
-        return 1
-
     try:
         text = _load_source(args.program)
         program = parse_program(text)
@@ -443,7 +471,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             f"error: seal digest mismatch: expected {actual_digest}, got {args.seal}",
             file=sys.stderr,
         )
-        return 1
+        return 4
 
     # Guard before any run state exists: a misconfigured model worker must
     # fail clearly without creating a run (same guard style as --seal).
@@ -490,23 +518,27 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         store.close()
         memory.close()
-        return 1
+        return 2
     finally:
         store.close()
         memory.close()
 
     status = result.get("status", "unknown")
-    print(status)
-    if status == "succeeded":
-        print("100%")
-    return 0 if status == "succeeded" else 1
+    if args.json:
+        payload = {
+            "status": status,
+            "run_id": args.run_id,
+            "percent_complete": 100 if status == "succeeded" else 0,
+        }
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(status)
+        if status == "succeeded":
+            print("100%")
+    return 0 if status == "succeeded" else 2
 
 
 def _cmd_resume(args: argparse.Namespace) -> int:
-    if not args.seal:
-        print("error: --seal is required for resume", file=sys.stderr)
-        return 1
-
     try:
         text = _load_source(args.program)
         program = parse_program(text)
@@ -523,7 +555,7 @@ def _cmd_resume(args: argparse.Namespace) -> int:
             f"error: seal digest mismatch: expected {actual_digest}, got {args.seal}",
             file=sys.stderr,
         )
-        return 1
+        return 4
 
     # Guard before touching the store: same guard style as --seal (issue #8).
     model_worker: ModelWorker | None = None
@@ -573,7 +605,7 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         store.close()
         memory.close()
-        return 1
+        return 2
     finally:
         store.close()
         memory.close()
@@ -582,7 +614,7 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     print(status)
     if status == "succeeded":
         print("100%")
-    return 0 if status == "succeeded" else 1
+    return 0 if status == "succeeded" else 2
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -607,6 +639,26 @@ def _cmd_status(args: argparse.Namespace) -> int:
     completed = profile["counts"]["completed"]
     percent = profile["percent_complete"]
     current_task = profile["current_task"]
+
+    if args.json:
+        task_text = None
+        if current_task:
+            task = ledger.tasks.get(current_task)
+            task_text = task.text if task else current_task
+        elif total > 0 and completed == total:
+            last_task = list(ledger.tasks.values())[-1]
+            task_text = last_task.text
+        payload = {
+            "run_id": args.run_id,
+            "status": run_info.get("status", "unknown") if isinstance(run_info, dict) else "unknown",
+            "percent_complete": round(percent, 1) if isinstance(percent, (int, float)) else 0,
+            "completed": completed,
+            "total": total,
+            "current_task": current_task,
+            "current_task_text": task_text,
+        }
+        print(json.dumps(payload, sort_keys=True))
+        return 0
 
     bar_width = 20
     filled = int(bar_width * completed / total) if total else 0
@@ -675,15 +727,16 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         return 1
     store.close()
 
-    if report.ok:
+    if args.json:
+        print(json.dumps(report.to_dict(), sort_keys=True))
+    elif report.ok:
         print("OK")
-        return 0
-
-    print(f"violations: {len(report.findings)}")
-    for finding in report.findings:
-        seqs = ", ".join(str(seq) for seq in finding.seqs)
-        print(f"- {finding.code} (seq: {seqs}): {finding.message}")
-    return 1
+    else:
+        print(f"violations: {len(report.findings)}")
+        for finding in report.findings:
+            seqs = ", ".join(str(seq) for seq in finding.seqs)
+            print(f"- {finding.code} (seq: {seqs}): {finding.message}")
+    return 0 if report.ok else 3
 
 
 def _cmd_learn(args: argparse.Namespace) -> int:
@@ -692,12 +745,15 @@ def _cmd_learn(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    markdown = report.to_markdown()
-    print(markdown)
+    if args.json:
+        print(json.dumps(report.to_dict(), sort_keys=True))
+    else:
+        markdown = report.to_markdown()
+        print(markdown)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
-            fh.write(markdown)
-        print(args.out)
+            fh.write(report.to_markdown())
+        print(f"wrote report to {args.out}", file=sys.stderr)
     return 0
 
 
@@ -709,33 +765,38 @@ def _cmd_bench(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    markdown = report.to_markdown()
-    print(markdown)
+    if args.json:
+        print(report.to_json())
+    else:
+        markdown = report.to_markdown()
+        print(markdown)
     if args.out:
         try:
             with open(args.out, "w", encoding="utf-8") as fh:
-                fh.write(markdown)
+                fh.write(report.to_markdown())
         except OSError as exc:
             print(f"error: cannot write report: {exc}", file=sys.stderr)
             return 1
-        print(args.out)
+        print(f"wrote report to {args.out}", file=sys.stderr)
     return 0
 
 
-def _load_validated_program(program_path: str, seal: str | None) -> Any:
+def _load_validated_program(program_path: str, seal: str | None) -> tuple[Any, int]:
     """Parse, seal-verify and validate a program (run's guard style).
 
-    Returns the parsed program or ``None`` after printing the error.
+    Returns ``(program, 0)`` on success or ``(None, exit_code)`` after
+    printing the error.  Exit codes: 1 for parse/file/validation errors,
+    4 for seal digest mismatch.
     """
     try:
         text = _load_source(program_path)
         program = parse_program(text)
     except ParseError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return None
+        return None, 1
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return None
+        return None, 1
     if seal is not None:
         actual_digest = seal_digest(program)
         if seal != actual_digest:
@@ -744,13 +805,13 @@ def _load_validated_program(program_path: str, seal: str | None) -> Any:
                 f" got {seal}",
                 file=sys.stderr,
             )
-            return None
+            return None, 4
     try:
         validate_program(program, known_commands=_builtin_command_names())
     except ParseError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return None
-    return program
+        return None, 1
+    return program, 0
 
 
 def _open_external_driver(args: argparse.Namespace, program: Any) -> Any:
@@ -792,12 +853,9 @@ def _close_driver(store: Any, memory: Any) -> None:
 
 
 def _cmd_next(args: argparse.Namespace) -> int:
-    if not args.seal:
-        print("error: --seal is required for next", file=sys.stderr)
-        return 1
-    program = _load_validated_program(args.program, args.seal)
+    program, code = _load_validated_program(args.program, args.seal)
     if program is None:
-        return 1
+        return code
 
     store, memory, driver = _open_external_driver(args, program)
     if driver is None:
@@ -815,12 +873,9 @@ def _cmd_next(args: argparse.Namespace) -> int:
 
 def _cmd_ready(args: argparse.Namespace) -> int:
     # `ready` claims anonymously; `claim` carries --claimant (same body).
-    if not args.seal:
-        print("error: --seal is required for ready", file=sys.stderr)
-        return 1
-    program = _load_validated_program(args.program, args.seal)
+    program, code = _load_validated_program(args.program, args.seal)
     if program is None:
-        return 1
+        return code
 
     store, memory, driver = _open_external_driver(args, program)
     if driver is None:
@@ -857,9 +912,9 @@ def _cmd_submit(args: argparse.Namespace) -> int:
 
     program = None
     if args.program:
-        program = _load_validated_program(args.program, args.seal)
+        program, code = _load_validated_program(args.program, args.seal)
         if program is None:
-            return 1
+            return code
 
     try:
         store = EventStore(args.db)
@@ -909,12 +964,9 @@ def _cmd_submit(args: argparse.Namespace) -> int:
 
 
 def _cmd_renew(args: argparse.Namespace) -> int:
-    if not args.seal:
-        print("error: --seal is required for renew", file=sys.stderr)
-        return 1
-    program = _load_validated_program(args.program, args.seal)
+    program, code = _load_validated_program(args.program, args.seal)
     if program is None:
-        return 1
+        return code
 
     store, memory, driver = _open_external_driver(args, program)
     if driver is None:
@@ -944,13 +996,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_seal = sub.add_parser("seal", help="Print the sealed sha256 digest")
     p_seal.add_argument("program", help="Path to .think source file")
+    p_seal.add_argument(
+        "--check",
+        default=None,
+        help=(
+            "Verify the program's seal against this digest; exits 0 if"
+            " it matches, 4 if it has drifted (issue #49)"
+        ),
+    )
     p_seal.set_defaults(func=_cmd_seal)
 
     p_run = sub.add_parser("run", help="Execute a sealed program")
     p_run.add_argument("program", help="Path to .think source file")
     p_run.add_argument("--db", required=True, help="Path to event store database")
     p_run.add_argument("--run-id", required=True, help="Unique run identifier")
-    p_run.add_argument("--seal", default=None, help="Sealed digest required before run")
+    p_run.add_argument(
+        "--seal", required=True, help="Sealed digest required before run"
+    )
     p_run.add_argument(
         "--workspace",
         default=None,
@@ -968,6 +1030,12 @@ def _build_parser() -> argparse.ArgumentParser:
             " or model routing via TIKHON_* environment configuration"
         ),
     )
+    p_run.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit machine-readable JSON on stdout (issue #48)",
+    )
     p_run.set_defaults(func=_cmd_run)
 
     p_resume = sub.add_parser(
@@ -980,7 +1048,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--program", required=True, help="Path to the sealed .think source file"
     )
     p_resume.add_argument(
-        "--seal", default=None, help="Sealed digest, verified exactly like run"
+        "--seal", required=True, help="Sealed digest, verified exactly like run"
     )
     p_resume.add_argument(
         "--workspace",
@@ -1004,6 +1072,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="Print run status")
     p_status.add_argument("--db", required=True, help="Path to event store database")
     p_status.add_argument("--run-id", required=True, help="Run identifier")
+    p_status.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit machine-readable JSON on stdout (issue #48)",
+    )
     p_status.set_defaults(func=_cmd_status)
 
     p_events = sub.add_parser("events", help="Print ordered event log")
@@ -1016,6 +1090,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_audit.add_argument("--db", required=True, help="Path to event store database")
     p_audit.add_argument("--run-id", required=True, help="Run identifier")
+    p_audit.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit machine-readable JSON on stdout (issue #48)",
+    )
     p_audit.set_defaults(func=_cmd_audit)
 
     p_learn = sub.add_parser(
@@ -1027,6 +1107,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_learn.add_argument(
         "--out", default=None, help="Optional path to write the markdown report"
+    )
+    p_learn.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit machine-readable JSON on stdout (issue #48)",
     )
     p_learn.set_defaults(func=_cmd_learn)
 
@@ -1058,6 +1144,12 @@ def _build_parser() -> argparse.ArgumentParser:
             " (default 0.04); lower it for a fast smoke run"
         ),
     )
+    p_bench.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit machine-readable JSON on stdout (issue #48)",
+    )
     p_bench.set_defaults(func=_cmd_bench)
 
     p_next = sub.add_parser(
@@ -1073,7 +1165,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--program", required=True, help="Path to the sealed .think source file"
     )
     p_next.add_argument(
-        "--seal", default=None, help="Sealed digest, verified exactly like run"
+        "--seal", required=True, help="Sealed digest, verified exactly like run"
     )
     p_next.add_argument(
         "--workspace",
@@ -1149,7 +1241,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--program", required=True, help="Path to the sealed .think source file"
     )
     p_ready.add_argument(
-        "--seal", default=None, help="Sealed digest, verified exactly like run"
+        "--seal", required=True, help="Sealed digest, verified exactly like run"
     )
     p_ready.add_argument(
         "--workspace",
@@ -1183,7 +1275,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--program", required=True, help="Path to the sealed .think source file"
     )
     p_claim.add_argument(
-        "--seal", default=None, help="Sealed digest, verified exactly like run"
+        "--seal", required=True, help="Sealed digest, verified exactly like run"
     )
     p_claim.add_argument(
         "--workspace",
@@ -1222,7 +1314,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--program", required=True, help="Path to the sealed .think source file"
     )
     p_renew.add_argument(
-        "--seal", default=None, help="Sealed digest, verified exactly like run"
+        "--seal", required=True, help="Sealed digest, verified exactly like run"
     )
     p_renew.add_argument(
         "--workspace",
