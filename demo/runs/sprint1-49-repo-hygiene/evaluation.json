@@ -1,0 +1,87 @@
+{
+  "task": "demo/tasks/49-repo-hygiene (GitHub issue #49): pyproject metadata + dynamic version, CHANGELOG, CLI reference docs, doc tests",
+  "run_id": "sprint1-49-repo-hygiene",
+  "seal": "4df9f30ffd67d26e3b27275c4c42ebba65d3edb756dedaae31177569f72ec525",
+  "terminal_status": "succeeded",
+  "steps_planned": 18,
+  "steps_executed": 18,
+  "acceptance": [
+    {
+      "criterion": "pyproject.toml: dynamic = [\"version\"] + [tool.setuptools.dynamic] version = {attr = \"tikhon.__version__\"}",
+      "passed": true,
+      "evidence": "pyproject.toml line 7: dynamic = [\"version\"]; lines 36-37: [tool.setuptools.dynamic] version = {attr = \"tikhon.__version__\"}"
+    },
+    {
+      "criterion": "pyproject.toml: authors, license = \"MIT\", license-files = [\"LICENSE\"], classifiers (Development Status 3-Alpha, Python 3.10-3.13, Topic), keywords",
+      "passed": true,
+      "evidence": "pyproject.toml: authors = [{name = \"AlexKay28\", ...}], license = \"MIT\", license-files = [\"LICENSE\"], classifiers list includes Development Status :: 3 - Alpha, Programming Language :: Python :: 3.10/3.11/3.12/3.13, Topic entries"
+    },
+    {
+      "criterion": "pyproject.toml: [project.urls] Homepage = https://github.com/AlexKay28/tikhon, console script and deps kept as-is",
+      "passed": true,
+      "evidence": "pyproject.toml: Homepage = \"https://github.com/AlexKay28/tikhon\" in [project.urls]; tikhon = \"tikhon.cli:main\" in [project.scripts]; no dependency changes"
+    },
+    {
+      "criterion": "CHANGELOG.md: Keep-a-Changelog format; [0.1.0] section backfilled from issue-numbered git history (#1-#27)",
+      "passed": true,
+      "evidence": "CHANGELOG.md has 'Keep a Changelog' reference; [0.1.0] section lists all 15 commits mapping to issues #1-#27 with Added subsection"
+    },
+    {
+      "criterion": "CHANGELOG.md: [Unreleased] section listing sprint issues #28-#49 by title",
+      "passed": true,
+      "evidence": "CHANGELOG.md [Unreleased] section lists issues #28 through #49 with titles and a registry vocabulary subsection"
+    },
+    {
+      "criterion": "README.md: CLI Reference section — table of ALL registered subcommands (run, seal, lint, status, events, audit, learn, resume, next, submit, ready, claim, bench) with required flags and purpose",
+      "passed": true,
+      "evidence": "README.md CLI Reference table has 13 rows matching all subcommands from _build_parser(); tests/test_docs.py::test_all_cli_subcommands_in_readme passes"
+    },
+    {
+      "criterion": "README.md: link CHANGELOG and the design doc; keep existing quickstart",
+      "passed": true,
+      "evidence": "README.md CLI Reference section links CHANGELOG.md and docs/design/01-reasoning-language-foundation.md; Quick Start section unchanged; tests/test_docs.py::test_readme_links_changelog passes"
+    },
+    {
+      "criterion": "docs: fix '22 commands' → 23 in docs/design/01 (both places)",
+      "passed": true,
+      "evidence": "docs/design/01-reasoning-language-foundation.md line 54: 'frozen at 23 commands'; line 261: '23-command registry'; tests/test_docs.py::test_design_doc_command_count_matches_registry passes"
+    },
+    {
+      "criterion": "docs: add or extend a CLI reference page consistent with the README table",
+      "passed": true,
+      "evidence": "docs/cli-reference.md created with full subcommand catalog table, command groups, and registry vocabulary section; linked from docs/README.md document map"
+    },
+    {
+      "criterion": "tests/test_docs.py: (1) every subcommand name from tikhon.cli._build_parser() appears in README's CLI reference",
+      "passed": true,
+      "evidence": "tests/test_docs.py::test_all_cli_subcommands_in_readme extracts subcommands from _build_parser() and checks all appear in README table; passes with 13/13"
+    },
+    {
+      "criterion": "tests/test_docs.py: (2) the design-doc command count matches len(builtin_registry().names())",
+      "passed": true,
+      "evidence": "tests/test_docs.py::test_design_doc_command_count_matches_registry checks both 'frozen at N commands' and 'N-command registry' patterns against len(builtin_registry().names())=23; passes"
+    },
+    {
+      "criterion": "tests/test_docs.py: (3) CHANGELOG exists and references the registry vocabulary sections",
+      "passed": true,
+      "evidence": "tests/test_docs.py::test_changelog_exists, ::test_changelog_has_keep_a_changelog_format, ::test_changelog_references_registry_vocabulary all pass; CHANGELOG has registry vocabulary section listing all 23 command names"
+    },
+    {
+      "criterion": "Full pytest suite green (baseline 760 — must stay green)",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q → 766 passed in 21.01s (760 baseline + 6 new)"
+    },
+    {
+      "criterion": "git status --porcelain shows ONLY owned files",
+      "passed": true,
+      "evidence": "git status --porcelain shows: M README.md, M docs/README.md, M docs/design/01-reasoning-language-foundation.md, M pyproject.toml, ?? CHANGELOG.md, ?? demo/runs/sprint1-49-repo-hygiene/, ?? docs/cli-reference.md, ?? tests/test_docs.py — all are owned files"
+    },
+    {
+      "criterion": "No git commit/push",
+      "passed": true,
+      "evidence": "No git commit or push commands executed"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": []
+}
