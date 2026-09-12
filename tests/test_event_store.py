@@ -7,8 +7,8 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from tikhon.runtime import EventStore, EventType
-from tikhon.state import StateDelta
+from atlas.runtime import EventStore, EventType
+from atlas.state import StateDelta
 
 
 def make_delta() -> StateDelta:

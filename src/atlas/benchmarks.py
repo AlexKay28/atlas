@@ -1,4 +1,4 @@
-"""Benchmark harness for the tikhon execution model (issue #26, epic #27 step 6).
+"""Benchmark harness for the ATLAS execution model (issue #26, epic #27 step 6).
 
 Measures the same program under a sequential baseline and a configured
 bounded-parallel variant in fresh temporary :class:`EventStore` s, with
@@ -14,7 +14,7 @@ runs, per-child steps from ``CHILD_PLAN_AUTHORED`` + child ledgers).
 
 All numbers are averaged over repeated trials with min/max spread.
 Deterministic sleep-simulated evidence only: live OpenCode/model numbers
-require operator credentials (``TIKHON_*`` environment) and are produced
+require operator credentials (``ATLAS_*`` environment) and are produced
 by the same harness — same programs, same accounting — once configured.
 """
 
@@ -28,13 +28,13 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from tikhon.budgets import ExecutionBudget
-from tikhon.envelope import build_task_envelope
-from tikhon.registry import builtin_registry
-from tikhon.runtime import EventStore, SequentialCoordinator
-from tikhon.runtime.coordinator import DeterministicWorker, count_plan_steps
-from tikhon.syntax import parse_program
-from tikhon.syntax.model import Invocation, Program
+from atlas.budgets import ExecutionBudget
+from atlas.envelope import build_task_envelope
+from atlas.registry import builtin_registry
+from atlas.runtime import EventStore, SequentialCoordinator
+from atlas.runtime.coordinator import DeterministicWorker, count_plan_steps
+from atlas.syntax import parse_program
+from atlas.syntax.model import Invocation, Program
 
 __all__ = [
     "BenchmarkCase",
@@ -299,15 +299,15 @@ class BenchmarkReport:
     def to_markdown(self) -> str:
         """Deterministic markdown rendering (pure function of the data)."""
         lines: list[str] = []
-        lines.append("# Tikhon Benchmark Report (deterministic, sleep-simulated)")
+        lines.append("# ATLAS Benchmark Report (deterministic, sleep-simulated)")
         lines.append("")
         lines.append(
             "Deterministic **sleep-simulated evidence** produced by"
-            " `tikhon bench` (issue #26): every worker handler sleeps a"
+            " `atlas bench` (issue #26): every worker handler sleeps a"
             " fixed per-step latency, so measured wall-time differences"
             " isolate the coordinator's overlap behavior (frontier"
             " dispatch, PAR branch pools).  **Live OpenCode/model numbers"
-            " require operator credentials (TIKHON_* env) and are produced"
+            " require operator credentials (ATLAS_* env) and are produced"
             " by the same harness** — same programs, same accounting —"
             " once configured."
         )
@@ -473,7 +473,7 @@ class BenchmarkReport:
                 "usage": _usage_json(base, variant),
             })
         report = {
-            "label": "Tikhon Benchmark Report (deterministic, sleep-simulated)",
+            "label": "ATLAS Benchmark Report (deterministic, sleep-simulated)",
             "repetitions": self.repetitions,
             "cases": cases_json,
         }
@@ -820,7 +820,7 @@ def run_benchmark(
                 f" {type(case).__name__}"
             )
     results: list[CaseResult] = []
-    with tempfile.TemporaryDirectory(prefix="tikhon-bench-") as workdir:
+    with tempfile.TemporaryDirectory(prefix="atlas-bench-") as workdir:
         for case in cases:
             reps = (
                 repetitions if repetitions is not None else case.repetitions

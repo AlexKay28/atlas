@@ -9,8 +9,8 @@ import json
 
 import pytest
 
-from tikhon import cli
-from tikhon.benchmarks import (
+from atlas import cli
+from atlas.benchmarks import (
     BenchmarkCase,
     BenchmarkReport,
     CaseRegistry,
@@ -23,10 +23,10 @@ from tikhon.benchmarks import (
     run_benchmark,
     sleep_worker,
 )
-from tikhon.budgets import ExecutionBudget
-from tikhon.runtime import EventStore, SequentialCoordinator
-from tikhon.runtime.coordinator import DeterministicWorker
-from tikhon.syntax import parse_program
+from atlas.budgets import ExecutionBudget
+from atlas.runtime import EventStore, SequentialCoordinator
+from atlas.runtime.coordinator import DeterministicWorker
+from atlas.syntax import parse_program
 
 TINY_LATENCY = 0.003
 
@@ -184,7 +184,7 @@ def test_markdown_contains_labeled_tables_and_evidence_label():
     assert "Context cost" in markdown
     assert "Delegation granularity" in markdown
     assert "sleep-simulated" in markdown
-    assert "TIKHON_*" in markdown
+    assert "ATLAS_*" in markdown
 
 
 def test_report_spread_brackets_the_mean():
@@ -202,7 +202,7 @@ def test_report_spread_brackets_the_mean():
 
 def test_sleep_worker_covers_every_registered_command():
     worker = sleep_worker(0.0)
-    from tikhon.registry import builtin_registry
+    from atlas.registry import builtin_registry
 
     assert worker.commands == set(builtin_registry().names())
     result = worker.execute("define", {"request": "x"})
@@ -503,9 +503,9 @@ def test_usage_reporting_worker_factory_shows_nonzero_usage():
                     "cost_usd": 0.001,
                 },
             }))(name)
-            for name in __import__("tikhon.registry", fromlist=["builtin_registry"]).builtin_registry().names()
+            for name in __import__("atlas.registry", fromlist=["builtin_registry"]).builtin_registry().names()
         }
-        handlers["delegate"] = lambda **kw: __import__("tikhon.benchmarks", fromlist=["DELEGATE_SAMPLE_PLAN"]).DELEGATE_SAMPLE_PLAN
+        handlers["delegate"] = lambda **kw: __import__("atlas.benchmarks", fromlist=["DELEGATE_SAMPLE_PLAN"]).DELEGATE_SAMPLE_PLAN
         return DeterministicWorker(handlers=handlers)
 
     case = BenchmarkCase(

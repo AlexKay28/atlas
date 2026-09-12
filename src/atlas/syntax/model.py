@@ -1,4 +1,4 @@
-"""Syntax model for tikhon programs."""
+"""Syntax model for ATLAS programs."""
 
 from dataclasses import dataclass
 

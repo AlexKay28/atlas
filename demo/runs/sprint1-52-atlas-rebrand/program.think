@@ -1,0 +1,52 @@
+# Tikhon run for GitHub issue #52: rebrand tikhon -> ATLAS
+# (Agent Task Language & Audit System).
+#
+# Sealed BEFORE any source edit (tikhon protocol step 2). Uses only the
+# canonical grammar and registered commands. The plan covers: package
+# rename (git mv src/tikhon src/atlas), import updates, pyproject.toml
+# metadata, README rebrand, docs updates, skill rename, test updates,
+# CHANGELOG entry, grep gate test, seal verification, and smoke test.
+# Historical demo/runs/** are IMMUTABLE and exempt from the rename.
+
+PROGRAM sprint1_52_atlas_rebrand VERSION 1.0
+
+INPUT
+    G.task = "Rebrand the project from tikhon to ATLAS (Agent Task Language & Audit System): git mv src/tikhon to src/atlas, update all imports/docstrings/CLI prog/help strings/error messages, update pyproject.toml (name, scripts, urls), README.md (header + tagline + prog name), docs (titles, paths, examples), CHANGELOG.md (Unreleased Changed entry only), .opencode/skills/tikhon-demo to atlas-demo, tests (package references), add a grep gate test asserting zero tikhon references in live code, verify all 39 historical seals reproduce byte-identically, run full pytest suite green, and smoke test atlas lint on a historical program.think"
+    C.scope = "src/tikhon/**, src/atlas/**, pyproject.toml, README.md, docs/**, CHANGELOG.md, .opencode/skills/tikhon-demo/**, .opencode/skills/atlas-demo/**, tests/**, demo/runs/sprint1-52-atlas-rebrand/**"
+    C.forbidden = "demo/runs/** EXCEPT sprint1-52-atlas-rebrand/ are immutable historical evidence; do not edit, rename, or touch their contents or paths; .claude/**, .skill-work/**, node_modules/**, .git/** are forbidden; no GitHub operations; no git commit/push"
+    C.grammar = "the ATLAS language grammar itself does not change; only package names, CLI prog names, docstrings, help strings, error messages, URLs, and branding text change"
+    Q.env = "TIKHON_* environment variable names in source code must also be renamed to ATLAS_* consistently across src, tests, and docs"
+
+step.frame: DO define(request = G.task) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "rename_map") -> E.findings
+step.decompose: DO decompose(goal = G.plan, protocol = "mechanical_rename") -> G.subgoals
+step.hypothesize: DO hypothesize(question = G.task, evidence = E.findings) -> H.theses
+step.calculate: DO calculate(expression = "file_count", values = {"src": 0, "tests": 0, "docs": 0, "other": 0}) -> F.metrics
+step.compare: DO compare(options = H.theses, criteria = C.grammar) -> V.compared
+step.rank: DO rank(options = V.compared, criteria = C.grammar) -> R.ranked
+step.challenge: DO challenge(claim = H.theses, evidence = E.findings) -> V.challenge
+step.choose: DO choose(valid_options = R.ranked, evidence = V.challenge) -> D.choice
+step.remember: DO remember(key = "issue52-rebrand", value = D.choice) -> K.record
+step.recall: DO recall(query = "issue52-rebrand") -> K.recalled
+step.solve: DO solve(problem = G.task, domain = "mechanical_rename") -> U.solution
+step.prove: DO prove(statement = C.grammar, language = "atlas_contract") -> A.proof
+step.review: DO review(artifact_refs = ART.sources, focus = "rename_completeness") -> V.review
+step.design: DO summarize(source_refs = V.review, budget = 8000) -> P.design
+step.git_mv: DO edit(path = "src/tikhon to src/atlas", content = "git mv preserving history") -> ART.rename
+step.imports: DO edit(path = "src/atlas/**", content = "update all import statements from tikhon to atlas") -> ART.imports
+step.pyproject: DO edit(path = "pyproject.toml", content = "name=atlas, scripts=atlas, urls=github.com/AlexKay28/atlas, version=atlas.__version__") -> ART.pyproject
+step.readme: DO edit(path = "README.md", content = "ATLAS header + tagline + atlas prog name + CLI table") -> ART.readme
+step.docs: DO edit(path = "docs/**", content = "rename tikhon references to ATLAS, update paths and examples") -> ART.docs
+step.skill: DO edit(path = ".opencode/skills/tikhon-demo to atlas-demo", content = "git mv + SKILL.md name/description/paths") -> ART.skill
+step.tests: DO edit(path = "tests/**", content = "update package imports and references from tikhon to atlas") -> ART.tests
+step.changelog: DO edit(path = "CHANGELOG.md", content = "Unreleased Changed Renamed entry only") -> ART.changelog
+step.grep_gate: DO test(path = "tests/test_branding.py", timeout_seconds = 600) -> V.grep
+step.seals: DO check(artifact = "demo/runs/*/seal.txt", predicate = "seal_reproducible") -> V.seals
+step.suite: DO test(path = "tests/", timeout_seconds = 600) -> V.tests
+step.smoke: DO check(artifact = "atlas lint", predicate = "exit_zero") -> V.smoke
+step.report: DO report(committed_refs = "all artifacts", format = "markdown") -> ART.report
+step.verify: DO verify(goal = G.task, evidence = "full suite green + all seals verified + grep gate passed") -> V.result
+
+RETURN P.design, V.result, V.seals, V.smoke, V.tests, V.grep, F.metrics, U.solution, A.proof

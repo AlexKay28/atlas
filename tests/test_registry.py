@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from tikhon.registry import (
+from atlas.registry import (
     Budget,
     CommandSpec,
     ContractError,

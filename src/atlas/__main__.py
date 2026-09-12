@@ -1,4 +1,4 @@
-from tikhon.cli import main
+from atlas.cli import main
 
 
 if __name__ == "__main__":

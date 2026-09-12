@@ -2,7 +2,7 @@ import dataclasses
 
 import pytest
 
-from tikhon.runtime.tasks import Task, TaskStatus, TaskLedger, TaskLedgerError
+from atlas.runtime.tasks import Task, TaskStatus, TaskLedger, TaskLedgerError
 
 
 def make_task(**overrides):

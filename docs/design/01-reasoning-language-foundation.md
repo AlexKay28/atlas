@@ -8,14 +8,14 @@
 
 ## 1. Design Thesis
 
-Tikhon optimizes **useful reasoning per token**, not visual brevity. A compact trace
+ATLAS optimizes **useful reasoning per token**, not visual brevity. A compact trace
 that omits a distinction the runtime needs — observation vs assumption vs derivation, or
 `motivated-by` vs entailment — is a failure even when it is short. Three commitments
 follow:
 
 1. **Preserve decision-relevant distinctions.** The state namespace already separates
    observation (`E.*`), hypothesis (`H.*`), assumption (`A.*`), decision (`D.*`), and
-   verification (`V.*`) as typed references (`src/tikhon/syntax/parser.py:19`). This
+   verification (`V.*`) as typed references (`src/atlas/syntax/parser.py:19`). This
    separation is the payload of the language; compression must never merge it.
 2. **Expand difficult steps on demand.** Compact form is the default, but every compact
    construct has a recoverable expanded form: a `CALL protocol.x` line expands to the
@@ -38,24 +38,24 @@ sketch in the implemented grammar style (see `docs/spec/01-language-and-state.md
 full canonical sketch; SCATTER/GATHER and envelopes are planned via issues #4 and #18 and
 marked as such).
 
-| # | Source | Mechanism borrowed | Maps onto Tikhon | Syntax sketch |
+| # | Source | Mechanism borrowed | Maps onto ATLAS | Syntax sketch |
 | --- | --- | --- | --- | --- |
-| 1 | Iverson, *Notation as a Tool of Thought* (1980) | Composability, economy, suggestiveness; subordinating detail with recoverable definitions | Exists: commands compose through typed refs (`step.x: DO hypothesize(evidence = E.m) -> H.c`); `DONE` predicates subordinate detail (`DONE count(H.c) >= 2`, `src/tikhon/syntax/parser.py:590-647`) | New compact forms only with recoverable expansion, e.g. `DONE every(H.c, has("falsifier"))`; each alias documented with its expanded reading, adopted only after E1 |
+| 1 | Iverson, *Notation as a Tool of Thought* (1980) | Composability, economy, suggestiveness; subordinating detail with recoverable definitions | Exists: commands compose through typed refs (`step.x: DO hypothesize(evidence = E.m) -> H.c`); `DONE` predicates subordinate detail (`DONE count(H.c) >= 2`, `src/atlas/syntax/parser.py:590-647`) | New compact forms only with recoverable expansion, e.g. `DONE every(H.c, has("falsifier"))`; each alias documented with its expanded reading, adopted only after E1 |
 | 2 | Leibniz, *characteristica universalis / calculus ratiocinator* (17th c.) | Separate representation of claims from operations on them | Exists: three namespaces — uppercase keywords (`IF`, `DONE`, `CALL`), lowercase commands (`hypothesize`, `verify`), typed refs (`H.*`, `E.*`) (`docs/spec/01-language-and-state.md:13-17`) | Claims stay in typed state; control stays keyword-only. Motivates a lint rule rejecting control logic smuggled into argument prose |
-| 3 | Pospelov, *Ситуационное управление* (1986); semiotic models | Situation recognition selects applicable knowledge/action without a complete fixed model; representations are revisable | Exists: single-line `IF <cond> <stmt>` selects actions from committed state (`==`,`!=`,`count()`,`AND`,`OR`,`NOT`; no parentheses, `src/tikhon/syntax/parser.py:263-289`); `REVISE`/`RETIRE` clause revises the situation (`parser.py:29-41`) | Planned conditional re-planning step: `IF count(E.tests) == 0 DO decompose(goal = G.goal, protocol = "replan") -> G.plan2` |
-| 4 | Turchin, Refal / supercompilation, *The Phenomenon of Science* (1977) | Specialize general processes into named abstractions with preserved applicability conditions | Exists: `CALL protocol.name(args) -> targets` loads `protocols/<name>.think`, expands inline, bounded depth 8, no recursion (`src/tikhon/syntax/parser.py:50-54`, `src/tikhon/runtime/coordinator.py:57-67`, `protocols/framing.think`) | Motivates protocol specialization: a general `protocol.diagnose` variant pinned to a task family with applicability stated in its INPUT block and checked before expansion |
-| 5 | Vygotsky, *Мышление и речь* (1934) | Compact expression depends on shared context and recoverable references; emit updates, not re-narration | Exists: typed refs are the recoverable context; cross-run `KB.*` memory via `remember`/`recall` (`src/tikhon/memory.py`); event log replays full state (`src/tikhon/runtime/events.py`) | No new syntax. E5 tests whether ref-based updates survive truncation/handoff better than prose narration |
+| 3 | Pospelov, *Ситуационное управление* (1986); semiotic models | Situation recognition selects applicable knowledge/action without a complete fixed model; representations are revisable | Exists: single-line `IF <cond> <stmt>` selects actions from committed state (`==`,`!=`,`count()`,`AND`,`OR`,`NOT`; no parentheses, `src/atlas/syntax/parser.py:263-289`); `REVISE`/`RETIRE` clause revises the situation (`parser.py:29-41`) | Planned conditional re-planning step: `IF count(E.tests) == 0 DO decompose(goal = G.goal, protocol = "replan") -> G.plan2` |
+| 4 | Turchin, Refal / supercompilation, *The Phenomenon of Science* (1977) | Specialize general processes into named abstractions with preserved applicability conditions | Exists: `CALL protocol.name(args) -> targets` loads `protocols/<name>.think`, expands inline, bounded depth 8, no recursion (`src/atlas/syntax/parser.py:50-54`, `src/atlas/runtime/coordinator.py:57-67`, `protocols/framing.think`) | Motivates protocol specialization: a general `protocol.diagnose` variant pinned to a task family with applicability stated in its INPUT block and checked before expansion |
+| 5 | Vygotsky, *Мышление и речь* (1934) | Compact expression depends on shared context and recoverable references; emit updates, not re-narration | Exists: typed refs are the recoverable context; cross-run `KB.*` memory via `remember`/`recall` (`src/atlas/memory.py`); event log replays full state (`src/atlas/runtime/events.py`) | No new syntax. E5 tests whether ref-based updates survive truncation/handoff better than prose narration |
 | 6 | McCarthy, *Programs with Common Sense* (1959), Advice Taker | Declarative goals, constraints, knowledge; partially specified problems | Exists: `INPUT` block declares `G.*` goals and `C.*` constraints before any step; `STOP unresolved(D.x)` terminates on undischarged goals (`parser.py:43,63`) | Motivates leaving preconditions partially declared and letting workers gather evidence before the path is fixed |
-| 7 | Kowalski, *Algorithm = Logic + Control* (1979) | Separate what the problem is from how the search proceeds | Exists: deterministic control expressions vs worker judgment (`docs/spec/01-language-and-state.md:117-131`); per-command `RoutingPolicy` and `Budget` are control metadata, invisible to semantics (`src/tikhon/registry/spec.py`) | Motivates running identical programs under different `RoutingPolicy` settings and asserting identical committed state |
+| 7 | Kowalski, *Algorithm = Logic + Control* (1979) | Separate what the problem is from how the search proceeds | Exists: deterministic control expressions vs worker judgment (`docs/spec/01-language-and-state.md:117-131`); per-command `RoutingPolicy` and `Budget` are control metadata, invisible to semantics (`src/atlas/registry/spec.py`) | Motivates running identical programs under different `RoutingPolicy` settings and asserting identical committed state |
 | 8 | Peirce (abduction); Doyle, TMS (1979); de Kleer, ATMS (1986) | Distinguish observation/assumption/hypothesis/derivation/refutation; track support; on retraction invalidate dependents | Exists: `H.*` hypotheses from `hypothesize`, `challenge` command takes claim + evidence, `RETIRE refs` clause retires conclusions (`parser.py:29-41`); `A.*` assumptions are a reserved type | Motivates explicit dependency links: `RETIRE A.deploy` should mark conclusions that cite it stale; DELTA already carries `retire_nodes` with reasons (`docs/spec/01-language-and-state.md:202-217`) |
-| 9 | Russell & Wefald, *Do the Right Thing* (1991) | Computation itself is a decision with cost and expected benefit; cheap tests before expensive exploration | Exists: `Budget` per command (seconds, tokens, cost, attempts, output bytes); tier routing sends cheap checks to T0 executors (`src/tikhon/registry/enums.py:56-64`) | Motivates explicit expand/stop steps: `step.deepen: IF V.review.status == "low" DO challenge(claim = H.cause, evidence = E.tests) -> V.challenge` |
-| 10 | Newell, Soar / *Unified Theories of Cognition* (1990) | Impasse → subproblem → resolution → reusable rule, stored with applicability conditions | Exists: failure kinds per command with declared recovery (`FailureSpec`, `src/tikhon/registry/builtins.py`); `tikhon learn` mines recurring command sequences into protocol candidates, review-only promotion (`src/tikhon/learn.py:1-11`) | Motivates storing failure cases next to each promoted protocol in `protocols/` |
-| 11 | Ellis et al., DreamCoder (2021) | Solve → mine traces for abstractions → evaluate on held-out data → promote measured improvements | Exists: `tikhon learn` produces `ProtocolCandidate` (support >= 2 distinct programs) and `FailureCluster` reports; nothing self-promotes (`src/tikhon/learn.py`) | Motivates a dev/test split for candidate protocols: promote only on dev improvement, keep a test set untouched |
-| 12 | Rissanen, Minimum Description Length (1978) | Charge abstractions for definition, retrieval, ambiguity, and maintenance cost; prefer a small vocabulary | Exists: the builtin registry is frozen at 23 commands v1.0.0 with a stable `registry_digest` recorded at RUN_STARTED (`src/tikhon/registry/builtins.py`, `src/tikhon/runtime/coordinator.py`) | Motivates E12: amortized cost accounting for any new protocol, including prompt overhead of its definition |
-| 13 | Xu et al., *Chain of Draft* (2025) | Concise natural-language intermediate reasoning is the mandatory baseline to beat | No syntax change. E13 requires Tikhon to demonstrate value beyond asking the model to be brief; the paper's 7.6%-token result is not a guarantee | Baseline arm in the evaluation harness: same tasks, CoD-style prompt |
-| 14 | Pfau, Merrill, Bowman, *Let's Think Dot by Dot* (2024) | Extra tokens can add computation independent of readable content; do not infer ability from visible traces | Exists: runtime measures outcomes and audit checks, never claims to read internal reasoning; `tikhon audit` verifies truthfulness of events only (`src/tikhon/audit.py:133+`) | Motivates difficulty-stratified evaluation and adaptive expansion (shared with row 9 in E9) |
+| 9 | Russell & Wefald, *Do the Right Thing* (1991) | Computation itself is a decision with cost and expected benefit; cheap tests before expensive exploration | Exists: `Budget` per command (seconds, tokens, cost, attempts, output bytes); tier routing sends cheap checks to T0 executors (`src/atlas/registry/enums.py:56-64`) | Motivates explicit expand/stop steps: `step.deepen: IF V.review.status == "low" DO challenge(claim = H.cause, evidence = E.tests) -> V.challenge` |
+| 10 | Newell, Soar / *Unified Theories of Cognition* (1990) | Impasse → subproblem → resolution → reusable rule, stored with applicability conditions | Exists: failure kinds per command with declared recovery (`FailureSpec`, `src/atlas/registry/builtins.py`); `atlas learn` mines recurring command sequences into protocol candidates, review-only promotion (`src/atlas/learn.py:1-11`) | Motivates storing failure cases next to each promoted protocol in `protocols/` |
+| 11 | Ellis et al., DreamCoder (2021) | Solve → mine traces for abstractions → evaluate on held-out data → promote measured improvements | Exists: `atlas learn` produces `ProtocolCandidate` (support >= 2 distinct programs) and `FailureCluster` reports; nothing self-promotes (`src/atlas/learn.py`) | Motivates a dev/test split for candidate protocols: promote only on dev improvement, keep a test set untouched |
+| 12 | Rissanen, Minimum Description Length (1978) | Charge abstractions for definition, retrieval, ambiguity, and maintenance cost; prefer a small vocabulary | Exists: the builtin registry is frozen at 23 commands v1.0.0 with a stable `registry_digest` recorded at RUN_STARTED (`src/atlas/registry/builtins.py`, `src/atlas/runtime/coordinator.py`) | Motivates E12: amortized cost accounting for any new protocol, including prompt overhead of its definition |
+| 13 | Xu et al., *Chain of Draft* (2025) | Concise natural-language intermediate reasoning is the mandatory baseline to beat | No syntax change. E13 requires ATLAS to demonstrate value beyond asking the model to be brief; the paper's 7.6%-token result is not a guarantee | Baseline arm in the evaluation harness: same tasks, CoD-style prompt |
+| 14 | Pfau, Merrill, Bowman, *Let's Think Dot by Dot* (2024) | Extra tokens can add computation independent of readable content; do not infer ability from visible traces | Exists: runtime measures outcomes and audit checks, never claims to read internal reasoning; `atlas audit` verifies truthfulness of events only (`src/atlas/audit.py:133+`) | Motivates difficulty-stratified evaluation and adaptive expansion (shared with row 9 in E9) |
 | 15 | Yao et al., ReAct (2022/2023) | Interleave reasoning, action, observation, update; observations carry provenance | Exists: each step is one command with committed targets; external results land as digested artifacts (`ART.*` content-addressed, `docs/spec/01-language-and-state.md:141-157`) | No new syntax; E14 measures redundant searches and recovery under the step-interleaved protocol vs free-form tool loops |
-| 16 | Geng et al., grammar-constrained decoding (2023) | Constrained generation for structural validity; valid syntax is not valid reasoning | Exists: `tikhon lint` gates sealing; `DONE` predicates and deterministic `IF` conditions are checked without a model call; `tikhon audit` re-verifies persisted runs (`src/tikhon/cli.py`) | Motivates E15: constrained vs unconstrained generation for parse-validity, latency, repair overhead, with semantic checks kept separate |
+| 16 | Geng et al., grammar-constrained decoding (2023) | Constrained generation for structural validity; valid syntax is not valid reasoning | Exists: `atlas lint` gates sealing; `DONE` predicates and deterministic `IF` conditions are checked without a model call; `atlas audit` re-verifies persisted runs (`src/atlas/cli.py`) | Motivates E15: constrained vs unconstrained generation for parse-validity, latency, repair overhead, with semantic checks kept separate |
 
 ## 3. Falsifiable Experiment Register
 
@@ -98,7 +98,7 @@ Predeclared quality non-inferiority margin: zero, unless stated otherwise.
 | Dependent variables | Tokens to recovery; wall time; final correctness; number of wasted steps after invalidation |
 | Measurement | Task battery where the initial plan is invalidated mid-run by injected observations |
 | Baseline | Same tasks, plain-prompt agent that must notice and re-plan itself |
-| Pass threshold | Tikhon recovery cost <= 50% of restart cost with equal final correctness on the hardest stratum |
+| Pass threshold | ATLAS recovery cost <= 50% of restart cost with equal final correctness on the hardest stratum |
 
 ### E4 — Protocol specialization (Turchin)
 
@@ -131,7 +131,7 @@ Predeclared quality non-inferiority margin: zero, unless stated otherwise.
 | Dependent variables | Task completion on surprise-action tasks; correctness; tokens |
 | Measurement | Battery where the required tool/action is only discoverable mid-task |
 | Baseline | Natural-language declarative instruction of equal content |
-| Pass threshold | Tikhon completion rate >= NL baseline minus declared margin (zero) with no token increase; else the declarative layer adds nothing |
+| Pass threshold | ATLAS completion rate >= NL baseline minus declared margin (zero) with no token increase; else the declarative layer adds nothing |
 
 ### E7 — Control-policy swap invariance (Kowalski)
 
@@ -181,7 +181,7 @@ Predeclared quality non-inferiority margin: zero, unless stated otherwise.
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | `tikhon learn` candidates promoted on dev data improve dev-set cost, and the improvement transfers to a never-touched test set |
+| Hypothesis | `atlas learn` candidates promoted on dev data improve dev-set cost, and the improvement transfers to a never-touched test set |
 | Independent variable | Library state: pre-mining vs post-promotion |
 | Dependent variables | Dev-set tokens/correctness; test-set tokens/correctness; overfitting gap (dev gain minus test gain) |
 | Measurement | Mine demo/runs history; promote per `learn.py` review process; evaluate both sets before/after |
@@ -203,19 +203,19 @@ Predeclared quality non-inferiority margin: zero, unless stated otherwise.
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | Tikhon's structure adds value beyond merely instructing the model to be brief |
-| Independent variable | Prompting regime: Tikhon program vs Chain-of-Draft-style instruction vs ordinary NL |
+| Hypothesis | ATLAS's structure adds value beyond merely instructing the model to be brief |
+| Independent variable | Prompting regime: ATLAS program vs Chain-of-Draft-style instruction vs ordinary NL |
 | Dependent variables | Total tokens; correctness; revision stability across trials |
 | Measurement | Same battery, same models, n >= 5; include at least one task class where CoD is reported strong |
 | Baseline | Chain-of-Draft instruction (the strongest cheap baseline) |
-| Pass threshold | Tikhon correct-rate within zero margin of CoD and total tokens <= CoD, or correctness strictly better at any token cost; otherwise do not claim token-efficiency superiority over concise prompting |
+| Pass threshold | ATLAS correct-rate within zero margin of CoD and total tokens <= CoD, or correctness strictly better at any token cost; otherwise do not claim token-efficiency superiority over concise prompting |
 
 ### E14 — Interleaving with provenance (Yao et al., ReAct)
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | Step-interleaved commands with digested observations reduce redundant searches and improve recovery vs free-form tool loops |
-| Independent variable | Interaction regime: Tikhon steps with committed artifact refs vs free-form ReAct-style loop |
+| Independent variable | Interaction regime: ATLAS steps with committed artifact refs vs free-form ReAct-style loop |
 | Dependent variables | Redundant tool calls; recovery tokens after a failed call; observation-fabrication rate (claims without artifact digest) |
 | Measurement | Tool-use investigation battery; count tool calls and digests in the event log |
 | Baseline | Free-form ReAct prompting |
@@ -243,12 +243,12 @@ passes for it, per model family. The policy is tokenizer-empirical, never aesthe
 3. Cross-model check: a symbol that wins on one family but loses or fails on another is
    rejected or made a per-model presentation variant, never part of the canonical AST.
 4. Recoverability: every adopted compact form must have a documented expanded reading
-   that the grammar docs and `tikhon lint` agree on.
+   that the grammar docs and `atlas lint` agree on.
 
 **Interim rule (in force until E1 evidence exists).** The canonical grammar uses
 lowercase English keywords for commands (`define`, `hypothesize`, `challenge`, ...) and
 uppercase ASCII keywords for control (`IF`, `DONE`, `CALL`, `RETURN`, `STOP`,
-`REVISE`, `RETIRE`), exactly as implemented in `src/tikhon/syntax/parser.py`. The only
+`REVISE`, `RETIRE`), exactly as implemented in `src/atlas/syntax/parser.py`. The only
 non-alphabetic syntax is structural, not notational: `.` in typed refs, `:` after a step
 id, `=` for arguments, `,` for separators, `->` for targets, `|` between `REVISE` and
 `RETIRE` groups. No new symbols enter the grammar on plausibility arguments. Structural
@@ -258,9 +258,9 @@ punctuation is exempt from E1: it delimits grammar, it does not abbreviate an op
 
 | Not borrowing | Why |
 | --- | --- |
-| Self-modifying grammar | The grammar and the 23-command registry are the audit base: `registry_digest` at RUN_STARTED pins what executed (`src/tikhon/runtime/coordinator.py`), and `tikhon audit` re-verifies persisted runs against fixed invariants (`src/tikhon/audit.py`). A grammar that rewrites itself has no fixed semantics to audit; Tikhon's differentiator is exactly this auditability. Language evolution happens through versioned specs and reviewed registry changes, never inside a run |
-| Unverifiable heuristics | Every completion claim is a deterministic `DONE` predicate (`equals`/`in`/`matched`), a worker judgment recorded as an event with evidence, or a `STOP` with a kind. There is no "trust the model" shortcut that bypasses recorded evidence; `tikhon learn` outputs are review-only and promotion requires a human-approved PR (`src/tikhon/learn.py`) |
-| A universal calculus of reasoning | Leibniz's goal is historical motivation. Tikhon encodes only distinctions that measurably pay for themselves in the register above |
+| Self-modifying grammar | The grammar and the 23-command registry are the audit base: `registry_digest` at RUN_STARTED pins what executed (`src/atlas/runtime/coordinator.py`), and `atlas audit` re-verifies persisted runs against fixed invariants (`src/atlas/audit.py`). A grammar that rewrites itself has no fixed semantics to audit; ATLAS's differentiator is exactly this auditability. Language evolution happens through versioned specs and reviewed registry changes, never inside a run |
+| Unverifiable heuristics | Every completion claim is a deterministic `DONE` predicate (`equals`/`in`/`matched`), a worker judgment recorded as an event with evidence, or a `STOP` with a kind. There is no "trust the model" shortcut that bypasses recorded evidence; `atlas learn` outputs are review-only and promotion requires a human-approved PR (`src/atlas/learn.py`) |
+| A universal calculus of reasoning | Leibniz's goal is historical motivation. ATLAS encodes only distinctions that measurably pay for themselves in the register above |
 | Reading internal reasoning from traces | Visible traces are artifacts, not evidence of computation (Pfau et al.); evaluation uses external correctness checks |
 | Fine-tuning-first adoption | Mechanisms must earn adoption prompt-only first; any training experiment is charged separately and never mixed into token accounting |
 | Uncontrolled macro accumulation | Every abstraction is charged for definition, retrieval, ambiguity, and repair (E12); the vocabulary stays small by policy, matching the frozen builtin registry |

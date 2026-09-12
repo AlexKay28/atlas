@@ -1,0 +1,85 @@
+{
+  "task": "GitHub issue #52: Rebranding tikhon → ATLAS (Agent Task Language & Audit System) — mechanical package rename, branding pass, grep gate, seal verification",
+  "run_id": "sprint1-52-atlas-rebrand",
+  "seal": "ed22c3f43b116f489d1c8266f885eef286ec2670c16e8c1b9f43bdc875294d25",
+  "terminal_status": "succeeded",
+  "steps_planned": 28,
+  "steps_executed": 28,
+  "acceptance": [
+    {
+      "criterion": "git mv src/tikhon src/atlas; update every import, __init__ docstrings, module docstrings, CLI prog=\"atlas\", help strings, error message texts",
+      "passed": true,
+      "evidence": "git status shows RM for all 30 src/tikhon/*.py -> src/atlas/*.py; git grep tikhon -- src/atlas/ returns zero matches; prog=\"atlas\" in cli.py:1009"
+    },
+    {
+      "criterion": "pyproject.toml: name = \"atlas\", [project.scripts] atlas = \"atlas.cli:main\", [project.urls] -> github.com/AlexKay28/atlas",
+      "passed": true,
+      "evidence": "pyproject.toml: name=\"atlas\", atlas=\"atlas.cli:main\", version={attr=\"atlas.__version__\"}, all URLs point to github.com/AlexKay28/atlas"
+    },
+    {
+      "criterion": "README.md: new header exactly as NEW IDENTITY (H1 + tagline), prog name atlas throughout, CLI table current",
+      "passed": true,
+      "evidence": "README.md line 1: '# ATLAS — Agent Task Language & Audit System'; line 3: '*A language for durable agent work.*'; CLI commands all use 'atlas'"
+    },
+    {
+      "criterion": "docs/**: rename references; cli-reference.md prog name; design doc title → ATLAS",
+      "passed": true,
+      "evidence": "git grep tikhon -- docs/ returns zero matches; docs/README.md title 'ATLAS Documentation'; docs/cli-reference.md uses 'atlas' CLI name"
+    },
+    {
+      "criterion": ".opencode/skills/tikhon-demo → atlas-demo: dir git mv + SKILL.md name/description + tikhon path references",
+      "passed": true,
+      "evidence": "git mv .opencode/skills/tikhon-demo .opencode/skills/atlas-demo; SKILL.md name: atlas-demo; git grep tikhon -- .opencode/ returns zero matches"
+    },
+    {
+      "criterion": "tests: update package references; keep test_docs.py's registry-count and subcommand checks green",
+      "passed": true,
+      "evidence": "git grep tikhon -- tests/ returns zero matches; 857 tests passed including test_docs.py"
+    },
+    {
+      "criterion": "CHANGELOG.md: [Unreleased] → Changed - Renamed entry ONLY; history sections untouched",
+      "passed": true,
+      "evidence": "CHANGELOG.md [Unreleased] section has '### Changed - Renamed the project tikhon → ATLAS...'; [0.1.0] history section untouched"
+    },
+    {
+      "criterion": "GREP GATE: test asserting git grep -c tikhon over src/ tests/ README.md docs/ pyproject.toml .opencode/ returns ZERO",
+      "passed": true,
+      "evidence": "tests/test_branding.py::test_no_tikhon_references_in_live_code PASSED"
+    },
+    {
+      "criterion": "Full pytest suite green (baseline 854)",
+      "passed": true,
+      "evidence": "PYTHONPATH=src python3 -m pytest -q -> 857 passed in 22.44s"
+    },
+    {
+      "criterion": "All seals verify: for every demo/runs/*/seal.txt, atlas seal <program.think> reproduces the recorded digest BYTE-IDENTICALLY",
+      "passed": true,
+      "evidence": "Shell loop over 39 seal.txt files: SEALS: 39/39 verified"
+    },
+    {
+      "criterion": "SMOKE: PYTHONPATH=src python3 -m atlas lint demo/runs/issue-26-benchmarks/program.think",
+      "passed": true,
+      "evidence": "atlas lint demo/runs/issue-26-benchmarks/program.think -> valid (exit 0)"
+    },
+    {
+      "criterion": "git status --porcelain shows only in-scope paths (old-name evidence dirs untouched)",
+      "passed": true,
+      "evidence": "git status --porcelain: 68 entries, all in src/atlas/, tests/, docs/, README.md, pyproject.toml, CHANGELOG.md, .opencode/skills/atlas-demo/, protocols/framing.think, demo/runs/sprint1-52-atlas-rebrand/, tests/test_branding.py; no other demo/runs/ entries"
+    },
+    {
+      "criterion": "No git commit/push; no GitHub operations",
+      "passed": true,
+      "evidence": "No git commit or push commands run; no gh commands beyond 'gh issue view 52' (read-only)"
+    }
+  ],
+  "unresolved": [
+    "GitHub repo rename (AlexKay28/tikhon → AlexKay28/atlas) — orchestrator's step",
+    "Update local git remote URL — orchestrator's step",
+    "ahood-side copies of the atlas-demo skill — updated separately by the owner",
+    "benchmarks/report-2026-09-12.md not regenerated (generated artifact, not in grep gate scope)"
+  ],
+  "protocol_deviations": [
+    "protocols/framing.think comment was updated (tikhon program → ATLAS program) — not explicitly listed in owned or forbidden files, but it's a live code file with a branding reference",
+    "benchmarks/report-2026-09-12.md was not updated — it's a generated artifact; regenerating with 'atlas bench' would update branding but the issue doesn't list it as an owned file"
+  ]
+}

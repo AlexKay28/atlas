@@ -1,4 +1,4 @@
-"""Event-sourced task ledger for the tikhon runtime."""
+"""Event-sourced task ledger for the ATLAS runtime."""
 
 from __future__ import annotations
 

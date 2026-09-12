@@ -6,7 +6,7 @@ submission (:class:`ResultEnvelope`), with strict validation and clear
 errors.  The envelopes are the shared contract any backend driver can
 implement — the #8 ``ModelWorker`` adapter renders its prompt FROM a
 TaskEnvelope and parses replies INTO a ResultEnvelope, and the sequential
-external driver (``tikhon next`` / ``tikhon submit``) moves them through
+external driver (``atlas next`` / ``atlas submit``) moves them through
 the event store so the worker process never needs to hold the store open.
 
 Additive versioning policy (v1.x, issue #44)
@@ -72,14 +72,14 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional
 
-from tikhon.registry.enums import EffectClass
-from tikhon.runtime.coordinator import (
+from atlas.registry.enums import EffectClass
+from atlas.runtime.coordinator import (
     SequentialCoordinator,
     evaluate_done_predicate,
     map_results_to_targets,
 )
-from tikhon.runtime.events import EventStore, EventType, _Record
-from tikhon.state import StateDelta
+from atlas.runtime.events import EventStore, EventType, _Record
+from atlas.state import StateDelta
 
 __all__ = [
     "DIRECT_DISPATCH_INVOCATION_ID",
@@ -629,8 +629,8 @@ class ExternalDriver:
     """Sequential external driver over an EventStore (issue #18).
 
     Renders a :class:`TaskEnvelope` for a run's next ready invocation
-    (:meth:`next_envelope`, used by ``tikhon next``) and commits a submitted
-    :class:`ResultEnvelope` (:meth:`submit_result`, used by ``tikhon
+    (:meth:`next_envelope`, used by ``atlas next``) and commits a submitted
+    :class:`ResultEnvelope` (:meth:`submit_result`, used by ``atlas
     submit``) through the same coordinator machinery: plan flattening, task
     ledger transitions, event shapes and the coordinator's own validation
     functions are reused from ``SequentialCoordinator`` — the coordinator
@@ -655,7 +655,7 @@ class ExternalDriver:
         seal_digest: Optional[str] = None,
     ):
         if registry is None:
-            from tikhon.registry import builtin_registry
+            from atlas.registry import builtin_registry
 
             registry = builtin_registry()
         self.store = store
@@ -686,7 +686,7 @@ class ExternalDriver:
             # unconditional plan; source-anchored conditionals and protocol
             # calls are out of scope and rejected up front, never silently
             # skipped.
-            from tikhon.syntax.model import Call, Conditional
+            from atlas.syntax.model import Call, Conditional
 
             for statement in self.program.statements:
                 if isinstance(statement, (Conditional, Call)):
@@ -946,7 +946,7 @@ class ExternalDriver:
 
     def _start_run(self, plan: list) -> None:
         """Fresh-start the run with the coordinator's exact event prefix."""
-        from tikhon.registry.registry import registry_digest
+        from atlas.registry.registry import registry_digest
 
         digest = registry_digest(self.registry)
         self.store.create_run(
@@ -1035,7 +1035,7 @@ class ExternalDriver:
         _check_submission(
             bool(dispatched),
             f"invocation {result.invocation_id!r} has not been dispatched;"
-            " run `tikhon next` first",
+            " run `atlas next` first",
         )
         _check_submission(
             not any(
@@ -1282,7 +1282,7 @@ class ExternalDriver:
         """Terminal RUN_FINISHED payload for a bare RETURN/STOP ending."""
         if self.program is not None:
             for statement in self.program.statements:
-                from tikhon.syntax.model import Return, Stop
+                from atlas.syntax.model import Return, Stop
 
                 if isinstance(statement, Return):
                     return {"status": "succeeded"}

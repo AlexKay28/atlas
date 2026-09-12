@@ -17,17 +17,17 @@ from typing import Any
 
 import pytest
 
-from tikhon.audit import audit_run
-from tikhon.resume import resume_run
-from tikhon.runtime import EventStore, EventType
-from tikhon.runtime.coordinator import (
+from atlas.audit import audit_run
+from atlas.resume import resume_run
+from atlas.runtime import EventStore, EventType
+from atlas.runtime.coordinator import (
     CrashInterrupt,
     DeterministicWorker,
     SequentialCoordinator,
     judge_score,
 )
-from tikhon.runtime.tasks import TaskStatus
-from tikhon.syntax import (
+from atlas.runtime.tasks import TaskStatus
+from atlas.syntax import (
     ParseError,
     canonical_json,
     parse_program,

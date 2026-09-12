@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed the project tikhon → ATLAS (Agent Task Language & Audit System); package `atlas`, CLI `atlas`.
+
 Sprint 1 — repository hygiene, documentation, and tooling improvements.
 
 - **#28** — CLI reference documentation and README enhancement

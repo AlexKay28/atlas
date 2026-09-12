@@ -21,15 +21,15 @@ import sqlite3
 
 import pytest
 
-from tikhon.audit import audit_run
-from tikhon.resume import resume_run
-from tikhon.runtime import EventStore, EventType
-from tikhon.runtime.coordinator import (
+from atlas.audit import audit_run
+from atlas.resume import resume_run
+from atlas.runtime import EventStore, EventType
+from atlas.runtime.coordinator import (
     CrashInterrupt,
     DeterministicWorker,
     SequentialCoordinator,
 )
-from tikhon.syntax import parse_program, validate_program
+from atlas.syntax import parse_program, validate_program
 
 
 ISOLATION_PROTOCOL = """\

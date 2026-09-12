@@ -8,10 +8,10 @@ run's stored task events.
 
 import pytest
 
-from tikhon.runtime import EventStore, EventType
-from tikhon.runtime.events import _Record
-from tikhon.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
-from tikhon.state import StateDelta
+from atlas.runtime import EventStore, EventType
+from atlas.runtime.events import _Record
+from atlas.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
+from atlas.state import StateDelta
 
 
 def test_two_ledger_events_append(tmp_path):

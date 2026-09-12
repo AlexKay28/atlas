@@ -1,6 +1,6 @@
-"""Tests specifying crash-window recovery for tikhon runs (issue #10).
+"""Tests specifying crash-window recovery for ATLAS runs (issue #10).
 
-Contract under test (``tikhon.resume.resume_run`` plus the coordinator's
+Contract under test (``atlas.resume.resume_run`` plus the coordinator's
 ``crash_hook``): a true mid-run abort (CrashInterrupt propagating out of
 ``execute`` uncaught) leaves a committed event prefix with no FAILED and
 no RUN_FINISHED; ``resume_run`` continues that run to the same terminal
@@ -18,16 +18,16 @@ import json
 
 import pytest
 
-from tikhon.audit import audit_run
-from tikhon.cli import main as cli_main
-from tikhon.resume import resume_run
-from tikhon.runtime import EventStore, EventType
-from tikhon.runtime.coordinator import (
+from atlas.audit import audit_run
+from atlas.cli import main as cli_main
+from atlas.resume import resume_run
+from atlas.runtime import EventStore, EventType
+from atlas.runtime.coordinator import (
     CrashInterrupt,
     DeterministicWorker,
     SequentialCoordinator,
 )
-from tikhon.syntax import parse_program, seal_digest
+from atlas.syntax import parse_program, seal_digest
 
 THREE_STEP_PROGRAM = """\
 PROGRAM resume_demo VERSION 1.0
@@ -166,7 +166,7 @@ class TestCrashAndResume:
         store.close()
 
     def test_task_ledger_fully_complete_after_resume(self, tmp_path):
-        from tikhon.runtime.tasks import TaskStatus
+        from atlas.runtime.tasks import TaskStatus
 
         store, _, _ = crash_and_resume(tmp_path, hook_idx=1)
         profile = store.task_ledger("run-1").profile()

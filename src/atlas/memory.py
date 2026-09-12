@@ -1,4 +1,4 @@
-"""Cross-run semantic memory (CoALA "semantic memory") for tikhon.
+"""Cross-run semantic memory (CoALA "semantic memory") for ATLAS.
 
 A :class:`KnowledgeBase` is durable key/value knowledge that outlives a
 single run, backed by its own SQLite file (typically ``kb.sqlite`` next to

@@ -10,7 +10,7 @@ without committing ``None`` or stranding a task. Also covers non-mapping
 results, duplicate target leaves, truthful validation ordering, and cancellation
 of future tasks after terminal failure. Deterministic replay of state and task
 ledger after SQLite reopen.
-``tikhon.runtime.coordinator`` is
+``atlas.runtime.coordinator`` is
 specified by these tests before implementation.
 """
 
@@ -18,16 +18,16 @@ from typing import Any
 
 import pytest
 
-from tikhon.memory import KnowledgeBase
-from tikhon.runtime import EventStore, EventType
-from tikhon.runtime.coordinator import (
+from atlas.memory import KnowledgeBase
+from atlas.runtime import EventStore, EventType
+from atlas.runtime.coordinator import (
     DeterministicWorker,
     SequentialCoordinator,
     evaluate_condition,
     map_results_to_targets,
 )
-from tikhon.runtime.tasks import TaskStatus
-from tikhon.syntax import ParseError, parse_program
+from atlas.runtime.tasks import TaskStatus
+from atlas.syntax import ParseError, parse_program
 
 CANONICAL_PROGRAM = """\
 PROGRAM adder VERSION 1.0
@@ -912,8 +912,8 @@ def test_invocations_without_done_unchanged(tmp_path):
 
 
 def test_run_started_carries_stable_registry_digest(tmp_path):
-    from tikhon.registry import builtin_registry
-    from tikhon.registry.registry import registry_digest
+    from atlas.registry import builtin_registry
+    from atlas.registry.registry import registry_digest
 
     with EventStore(tmp_path / "events.db") as store:
         run_canonical(store, run_id="run-digest")
@@ -942,8 +942,8 @@ def test_two_coordinators_same_registry_same_digest(tmp_path):
 def test_extra_spec_changes_registry_digest():
     import dataclasses
 
-    from tikhon.registry import Registry, builtin_registry
-    from tikhon.registry.registry import registry_digest
+    from atlas.registry import Registry, builtin_registry
+    from atlas.registry.registry import registry_digest
 
     base = builtin_registry()
     baseline = registry_digest(base)
@@ -1281,7 +1281,7 @@ INPUT
     G.request = "frame the kb issue"
 
 step.ask: DO define(request = G.request) -> G.probe
-CALL protocol.framing(request = G.probe, scope = "src/tikhon") -> G.plan, V.analysis
+CALL protocol.framing(request = G.probe, scope = "src/atlas") -> G.plan, V.analysis
 step.wrap: DO summarize(source_refs = V.analysis, budget = 100) -> OUT.brief
 
 RETURN G.plan, V.analysis, OUT.brief
@@ -1333,7 +1333,7 @@ def test_call_creates_isolated_child_run_and_adopts_targets(tmp_path):
         # INPUT binding resolved from the explicit CALL argument.
         assert child_state["nodes"]["G.plan"]["value"] == {"echo": {"echo": "frame the kb issue"}}
         assert child_state["nodes"]["E.context"]["value"] == [
-            "hit:" + str({"echo": {"echo": "frame the kb issue"}}) + ":src/tikhon"
+            "hit:" + str({"echo": {"echo": "frame the kb issue"}}) + ":src/atlas"
         ]
         assert child_state["metadata"]["child_of"] == "run-call"
         assert child_state["metadata"]["call"] == "protocol.framing"
@@ -1389,7 +1389,7 @@ def test_child_run_started_marks_lineage_and_own_invocation_sequence(tmp_path):
 
 
 def test_adopted_call_records_child_adopted_before_succeeded(tmp_path):
-    from tikhon.audit import audit_run
+    from atlas.audit import audit_run
 
     protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
     program = parse_program(CALLER_TEST_PROGRAM)
@@ -1494,7 +1494,7 @@ def test_protocol_call_events_replay_identically_after_reopen(tmp_path):
 
 
 def test_protocol_call_runs_audit_clean_parent_and_child(tmp_path):
-    from tikhon.audit import audit_run
+    from atlas.audit import audit_run
 
     protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL)
     program = parse_program(CALLER_TEST_PROGRAM)
@@ -1584,7 +1584,7 @@ def test_child_stop_blocked_fails_caller_without_adoption(tmp_path):
     protocols = write_test_protocol(tmp_path, "framing", FRAMING_TEST_PROTOCOL.replace(
         "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis",
         "step.analyze: DO extract(artifact = ART.sources, schema = \"frame_analysis\") -> V.analysis\n"
-        "IF C.scope == \"src/tikhon\" STOP blocked(E.context)",
+        "IF C.scope == \"src/atlas\" STOP blocked(E.context)",
     ))
     program = parse_program(CALLER_TEST_PROGRAM)
     with EventStore(tmp_path / "events.db") as store:
@@ -1819,7 +1819,7 @@ RETURN E.correction
 
 
 def test_revise_retire_run_replays_identically_and_audits_clean(tmp_path):
-    from tikhon.audit import audit_run
+    from atlas.audit import audit_run
 
     db = tmp_path / "events.db"
     with EventStore(db) as store:
@@ -1856,7 +1856,7 @@ INPUT
     G.request = "frame the kb issue"
 
 step.ask: DO define(request = G.request) -> G.probe
-CALL protocol.framing(request = G.probe, scope = "src/tikhon") -> E.context
+CALL protocol.framing(request = G.probe, scope = "src/atlas") -> E.context
 
 RETURN E.context
 """)
@@ -1894,7 +1894,7 @@ INPUT
     G.request = "frame the kb issue"
 
 step.ask: DO define(request = G.request) -> G.probe
-CALL protocol.framing(request = G.probe, scope = "src/tikhon") -> G.plan, V.analysis
+CALL protocol.framing(request = G.probe, scope = "src/atlas") -> G.plan, V.analysis
 
 RETURN G.plan, V.analysis
 """)

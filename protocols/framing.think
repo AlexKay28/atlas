@@ -1,6 +1,6 @@
 # protocols/framing.think — example sealed protocol (issue #12).
 #
-# A protocol is a normal tikhon program (PROGRAM header, INPUT
+# A protocol is a normal ATLAS program (PROGRAM header, INPUT
 # declarations for its parameters, invocation steps, RETURN) that lives
 # in a protocols/ directory and is invoked with
 #   CALL protocol.framing(request = ..., scope = ...) -> G.plan, ...
