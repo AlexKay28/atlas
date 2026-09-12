@@ -1092,6 +1092,118 @@ def _review() -> CommandSpec:
     )
 
 
+def _solve() -> CommandSpec:
+    return CommandSpec(
+        name="solve",
+        version=_VERSION,
+        purpose=(
+            "Translate a bounded problem to a formal planning/SMT language"
+            " and return the deterministic solver result"
+        ),
+        inputs=("problem:text", "domain:descriptor"),
+        parameters=("target:pddl/smt", "timeout_seconds:int>0"),
+        preconditions=("problem_bounded", "domain_supported", "solver_available"),
+        outputs=("solution:artifact", "formalization:artifact"),
+        effects=("external_read_only",),
+        done="formalization_digest_and_solver_result_recorded",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report the unbounded problem or unsupported domain",
+            ),
+            FailureSpec(
+                kind=FailureKind.FORMALIZATION,
+                retryable=True,
+                recovery="request a new formalization attempt, not a blind retry",
+            ),
+            FailureSpec(
+                kind=FailureKind.UNAVAILABLE,
+                retryable=True,
+                recovery="retry within budget attempts, then fall back",
+            ),
+        ),
+        effect_class=EffectClass.READ_ONLY,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("formal_backend", "solver_engine"),
+        evidence=("formalization_digest", "solver_result"),
+        budget=Budget(
+            max_seconds=120.0,
+            max_tokens=2000,
+            max_cost=0.10,
+            max_attempts=3,
+            max_output_bytes=262144,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T0, RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T0,
+            confidence_policy="none",
+            escalation_on=(FailureKind.FORMALIZATION, FailureKind.UNAVAILABLE),
+            fallback_chain=(),
+        ),
+    )
+
+
+def _prove() -> CommandSpec:
+    return CommandSpec(
+        name="prove",
+        version=_VERSION,
+        purpose=(
+            "Emit a proof artifact in a formal proof language"
+            " and verify it with a deterministic checker"
+        ),
+        inputs=("statement:text", "language:descriptor"),
+        parameters=("target:lean4/isabelle", "timeout_seconds:int>0"),
+        preconditions=("statement_wellformed", "language_supported", "checker_available"),
+        outputs=("proof:artifact", "checker_result:artifact"),
+        effects=("external_read_only",),
+        done="proof_digest_and_deterministic_checker_result_recorded",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report the malformed statement or unsupported language",
+            ),
+            FailureSpec(
+                kind=FailureKind.FORMALIZATION,
+                retryable=True,
+                recovery="request a new formalization attempt, not a blind retry",
+            ),
+            FailureSpec(
+                kind=FailureKind.UNAVAILABLE,
+                retryable=True,
+                recovery="retry within budget attempts, then fall back",
+            ),
+        ),
+        effect_class=EffectClass.READ_ONLY,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("formal_backend", "proof_checker"),
+        evidence=("proof_digest", "checker_result"),
+        budget=Budget(
+            max_seconds=300.0,
+            max_tokens=8000,
+            max_cost=0.25,
+            max_attempts=3,
+            max_output_bytes=524288,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T2,
+            permitted_tiers=(RoutingTier.T0, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T3,
+            validator_tier=RoutingTier.T0,
+            confidence_policy="none",
+            escalation_on=(FailureKind.FORMALIZATION, FailureKind.UNAVAILABLE),
+            fallback_chain=(),
+        ),
+    )
+
+
 BUILTIN_FACTORIES = (
     _define,
     _search,
@@ -1113,6 +1225,8 @@ BUILTIN_FACTORIES = (
     _edit,
     _test,
     _review,
+    _solve,
+    _prove,
 )
 
 

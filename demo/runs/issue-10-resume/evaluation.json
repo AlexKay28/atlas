@@ -1,0 +1,81 @@
+{
+  "task": "GitHub issue #10: tikhon resume — crash-window recovery algorithm",
+  "run_id": "issue-10-resume",
+  "seal": "15787b57f059a3ef9bb3828e0d47b01ae14d65eb6d1082ade46a943605a925f0",
+  "terminal_status": "succeeded",
+  "steps_planned": 7,
+  "steps_executed": 7,
+  "acceptance": [
+    {
+      "criterion": "New module src/tikhon/resume.py with resume_run(store, worker, run_id, program, memory=None, protocols_dir=None) -> dict, same result shape as SequentialCoordinator.execute",
+      "passed": true,
+      "evidence": "resume_run returns {run_id, status, outputs} like execute and adds already_terminal:true for finished runs; an optional trailing workspace_root keyword mirrors the run CLI's WorkspacePolicy so resumed effectful dispatches behave like run.",
+      "notes": "workspace_root is an additional optional keyword after the specified parameters; the specified call pattern is unchanged."
+    },
+    {
+      "criterion": "RUN_FINISHED present: return the recorded terminal status without appending anything, reporting already_terminal: true",
+      "passed": true,
+      "evidence": "tests/test_resume.py::TestTerminalRuns::test_resume_already_terminal_succeeded_appends_nothing and ..._failed_appends_nothing assert unchanged event counts and the recorded status/error; CLI evidence shows 66 events before and after a second resume."
+    },
+    {
+      "criterion": "Otherwise rebuild values from INPUT declarations plus committed SUCCEEDED deltas, find the first non-terminal step, and continue through the coordinator's execution machinery with the same ledger/event invariants",
+      "passed": true,
+      "evidence": "resume_run replays SUCCEEDED deltas in seq order over the declarations (add/revise write, retire pops), derives start_idx from SUCCEEDED terminal events only, and drives remaining steps via the extracted SequentialCoordinator._drive_plan; tests/test_resume.py::TestCrashAndResume asserts projection equality with a normal full run and a fully-completed ledger."
+    },
+    {
+      "criterion": "Ledger handling: completed steps COMPLETED, resumed step IN_PROGRESS skips start_task, tasks after the resumed step exist, W0a creates missing tasks first; raise only on impossible states",
+      "passed": true,
+      "evidence": "coordinator._drive_plan skips start_task/task_started for an IN_PROGRESS task and raises TaskLedgerError on non-PENDING/non-IN_PROGRESS; resume_run creates missing tasks with the fresh-start text/mapping rule (test_w0a) and refuses mismatched programs (test_resume_mismatched_program_refused, test_resume_wrong_step_structure_refused)."
+    },
+    {
+      "criterion": "NEVER infer success from dispatch: dispatched-but-terminal-less invocations are re-executed (at-least-once worker call); run_id:invocation_id idempotency key stays the dedup contract",
+      "passed": true,
+      "evidence": "The coordinator skips re-emitting READY/DISPATCHED but always re-calls the worker; worker call counts assert define/calculated twice after a crash on that step (test_crash_before_first_step, test_crash_mid_program_step_two_of_three, test_w2w3_crash_after_dispatch_never_infers_success) while completed steps' handlers run exactly once."
+    },
+    {
+      "criterion": "Append-only resume with continuing gapless seq; no duplicate SUCCEEDED per invocation; state equals a normal full run's projection; audit_run clean",
+      "passed": true,
+      "evidence": "assert_completed_run_invariants (gapless 0..n-1, one SUCCEEDED per invocation, single RUN_FINISHED, audit ok) runs in every crash-window test; test_projection_equals_normal_full_run compares canonical JSON of the resumed vs normal projection."
+    },
+    {
+      "criterion": "Coordinator crash_hook: optional Callable[[int], None] on execute, called right before appending VALIDATION_PASSED for invocation idx, raising CrashInterrupt that propagates out of execute uncaught; crash_hook=None changes nothing",
+      "passed": true,
+      "evidence": "CrashInterrupt is raised from the hook site outside every try/except (test_crash_hook_does_not_leave_failed_run asserts no FAILED and the last event is RESULT_RECEIVED); the 444 baseline tests pass unchanged with crash_hook=None."
+    },
+    {
+      "criterion": "Tests cover crash before first step, mid-program (step 2 of 3), crash-after-last-step-before-RUN_FINISHED, and resume on an already-terminal run appending nothing",
+      "passed": true,
+      "evidence": "tests/test_resume.py: test_crash_before_first_step, test_crash_mid_program_step_two_of_three, test_w9_crash_after_last_step_before_run_finished (exactly one event appended), TestTerminalRuns (succeeded and failed no-ops); plus W0a/W1/W2W3 window tests."
+    },
+    {
+      "criterion": "CLI: tikhon resume --db PATH --run-id ID --program PATH --seal DIGEST verifies the seal exactly like run (reject mismatch before touching the store), loads the program, opens memory like run, calls resume_run, prints the same status/percent output, exit codes like run",
+      "passed": true,
+      "evidence": "tests/test_resume.py::TestCliResume: resume completes a hooked crash (succeeded/100%, exit 0, audit OK), already-terminal resume is a no-op, seal mismatch is refused with exit 1 and no store created, missing --seal exits 1; live CLI evidence in WORKLOG step.check."
+    },
+    {
+      "criterion": "Only allowed files touched; events.py, tasks.py, audit.py, memory.py, syntax/, registry/, other demo runs untouched by this issue",
+      "passed": true,
+      "evidence": "git status shows modifications only to src/tikhon/cli.py, src/tikhon/runtime/coordinator.py plus new src/tikhon/resume.py, tests/test_resume.py, demo/runs/issue-10-resume/; the registry/builtins.py, registry/enums.py and tests/test_registry.py diffs belong to the concurrent issue-11 agent and were not touched by this run."
+    },
+    {
+      "criterion": "Full test suite passes",
+      "passed": true,
+      "evidence": "python3 -m pytest -q: 484 passed (baseline 444 before edits; +19 new resume tests; +21 tests from the concurrent issue-11 agent's registry work present in the combined tree)."
+    },
+    {
+      "criterion": "Tikhon protocol honored: program.think sealed before source edits and never modified afterwards; WORKLOG.md maintained; solution.md and evaluation.json written",
+      "passed": true,
+      "evidence": "seal.txt (15787b57f059a3ef9bb3828e0d47b01ae14d65eb6d1082ade46a943605a925f0) written before the first source edit; recomputed digest after all edits matches and program.think md5 (7a436d5ccf836f9d71462bed4264b0a7) is unchanged since sealing."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "The issue's suggested use of store.project_state for committed nodes was adapted: project_state stores nodes in the {\"id\", \"value\"} wrapper shape while the coordinator's values mapping holds bare values, so resume replays the committed SUCCEEDED deltas directly (same deterministic projection, unwrapped) — this is also what makes REVISE/RETIRE corrections reconstruct exactly.",
+    "W5 recovery re-executes the worker instead of adopting the stored RESULT_RECEIVED (the design doc's optimization). This is the issue's sanctioned at-least-once worker semantics and keeps a single uniform resume path; the duplicate RESULT_RECEIVED is not an audit violation and the last one is authoritative.",
+    "W6 (VALIDATION_PASSED committed without the SUCCEEDED batch) is not distinguished from W5: the resumed step re-appends VALIDATION_PASSED before the SUCCEEDED batch. Audit truthfulness only forbids VALIDATION_PASSED combined with FAILED, so the run stays clean; a dedicated revalidation-only path was judged out of the pragmatic subset.",
+    "W3's idempotency-key query against an external system is deferred (no external-system cooperation exists); the DISPATCHED payload already carries run_id:invocation_id so effectful workers can dedup on their side.",
+    "Program identity on resume is enforced via the RUN_STARTED payload's recorded program/version plus per-step task-text matching; a renamed but structurally identical program is refused by the former, while a same-name program with identical step ids/commands would resume (accepted limitation, documented in solution.md).",
+    "The resume CLI accepts an optional --workspace like run (superset of the issue's flag list) so effectful commands resume with the same workspace policy as run.",
+    "Issue #11 ran concurrently on src/tikhon/registry/ and tests/test_registry.py; no edits were made in those trees and the combined suite is green (484 passed)."
+  ]
+}

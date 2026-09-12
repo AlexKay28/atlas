@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from tikhon.runtime.events import EventStore, EventType, _Record
-from tikhon.runtime.tasks import TaskLedger, TaskLedgerError
+from tikhon.runtime.tasks import TaskLedger, TaskLedgerError, TaskStatus
 from tikhon.state import StateDelta
 from tikhon.syntax import is_typed_reference, load_protocol, validate_program
 from tikhon.syntax.model import Argument, Call, Declaration, Invocation, Program, Return, Stop
@@ -24,11 +24,22 @@ if TYPE_CHECKING:
     from tikhon.syntax.model import DonePredicate
 
 __all__ = [
+    "CrashInterrupt",
     "DeterministicWorker",
     "SequentialCoordinator",
     "evaluate_done_predicate",
     "map_results_to_targets",
 ]
+
+
+class CrashInterrupt(Exception):
+    """Raised by a ``crash_hook`` to abort ``execute`` mid-run (issue #10).
+
+    The hook site lives outside every ``try``/``except`` in the
+    coordinator, so this exception propagates out of ``execute`` uncaught
+    and the run keeps exactly its committed event prefix — a true crash
+    window, not a failed run (no FAILED, no RUN_FINISHED).
+    """
 
 
 @dataclasses.dataclass(frozen=True)
@@ -410,7 +421,60 @@ class SequentialCoordinator:
         walk(program.statements, "")
         return entries
 
-    def execute(self, program: Program, run_id: str = "run-1") -> dict[str, Any]:
+    def _create_plan_tasks(
+        self, run_id: str, plan: list[_PlanEntry]
+    ) -> dict[int, str]:
+        """Batch-create one ledger task per plan entry (crash window W0b).
+
+        Returns the ``plan index -> task_id`` mapping.  Kept separate from
+        :meth:`_drive_plan` so resume (issue #10) can recreate tasks
+        missing after a crash before the creation batch (W0a) and reuse
+        the identical mapping rule (creation order == plan order).
+        """
+        statement_to_task: dict[int, str] = {}
+        create_records: list[_Record] = []
+        create_ledger = self.store.task_ledger(run_id)
+        for idx, entry in enumerate(plan):
+            statement = entry.invocation
+            task = create_ledger.create_task(
+                text=(
+                    f"{entry.task_prefix}{statement.step_id}:"
+                    f" DO {statement.command}"
+                ),
+                creator="coordinator",
+            )
+            task_id = task.id
+            statement_to_task[idx] = task_id
+
+            create_records.append(_Record(
+                event_type=EventType.TASK_UPDATED,
+                task_id=task_id,
+                payload={
+                    "kind": "task_created", "id": task_id, "text": task.text,
+                    "priority": task.priority, "parent": task.parent,
+                    "dependencies": task.dependencies, "creator": task.creator,
+                },
+                store=self.store,
+            ))
+
+        if create_records:
+            self.store.append_batch(run_id, create_records)
+        return statement_to_task
+
+    def _task_text(self, entry: _PlanEntry) -> str:
+        """The canonical ledger task text for one plan entry."""
+        return (
+            f"{entry.task_prefix}{entry.invocation.step_id}:"
+            f" DO {entry.invocation.command}"
+        )
+
+    def execute(
+        self,
+        program: Program,
+        run_id: str = "run-1",
+        *,
+        crash_hook: "Callable[[int], None] | None" = None,
+    ) -> dict[str, Any]:
         validate_program(
             program,
             known_commands=self.worker.commands,
@@ -453,35 +517,41 @@ class SequentialCoordinator:
         # the parent sequence.
         plan: list[_PlanEntry] = self._build_plan(program)
 
+        statement_to_task = self._create_plan_tasks(run_id, plan)
+
+        return self._drive_plan(
+            program,
+            run_id,
+            plan,
+            values,
+            statement_to_task,
+            start_idx=0,
+            crash_hook=crash_hook,
+        )
+
+    def _drive_plan(
+        self,
+        program: Program,
+        run_id: str,
+        plan: list[_PlanEntry],
+        values: dict[str, Any],
+        statement_to_task: dict[int, str],
+        *,
+        start_idx: int = 0,
+        crash_hook: "Callable[[int], None] | None" = None,
+    ) -> dict[str, Any]:
+        """Drive the plan's per-invocation loop from ``start_idx`` on.
+
+        ``start_idx > 0`` is the resume path (issue #10): every plan entry
+        before it already committed a SUCCEEDED terminal event, so its
+        task is COMPLETED and its deltas are already folded into
+        ``values``.  The entry at ``start_idx`` may be mid-flight from
+        before a crash (task IN_PROGRESS): its committed lifecycle events
+        are never re-emitted, but its worker call is re-executed
+        (at-least-once; the DISPATCHED idempotency key is the dedup
+        contract for effectful workers).
+        """
         # -- batch all task-creation records --------------------------
-        statement_to_task: dict[int, str] = {}
-        create_records: list[_Record] = []
-        create_ledger = self.store.task_ledger(run_id)
-        for idx, entry in enumerate(plan):
-            statement = entry.invocation
-            task = create_ledger.create_task(
-                text=(
-                    f"{entry.task_prefix}{statement.step_id}:"
-                    f" DO {statement.command}"
-                ),
-                creator="coordinator",
-            )
-            task_id = task.id
-            statement_to_task[idx] = task_id
-
-            create_records.append(_Record(
-                event_type=EventType.TASK_UPDATED,
-                task_id=task_id,
-                payload={
-                    "kind": "task_created", "id": task_id, "text": task.text,
-                    "priority": task.priority, "parent": task.parent,
-                    "dependencies": task.dependencies, "creator": task.creator,
-                },
-                store=self.store,
-            ))
-
-        if create_records:
-            self.store.append_batch(run_id, create_records)
 
         def finish_failed_invocation(
             idx: int,
@@ -555,31 +625,67 @@ class SequentialCoordinator:
         failed = False
         error_msg: str | None = None
 
-        for idx, entry in enumerate(plan):
+        for idx in range(start_idx, len(plan)):
+            entry = plan[idx]
             statement = entry.invocation
             invocation_id = f"inv-{idx + 1}"
             task_id = statement_to_task[idx]
 
+            # Issue #10: a resumed in-flight step carries pre-crash
+            # lifecycle events.  Its task is already IN_PROGRESS
+            # (`start_task` requires PENDING), and task_started,
+            # INVOCATION_READY and INVOCATION_DISPATCHED may already be
+            # committed — they are never re-emitted.  Dispatching does
+            # NOT imply success: the worker call below always re-runs.
+            prior_types: set[EventType] = set()
             ledger = self.store.task_ledger(run_id)
-            ledger.start_task(task_id)
+            task = ledger.tasks.get(task_id)
+            if task is not None and task.status is TaskStatus.IN_PROGRESS:
+                prior_types = {
+                    event.event_type
+                    for event in self.store.events(run_id)
+                    if event.invocation_id == invocation_id
+                }
+            elif task is not None and task.status is not TaskStatus.PENDING:
+                # Impossible state: a non-terminal step whose task is
+                # neither PENDING (fresh) nor IN_PROGRESS (in flight).
+                raise TaskLedgerError(
+                    f"task {task_id} for non-terminal step"
+                    f" {statement.step_id} is {task.status.value};"
+                    " cannot resume"
+                )
+            if EventType.INVOCATION_READY not in prior_types:
+                if task is not None and task.status is TaskStatus.IN_PROGRESS:
+                    # Impossible per the atomic task_started+READY batch;
+                    # recorded defensively so the log stays truthful.
+                    self.store.append(
+                        run_id,
+                        EventType.INVOCATION_READY,
+                        instruction_id=statement.step_id,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        payload={"command": statement.command},
+                    )
+                else:
+                    ledger.start_task(task_id)
 
-            # batch: task_started + INVOCATION_READY
-            self.store.append_batch(run_id, [
-                _Record(
-                    event_type=EventType.TASK_UPDATED,
-                    task_id=task_id,
-                    payload={"kind": "task_started", "id": task_id},
-                    store=self.store,
-                ),
-                _Record(
-                    event_type=EventType.INVOCATION_READY,
-                    instruction_id=statement.step_id,
-                    invocation_id=invocation_id,
-                    task_id=task_id,
-                    payload={"command": statement.command},
-                    store=self.store,
-                ),
-            ])
+                    # batch: task_started + INVOCATION_READY
+                    self.store.append_batch(run_id, [
+                        _Record(
+                            event_type=EventType.TASK_UPDATED,
+                            task_id=task_id,
+                            payload={"kind": "task_started", "id": task_id},
+                            store=self.store,
+                        ),
+                        _Record(
+                            event_type=EventType.INVOCATION_READY,
+                            instruction_id=statement.step_id,
+                            invocation_id=invocation_id,
+                            task_id=task_id,
+                            payload={"command": statement.command},
+                            store=self.store,
+                        ),
+                    ])
 
             # Issue #12: entering a protocol expansion binds the protocol's
             # INPUT declarations from the resolved CALL args (like program
@@ -645,17 +751,18 @@ class SequentialCoordinator:
                 # workspace root so handlers can sandbox their writes.
                 resolved_kwargs["_workspace_root"] = self.workspace_root
 
-            self.store.append(
-                run_id,
-                EventType.INVOCATION_DISPATCHED,
-                instruction_id=statement.step_id,
-                invocation_id=invocation_id,
-                task_id=task_id,
-                payload={
-                    "args": resolved_kwargs,
-                    "idempotency_key": f"{run_id}:{invocation_id}",
-                },
-            )
+            if EventType.INVOCATION_DISPATCHED not in prior_types:
+                self.store.append(
+                    run_id,
+                    EventType.INVOCATION_DISPATCHED,
+                    instruction_id=statement.step_id,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    payload={
+                        "args": resolved_kwargs,
+                        "idempotency_key": f"{run_id}:{invocation_id}",
+                    },
+                )
 
             try:
                 result = self.worker.execute(statement.command, resolved_kwargs)
@@ -754,6 +861,15 @@ class SequentialCoordinator:
                     idx, statement, invocation_id, task_id, error_msg
                 )
                 break
+
+            if crash_hook is not None:
+                # Issue #10: crash-window hook.  Called with the plan
+                # index right before VALIDATION_PASSED is appended; an
+                # exception raised here propagates out of the coordinator
+                # uncaught (this site is outside every try/except),
+                # leaving the committed prefix exactly at the
+                # RESULT_RECEIVED-persisted window.
+                crash_hook(idx)
 
             self.store.append(
                 run_id,

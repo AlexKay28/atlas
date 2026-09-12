@@ -1,0 +1,71 @@
+{
+  "task": "GitHub issue #11: formal-language delegation — FailureKind.FORMALIZATION plus complete solve/prove command contracts",
+  "run_id": "issue-11-formal-delegation",
+  "seal": "7ecc95893c7d916ee1f48c83419ad8e5667add8ef1ed976ebd1d90ab6fa48405",
+  "terminal_status": "succeeded",
+  "steps_planned": 8,
+  "steps_executed": 8,
+  "acceptance": [
+    {
+      "criterion": "FailureKind.FORMALIZATION exists with value 'formalization'",
+      "passed": true,
+      "evidence": "tests/test_registry.py::test_formalization_kind_exists_with_expected_value asserts FailureKind.FORMALIZATION.value == 'formalization', round-trips FailureKind('formalization'), and checks the nine pre-existing members are untouched; enum member added in src/tikhon/registry/enums.py before UNKNOWN."
+    },
+    {
+      "criterion": "solve CommandSpec complete and resolvable, per-issue shape (inputs problem:text + domain:descriptor, outputs solution:artifact + formalization:artifact, READ_ONLY/external_read_only, evidence formalization_digest + solver_result, fallback_chain empty)",
+      "passed": true,
+      "evidence": "tests/test_registry.py::test_solve_contract_matches_issue_11_spec plus registry-wide invariants test_every_builtin_declares_the_full_contract, test_builtin_routing_tiers_are_consistent, test_json_roundtrip_all_builtins now parametrize over 'solve' via BUILTIN_NAMES."
+    },
+    {
+      "criterion": "prove CommandSpec complete and resolvable, per-issue shape (inputs statement:text + language:descriptor, outputs proof:artifact + checker_result:artifact, READ_ONLY, evidence proof_digest + checker_result, fallback_chain empty)",
+      "passed": true,
+      "evidence": "tests/test_registry.py::test_prove_contract_matches_issue_11_spec plus the same registry-wide parametrized invariants covering 'prove'."
+    },
+    {
+      "criterion": "solve routing: minimum T1, preferred T2 (strong model for formalization), validator T0",
+      "passed": true,
+      "evidence": "test_solve_contract_matches_issue_11_spec asserts RoutingTier T1/T2/T0 exactly; test_builtin_routing_tiers_are_consistent enforces membership invariants; fetch precedent followed for validator below minimum (permitted T0..T3)."
+    },
+    {
+      "criterion": "prove routing: minimum T2, preferred T3 (heavy proof synthesis), validator T0",
+      "passed": true,
+      "evidence": "test_prove_contract_matches_issue_11_spec asserts RoutingTier T2/T3/T0 exactly; permitted_tiers (T0, T2, T3) passes RoutingPolicy validation (minimum/preferred/validator all members)."
+    },
+    {
+      "criterion": "FORMALIZATION is retryable on both specs with recovery 'request a new formalization attempt, not a blind retry'; INVALID_INPUT nonretryable; UNAVAILABLE retryable",
+      "passed": true,
+      "evidence": "tests/test_registry.py::test_formal_command_declares_formalization_failure (asserts retryable is True and both recovery phrases present), test_formal_command_invalid_input_is_not_retryable, test_formal_command_unavailable_retryable — parametrized over FORMAL_COMMANDS = (prove, solve)."
+    },
+    {
+      "criterion": "Registry-wide parametrized invariants cover the two new names; catalog delta updated",
+      "passed": true,
+      "evidence": "'prove' and 'solve' added to BUILTIN_NAMES (alphabetical, matches sorted Registry.names()), so completeness/routing/roundtrip parametrizations run for them (21 invariant tests total for the pair); test_decision_commands_extend_the_nine_originals now includes FORMAL_COMMANDS in the names-minus-original delta; test_builtin_registry_holds_exactly_the_catalog_commands pins the 22-command catalog."
+    },
+    {
+      "criterion": "Sealed program used only pre-existing registered commands; scratch program proves solve/prove dispatch after implementation",
+      "passed": true,
+      "evidence": "program.think uses define/search/fetch/extract/summarize/report/check/verify only and sealed to 7ecc9589...48405 before any source edit; scratch-solve-prove.think (inside the run dir) dispatches solve(problem=G.plan, domain=\"smt\") and prove(statement=G.statement, language=\"lean4\") and lints valid with PYTHONPATH=src python3 -m tikhon lint."
+    },
+    {
+      "criterion": "Seal digest stable across all source edits",
+      "passed": true,
+      "evidence": "`tikhon seal` re-run after all edits returns 7ecc95893c7d916ee1f48c83419ad8e5667add8ef1ed976ebd1d90ab6fa48405, byte-identical to seal.txt; program.think never modified after sealing."
+    },
+    {
+      "criterion": "Full test suite passes",
+      "passed": true,
+      "evidence": "python3 -m pytest -q -> 465 passed (baseline 444 at task start; +15 issue-#11 tests, +6 from the two new names in registry-wide parametrized invariants)."
+    },
+    {
+      "criterion": "File-constraint discipline respected",
+      "passed": true,
+      "evidence": "Only src/tikhon/registry/enums.py, src/tikhon/registry/builtins.py, tests/test_registry.py, and demo/runs/issue-11-formal-delegation/ were created or modified; no git commit made."
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "Deterministic placeholder handlers for solve/prove in src/tikhon/cli.py _deterministic_handlers are intentionally NOT added: cli.py is owned by a concurrent agent this wave, and the issue scopes this pass to contracts only. CLI dispatch integration for these adapters lands in a later pass; a program dispatching solve/prove will fail at runtime dispatch (unknown handler) until then, though it already lints and validates.",
+    "The installed `tikhon` CLI binary resolves to a stale non-editable site-packages copy while pytest uses the repo src (pyproject pythonpath). Lint/seal were run with the installed CLI as mandated; since the sealed program uses only long-registered commands, the digest was additionally re-verified with the repo parser (PYTHONPATH=src python3 -m tikhon seal) and matches seal.txt byte-for-byte. The stale install was left untouched per file-constraint rules.",
+    "solve/prove are placed at the end of BUILTIN_FACTORIES (registration order is irrelevant because Registry.names() sorts), and the FORMALIZATION enum member is inserted before UNKNOWN rather than appended, grouping it with the semantic failure kinds; neither choice affects any digest or serialized output beyond the intended additions."
+  ]
+}

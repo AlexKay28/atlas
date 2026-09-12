@@ -45,6 +45,7 @@ class FailureKind(Enum):
     CONFLICT = "conflict"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     VALIDATION = "validation"
+    FORMALIZATION = "formalization"
     EXECUTION = "execution"
     UNKNOWN = "unknown"
 

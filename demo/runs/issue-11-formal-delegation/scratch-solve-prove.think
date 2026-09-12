@@ -1,0 +1,16 @@
+# Scratch evidence for issue #11: solve and prove are first-class dispatchable
+# commands once registered. Not sealed; linted after implementation only.
+
+PROGRAM issue_11_solve_prove_evidence VERSION 1.0
+
+INPUT
+    G.problem = "Find a satisfying variable assignment for the bounded warehouse-slotting constraints in the issue fixture"
+    G.statement = "Every bounded queue drains within its declared deadline"
+
+step.frame: DO define(request = G.problem) -> G.plan
+step.solve: DO solve(problem = G.plan, domain = "smt") -> ART.solution
+step.prove: DO prove(statement = G.statement, language = "lean4") -> ART.proof
+step.check: DO check(artifact = ART.proof, predicate = "checker_result_is_accepted") -> V.proof
+step.verify: DO verify(goal = G.problem, evidence = V.proof) -> V.result
+
+RETURN ART.solution, ART.proof, V.result

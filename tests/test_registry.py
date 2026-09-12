@@ -36,12 +36,14 @@ BUILTIN_NAMES = (
     "extract",
     "fetch",
     "hypothesize",
+    "prove",
     "rank",
     "recall",
     "remember",
     "report",
     "review",
     "search",
+    "solve",
     "summarize",
     "test",
     "verify",
@@ -65,6 +67,11 @@ EFFECTFUL_COMMANDS = (
     "edit",
     "test",
     "review",
+)
+
+FORMAL_COMMANDS = (
+    "prove",
+    "solve",
 )
 
 CONTRACT_FIELDS = (
@@ -230,8 +237,121 @@ def test_decision_commands_extend_the_nine_originals():
     names = set(builtin_registry().names())
     assert original < names
     assert names - original == (
-        set(DECISION_COMMANDS) | set(MEMORY_COMMANDS) | set(EFFECTFUL_COMMANDS)
+        set(DECISION_COMMANDS)
+        | set(MEMORY_COMMANDS)
+        | set(EFFECTFUL_COMMANDS)
+        | set(FORMAL_COMMANDS)
     )
+
+
+# --- formal delegation commands (issue #11) -------------------------------------
+
+
+@pytest.mark.parametrize("name", FORMAL_COMMANDS)
+def test_formal_command_resolves_with_complete_contract(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    assert spec.name == name
+    assert spec.version == "1.0.0"
+    for value in (spec.purpose, spec.done, spec.compensation):
+        assert isinstance(value, str) and value.strip()
+    for field in (spec.inputs, spec.outputs, spec.effects):
+        assert field and all(isinstance(entry, str) and entry.strip() for entry in field)
+    assert spec.effect_class in EffectClass
+    assert spec.execution in ExecutionMode
+    assert spec.idempotency in IdempotencyMode
+    assert spec.failures
+    for failure in spec.failures:
+        assert failure.kind in FailureKind
+        assert isinstance(failure.retryable, bool)
+        assert failure.recovery.strip()
+
+
+@pytest.mark.parametrize("name", FORMAL_COMMANDS)
+def test_formal_command_is_registered_under_its_name(registry, name):
+    assert name in builtin_registry().names()
+    assert name in registry.names()
+
+
+@pytest.mark.parametrize("name", FORMAL_COMMANDS)
+def test_formal_command_is_read_only(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    assert spec.effect_class is EffectClass.READ_ONLY
+
+
+@pytest.mark.parametrize("name", FORMAL_COMMANDS)
+def test_formal_command_declares_formalization_failure(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    formalization = [f for f in spec.failures if f.kind is FailureKind.FORMALIZATION]
+    assert len(formalization) == 1
+    failure = formalization[0]
+    assert failure.retryable is True
+    assert "new formalization attempt" in failure.recovery
+    assert "blind retry" in failure.recovery
+
+
+@pytest.mark.parametrize("name", FORMAL_COMMANDS)
+def test_formal_command_invalid_input_is_not_retryable(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    invalid = [f for f in spec.failures if f.kind is FailureKind.INVALID_INPUT]
+    assert len(invalid) == 1
+    assert invalid[0].retryable is False
+
+
+@pytest.mark.parametrize("name", FORMAL_COMMANDS)
+def test_formal_command_declares_unavailable_failure(registry, name):
+    spec = registry.resolve(name, "1.0.0")
+    unavailable = [f for f in spec.failures if f.kind is FailureKind.UNAVAILABLE]
+    assert len(unavailable) == 1
+    assert unavailable[0].retryable is True
+
+
+def test_formalization_kind_exists_with_expected_value():
+    assert FailureKind.FORMALIZATION.value == "formalization"
+    assert FailureKind("formalization") is FailureKind.FORMALIZATION
+    existing = {
+        "invalid_input",
+        "unavailable",
+        "timeout",
+        "permission",
+        "conflict",
+        "insufficient_evidence",
+        "validation",
+        "execution",
+        "unknown",
+    }
+    assert existing <= {kind.value for kind in FailureKind}
+
+
+def test_solve_contract_matches_issue_11_spec(registry):
+    spec = registry.resolve("solve", "1.0.0")
+    assert spec.purpose == (
+        "Translate a bounded problem to a formal planning/SMT language"
+        " and return the deterministic solver result"
+    )
+    assert ("problem:text", "domain:descriptor") == spec.inputs
+    assert ("solution:artifact", "formalization:artifact") == spec.outputs
+    assert spec.routing.minimum_tier is RoutingTier.T1
+    assert spec.routing.preferred_tier is RoutingTier.T2
+    assert spec.routing.validator_tier is RoutingTier.T0
+    assert spec.routing.fallback_chain == ()
+    assert "formalization_digest" in spec.evidence
+    assert "solver_result" in spec.evidence
+
+
+def test_prove_contract_matches_issue_11_spec(registry):
+    spec = registry.resolve("prove", "1.0.0")
+    assert spec.purpose == (
+        "Emit a proof artifact in a formal proof language"
+        " and verify it with a deterministic checker"
+    )
+    assert ("statement:text", "language:descriptor") == spec.inputs
+    assert ("proof:artifact", "checker_result:artifact") == spec.outputs
+    assert spec.routing.minimum_tier is RoutingTier.T2
+    assert spec.routing.preferred_tier is RoutingTier.T3
+    assert spec.routing.validator_tier is RoutingTier.T0
+    assert spec.routing.fallback_chain == ()
+    assert "proof_digest" in spec.evidence
+    assert "checker_result" in spec.evidence
 
 
 # --- memory commands (issue #5) ------------------------------------------------

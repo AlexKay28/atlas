@@ -1,6 +1,6 @@
 """Command-line interface for tikhon (docs/spec/02-command-catalog.md).
 
-Commands: lint, seal, run, status, events, audit, learn.
+Commands: lint, seal, run, resume, status, events, audit, learn.
 Uses argparse and the standard library only.
 """
 
@@ -18,6 +18,7 @@ from tikhon.audit import audit_run
 from tikhon.learn import mine_run_directory
 from tikhon.memory import KnowledgeBase
 from tikhon.registry import builtin_registry
+from tikhon.resume import resume_run
 from tikhon.runtime import DeterministicWorker, EventStore, EventType, SequentialCoordinator
 from tikhon.syntax import ParseError, parse_program, seal_digest, validate_program
 
@@ -293,6 +294,76 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0 if status == "succeeded" else 1
 
 
+def _cmd_resume(args: argparse.Namespace) -> int:
+    if not args.seal:
+        print("error: --seal is required for resume", file=sys.stderr)
+        return 1
+
+    try:
+        text = _load_source(args.program)
+        program = parse_program(text)
+    except ParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    actual_digest = seal_digest(program)
+    if args.seal != actual_digest:
+        print(
+            f"error: seal digest mismatch: expected {actual_digest}, got {args.seal}",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        store = EventStore(args.db)
+    except Exception as exc:
+        print(f"error: cannot open event store: {exc}", file=sys.stderr)
+        return 1
+
+    memory = KnowledgeBase(
+        os.path.join(os.path.dirname(os.path.abspath(args.db)), "kb.sqlite")
+    )
+
+    workspace = (
+        os.path.abspath(args.workspace)
+        if args.workspace
+        else os.path.dirname(os.path.abspath(args.db))
+    )
+
+    worker = DeterministicWorker(
+        _deterministic_handlers(
+            memory=memory, run_id=args.run_id, workspace_root=workspace
+        )
+    )
+
+    try:
+        result = resume_run(
+            store,
+            worker,
+            args.run_id,
+            program,
+            memory=memory,
+            workspace_root=workspace,
+        )
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        store.close()
+        memory.close()
+        return 1
+    finally:
+        store.close()
+        memory.close()
+
+    status = result.get("status", "unknown")
+    print(status)
+    if status == "succeeded":
+        print("100%")
+    return 0 if status == "succeeded" else 1
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     try:
         store = EventStore(args.db)
@@ -438,6 +509,28 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_run.set_defaults(func=_cmd_run)
+
+    p_resume = sub.add_parser(
+        "resume",
+        help="Resume an interrupted run after a crash",
+    )
+    p_resume.add_argument("--db", required=True, help="Path to event store database")
+    p_resume.add_argument("--run-id", required=True, help="Run identifier")
+    p_resume.add_argument(
+        "--program", required=True, help="Path to the sealed .think source file"
+    )
+    p_resume.add_argument(
+        "--seal", default=None, help="Sealed digest, verified exactly like run"
+    )
+    p_resume.add_argument(
+        "--workspace",
+        default=None,
+        help=(
+            "Workspace root for effectful commands like edit"
+            " (default: the --db directory)"
+        ),
+    )
+    p_resume.set_defaults(func=_cmd_resume)
 
     p_status = sub.add_parser("status", help="Print run status")
     p_status.add_argument("--db", required=True, help="Path to event store database")
