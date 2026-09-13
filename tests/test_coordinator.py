@@ -2755,3 +2755,226 @@ RETURN V.result
         assert loop_exited[0].payload["reason"] == "while_false"
         succeeded = [e for e in history if e.event_type is EventType.SUCCEEDED]
         assert len(succeeded) == 0
+
+
+# -- Issue #80: REFORMULATE coordinator tests ---------------------------------
+
+REFORMULATE_PROGRAM = """\
+PROGRAM reform VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+  H.cause = "latency"
+
+step.test: DO test_hypothesis(hypothesis = H.cause) -> E.test
+
+IF E.test != {"status": "confirmed"}
+  REFORMULATE
+    DIAGNOSE: DO challenge(claim = H.cause, evidence = E.test) -> R.why
+    REVISE: H.cause -> H.alt_cause
+    REPLAN: DO decompose(goal = G.goal, evidence = [E.test, R.why]) -> G.plan2
+    CONTINUE: G.plan2
+
+RETURN E.test
+"""
+
+
+def test_reformulate_triggers_on_failed_done_diagnoses_replans_continues(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "test_hypothesis": lambda hypothesis: {"status": "falsified"},
+                "challenge": lambda claim, evidence: {"reason": "wrong cause"},
+                "decompose": lambda goal, evidence: [
+                    {"step_id": "step.replan_1", "command": "define",
+                     "args": [{"name": "value", "value": "replanned"}],
+                     "targets": ["G.replanned"]},
+                ],
+                "define": lambda value: value,
+            }
+        )
+        coordinator = SequentialCoordinator(store, worker)
+        result = coordinator.execute(
+            parse_program(REFORMULATE_PROGRAM),
+            run_id="run-reform-1",
+        )
+        assert result["status"] == "succeeded"
+
+        history = store.events("run-reform-1")
+        reformulated = [
+            e for e in history
+            if e.event_type is EventType.PLAN_REFORMULATED
+        ]
+        assert len(reformulated) == 1
+        payload = reformulated[0].payload
+        assert "trigger_step" in payload
+        assert "diagnosis_ref" in payload
+        assert "new_plan_digest" in payload
+        assert "preserved_refs" in payload
+        assert payload["reformulation_count"] == 1
+        revised = payload["revised_refs"]
+        assert len(revised) == 1
+        assert revised[0]["old"] == "H.cause"
+        assert revised[0]["new"] == "H.alt_cause"
+
+
+def test_reformulate_committed_state_preserved(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "test_hypothesis": lambda hypothesis: {"status": "falsified"},
+                "challenge": lambda claim, evidence: {"reason": "wrong"},
+                "decompose": lambda goal, evidence: [
+                    {"step_id": "step.r1", "command": "define",
+                     "args": [{"name": "value", "value": "done"}],
+                     "targets": ["G.result"]},
+                ],
+                "define": lambda value: value,
+            }
+        )
+        coordinator = SequentialCoordinator(store, worker)
+        result = coordinator.execute(
+            parse_program(REFORMULATE_PROGRAM),
+            run_id="run-reform-2",
+        )
+        assert result["status"] == "succeeded"
+
+        state = store.project_state("run-reform-2")
+        # The reformulation should have committed new nodes from the
+        # DIAGNOSE, REVISE and REPLAN steps. The committed state should
+        # include the reformulated refs.
+        assert "R.why" in state["nodes"]  # DIAGNOSE output
+        assert "H.alt_cause" in state["nodes"]  # REVISE new ref
+        assert "G.plan2" in state["nodes"]  # REPLAN output
+        # H.cause was retired by the REVISE
+        assert "H.cause" not in state["nodes"]
+
+
+def test_reformulate_old_refs_retired_new_refs_created(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "test_hypothesis": lambda hypothesis: {"status": "falsified"},
+                "challenge": lambda claim, evidence: {"reason": "wrong"},
+                "decompose": lambda goal, evidence: [
+                    {"step_id": "step.r1", "command": "define",
+                     "args": [{"name": "value", "value": "ok"}],
+                     "targets": ["G.result"]},
+                ],
+                "define": lambda value: value,
+            }
+        )
+        coordinator = SequentialCoordinator(store, worker)
+        result = coordinator.execute(
+            parse_program(REFORMULATE_PROGRAM),
+            run_id="run-reform-3",
+        )
+        assert result["status"] == "succeeded"
+
+        state = store.project_state("run-reform-3")
+        # H.cause was retired by the REVISE; H.alt_cause was created
+        assert "H.cause" not in state["nodes"]
+        assert "H.alt_cause" in state["nodes"]
+
+
+def test_reformulate_max_three_enforced(tmp_path):
+    """A program that triggers more than 3 reformulations fails."""
+    # We use a REFORMULATE whose REPLAN produces a plan text (string)
+    # that itself contains another REFORMULATE, creating a chain.
+    loop_program = """\
+PROGRAM reform_loop VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+  H.cause = "latency"
+
+step.test: DO test_hypothesis(hypothesis = H.cause) -> E.test
+
+REFORMULATE
+  DIAGNOSE: DO challenge(claim = H.cause, evidence = E.test) -> R.why
+  REVISE: H.cause -> H.alt_cause
+  REPLAN: DO decompose(goal = G.goal, evidence = [E.test, R.why]) -> G.plan2
+  CONTINUE: G.plan2
+
+RETURN E.test
+"""
+    reformulation_plan_text = """\
+PROGRAM reformulated VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+step.retest: DO test_hypothesis(hypothesis = G.goal) -> E.retest
+
+REFORMULATE
+  DIAGNOSE: DO challenge(claim = G.goal, evidence = E.retest) -> R.why2
+  REPLAN: DO decompose(goal = G.goal, evidence = [E.retest, R.why2]) -> G.plan3
+  CONTINUE: G.plan3
+
+RETURN E.retest
+"""
+
+    def decompose_handler(goal, evidence):
+        return reformulation_plan_text
+
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "test_hypothesis": lambda hypothesis: {"status": "falsified"},
+                "challenge": lambda claim, evidence: {"reason": "wrong"},
+                "decompose": decompose_handler,
+                "define": lambda value: value,
+            }
+        )
+        coordinator = SequentialCoordinator(store, worker)
+        result = coordinator.execute(
+            parse_program(loop_program),
+            run_id="run-reform-4",
+        )
+        # Should fail after hitting the 3-reformulation cap
+        assert result["status"] == "failed"
+        assert "max reformulations" in result["error"]
+
+        history = store.events("run-reform-4")
+        reformulated = [
+            e for e in history
+            if e.event_type is EventType.PLAN_REFORMULATED
+        ]
+        assert len(reformulated) == 3
+
+
+def test_reformulate_event_log_records_plan_reformulated(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "test_hypothesis": lambda hypothesis: {"status": "falsified"},
+                "challenge": lambda claim, evidence: {"reason": "wrong"},
+                "decompose": lambda goal, evidence: [
+                    {"step_id": "step.r1", "command": "define",
+                     "args": [{"name": "value", "value": "ok"}],
+                     "targets": ["G.result"]},
+                ],
+                "define": lambda value: value,
+            }
+        )
+        coordinator = SequentialCoordinator(store, worker)
+        result = coordinator.execute(
+            parse_program(REFORMULATE_PROGRAM),
+            run_id="run-reform-5",
+        )
+        assert result["status"] == "succeeded"
+
+        history = store.events("run-reform-5")
+        reformulated = [
+            e for e in history
+            if e.event_type is EventType.PLAN_REFORMULATED
+        ]
+        assert len(reformulated) == 1
+        event = reformulated[0]
+        assert event.event_type is EventType.PLAN_REFORMULATED
+        payload = event.payload
+        assert payload["trigger_step"] is not None
+        assert payload["diagnosis_ref"] is not None
+        assert payload["new_plan_digest"] is not None
+        assert isinstance(payload["preserved_refs"], list)
+        assert "G.goal" in payload["preserved_refs"]

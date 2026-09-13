@@ -26,6 +26,7 @@ from tahoe.syntax.model import (
     Par,
     ParBranch,
     Program,
+    Reformulate,
     Return,
     Scatter,
     Stop,
@@ -65,6 +66,7 @@ class PlanEntry:
     gather: "Gather | None" = None
     par: "Par | None" = None
     loop: "Loop | None" = None
+    reformulate: "Reformulate | None" = None
     task_prefix: str = ""
     binds: tuple[tuple[str, tuple, tuple], ...] = ()
     finalizes: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -100,6 +102,13 @@ def build_plan(program: Program) -> list[PlanEntry]:
                             condition=statement.condition,
                         )
                     )
+                elif isinstance(statement.statement, Reformulate):
+                    entries.append(
+                        PlanEntry(
+                            reformulate=statement.statement,
+                            condition=statement.condition,
+                        )
+                    )
                 if statement.else_branch is not None:
                     for else_stmt in statement.else_branch:
                         if isinstance(else_stmt, Invocation):
@@ -118,6 +127,8 @@ def build_plan(program: Program) -> list[PlanEntry]:
                 entries.append(PlanEntry(par=statement))
             elif isinstance(statement, Loop):
                 entries.append(PlanEntry(loop=statement))
+            elif isinstance(statement, Reformulate):
+                entries.append(PlanEntry(reformulate=statement))
             elif isinstance(statement, Gather):
                 entries.append(PlanEntry(gather=statement))
 
@@ -141,6 +152,8 @@ def task_text(entry: PlanEntry) -> str:
     if entry.loop is not None:
         loop = entry.loop
         return f"LOOP {loop.name} MAX {loop.max_iterations}"
+    if entry.reformulate is not None:
+        return "REFORMULATE"
     if entry.gather is not None:
         gather = entry.gather
         return (
@@ -192,7 +205,7 @@ def collect_anchors(program: Program) -> dict[int, list]:
                             )
             elif isinstance(statement, Call):
                 count += 1
-            elif isinstance(statement, (Scatter, Gather, Par, Loop)):
+            elif isinstance(statement, (Scatter, Gather, Par, Loop, Reformulate)):
                 count += 1
         return count
 

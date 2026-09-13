@@ -66,7 +66,7 @@ directive     = requirement | hint ;
 requirement   = "REQUIRE", policy_ref ;
 hint          = "HINT", name, "=", value ;
 statement     = invocation | if_block | first_block | scatter_block | loop_block |
-                try_block | call | await | approval | terminal ;
+                reformulate_block | try_block | call | await | approval | terminal ;
 invocation    = step_id, ":", "DO", command, "(", arguments?, ")", "->", targets,
                 done?, handler* ;
 done          = "DONE", expression ;
@@ -79,6 +79,7 @@ gather        = "GATHER", step_id, "AS", reference, "USING", join_rule ;
 loop_block    = "LOOP", name, "ENTRY", expression, "WHILE", expression,
                 "PROGRESS", expression, "MAX", integer, "EXIT", expression,
                 "EXHAUSTED", terminal, control_block ;
+reformulate_block = "REFORMULATE", control_block ;
 try_block     = "TRY", control_block, ("OR", control_block)+ ;
 call          = "CALL", protocol, "(", arguments?, ")", "->", targets ;
 await         = "AWAIT", event_selector, ("TIMEOUT", duration)? ;
@@ -134,6 +135,29 @@ semantics:
    outer MAX). Body targets overwrite refs from INPUT or pre-loop steps; they
    are not available to post-loop statements (the loop may not run or may exit
    early).
+
+### REFORMULATE Implementation Notes (issue #80)
+
+The `REFORMULATE` construct is a plan-reformulation control block with the
+following semantics:
+
+1. **DIAGNOSE** (mandatory): runs a `challenge` or `review` DO step to
+   identify what went wrong.  This is a regular invocation.
+2. **REVISE** (optional): retires invalidated refs and creates new ones.
+   Syntax: `REVISE: <old_ref> -> <new_ref>`.  The old ref is retired
+   (history preserved), the new ref is created with the old ref's value
+   as a starting point.  May appear multiple times.
+3. **REPLAN** (mandatory): produces a new sub-plan from the current
+   committed state.  Uses `delegate` machinery but with a critical
+   difference: the child plan inherits ALL committed state from the
+   parent (not isolated namespace).
+4. **CONTINUE** (mandatory): resumes execution at the first step of the
+   new plan.  The event log records `PLAN_REFORMULATED`.
+
+REFORMULATE can appear inside IF blocks and as a standalone statement.
+It is bounded: max 3 reformulations per run (configurable).  The new plan
+must satisfy the same DONE predicates as the original (goal doesn't
+change).  DIAGNOSE is mandatory — silent replanning is forbidden.
 
 ## Deterministic Expressions
 

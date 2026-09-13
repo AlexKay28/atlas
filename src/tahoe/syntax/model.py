@@ -251,6 +251,41 @@ class Loop:
 
 
 @dataclass(frozen=True)
+class Reformulate:
+    """Plan reformulation at runtime (issue #80).
+
+    Triggered inside an IF block (or standalone after a failed step) when
+    a plan fails mid-execution.  The model can detect the failure,
+    diagnose what went wrong, revise invalidated refs, author a new
+    sub-plan from the current execution point, and continue — all within
+    the same run.
+
+    Four labeled sections:
+
+    - ``DIAGNOSE`` (mandatory): a regular DO step (challenge or review)
+      that identifies what went wrong.  ``diagnose`` is an ``Invocation``.
+    - ``REVISE`` (optional): retires invalidated refs and creates new ones.
+      ``revise`` is a list of ``(old_ref, new_ref)`` tuples.  The old ref
+      is retired (history preserved), the new ref is created with the old
+      ref's value as a starting point.
+    - ``REPLAN`` (mandatory): produces a new sub-plan from the current
+      committed state.  ``replan`` is an ``Invocation`` (typically
+      ``DO decompose(...)``).  Uses delegate machinery but with a critical
+      difference: the child plan inherits ALL committed state from the
+      parent (not isolated namespace).
+    - ``CONTINUE`` (mandatory): resumes execution at the first step of the
+      new plan.  ``continue_ref`` is the ref name produced by REPLAN
+      (e.g. ``G.plan2``).
+    """
+
+    diagnose: Invocation
+    revise: tuple[tuple[str, str], ...]
+    replan: Invocation
+    continue_ref: str
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Program:
     name: str
     version: str

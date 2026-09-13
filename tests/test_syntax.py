@@ -38,6 +38,7 @@ from tahoe.syntax import (
     Invocation,
     ParseError,
     Program,
+    Reformulate,
     Return,
     Scatter,
     Stop,
@@ -2410,3 +2411,232 @@ RETURN PR.stability.posterior
     assert step.targets == ("PR.stability.posterior",)
     assert step.done.ref == "PR.stability.posterior"
     assert step.done.value == 0.9
+
+
+# -- Issue #80: REFORMULATE syntax tests -------------------------------------
+
+REFORMULATE_FULL = """\
+PROGRAM reform VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+  H.cause = "latency"
+
+step.test: DO test_hypothesis(hypothesis = H.cause) -> E.test
+DONE E.test.status == "confirmed"
+
+IF E.test.status == "falsified"
+  REFORMULATE
+    DIAGNOSE: DO challenge(claim = H.cause, evidence = E.test) -> R.why
+    REVISE: H.cause -> H.alt_cause
+    REPLAN: DO decompose(goal = G.goal, evidence = [E.test, R.why]) -> G.plan2
+    CONTINUE: G.plan2
+
+RETURN E.test
+"""
+
+REFORMULATE_NO_REVISE = """\
+PROGRAM reform2 VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+  H.cause = "latency"
+
+step.test: DO test_hypothesis(hypothesis = H.cause) -> E.test
+DONE E.test.status == "confirmed"
+
+IF E.test.status == "falsified"
+  REFORMULATE
+    DIAGNOSE: DO challenge(claim = H.cause, evidence = E.test) -> R.why
+    REPLAN: DO decompose(goal = G.goal, evidence = [E.test, R.why]) -> G.plan2
+    CONTINUE: G.plan2
+
+RETURN E.test
+"""
+
+REFORMULATE_NO_DIAGNOSE = """\
+PROGRAM reform3 VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+step.test: DO test_hypothesis(hypothesis = G.goal) -> E.test
+DONE E.test.status == "confirmed"
+
+REFORMULATE
+  REPLAN: DO decompose(goal = G.goal) -> G.plan2
+  CONTINUE: G.plan2
+
+RETURN E.test
+"""
+
+REFORMULATE_NO_REPLAN = """\
+PROGRAM reform4 VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+step.test: DO test_hypothesis(hypothesis = G.goal) -> E.test
+DONE E.test.status == "confirmed"
+
+REFORMULATE
+  DIAGNOSE: DO challenge(claim = G.goal) -> R.why
+  CONTINUE: G.plan2
+
+RETURN E.test
+"""
+
+REFORMULATE_NO_CONTINUE = """\
+PROGRAM reform5 VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+step.test: DO test_hypothesis(hypothesis = G.goal) -> E.test
+DONE E.test.status == "confirmed"
+
+REFORMULATE
+  DIAGNOSE: DO challenge(claim = G.goal) -> R.why
+  REPLAN: DO decompose(goal = G.goal) -> G.plan2
+
+RETURN E.test
+"""
+
+REFORMULATE_MULTIPLE_REVISE = """\
+PROGRAM reform6 VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+  H.cause = "latency"
+  H.mechanism = "queue"
+
+step.test: DO test_hypothesis(hypothesis = H.cause) -> E.test
+DONE E.test.status == "confirmed"
+
+IF E.test.status == "falsified"
+  REFORMULATE
+    DIAGNOSE: DO challenge(claim = H.cause, evidence = E.test) -> R.why
+    REVISE: H.cause -> H.alt_cause
+    REVISE: H.mechanism -> H.alt_mech
+    REPLAN: DO decompose(goal = G.goal, evidence = [E.test, R.why]) -> G.plan2
+    CONTINUE: G.plan2
+
+RETURN E.test
+"""
+
+
+def test_reformulate_parses_with_all_four_sections():
+    program = parse_program(REFORMULATE_FULL)
+    # The REFORMULATE should be inside a Conditional's if-branch
+    cond = program.statements[1]
+    assert isinstance(cond, Conditional)
+    ref = cond.statement
+    assert isinstance(ref, Reformulate)
+    assert isinstance(ref.diagnose, Invocation)
+    assert ref.diagnose.command == "challenge"
+    assert ref.revise == (("H.cause", "H.alt_cause"),)
+    assert isinstance(ref.replan, Invocation)
+    assert ref.replan.command == "decompose"
+    assert ref.continue_ref == "G.plan2"
+
+
+def test_reformulate_parses_without_revise():
+    program = parse_program(REFORMULATE_NO_REVISE)
+    cond = program.statements[1]
+    assert isinstance(cond, Conditional)
+    ref = cond.statement
+    assert isinstance(ref, Reformulate)
+    assert ref.revise == ()
+    assert isinstance(ref.diagnose, Invocation)
+    assert isinstance(ref.replan, Invocation)
+    assert ref.continue_ref == "G.plan2"
+
+
+def test_reformulate_rejects_without_diagnose():
+    with pytest.raises(ParseError, match="DIAGNOSE"):
+        parse_program(REFORMULATE_NO_DIAGNOSE)
+
+
+def test_reformulate_rejects_without_replan():
+    with pytest.raises(ParseError, match="REPLAN"):
+        parse_program(REFORMULATE_NO_REPLAN)
+
+
+def test_reformulate_rejects_without_continue():
+    with pytest.raises(ParseError, match="CONTINUE"):
+        parse_program(REFORMULATE_NO_CONTINUE)
+
+
+def test_reformulate_multiple_revise_pairs():
+    program = parse_program(REFORMULATE_MULTIPLE_REVISE)
+    cond = program.statements[1]
+    assert isinstance(cond, Conditional)
+    ref = cond.statement
+    assert isinstance(ref, Reformulate)
+    assert ref.revise == (
+        ("H.cause", "H.alt_cause"),
+        ("H.mechanism", "H.alt_mech"),
+    )
+
+
+def test_reformulate_validates_with_known_commands():
+    program = parse_program(REFORMULATE_FULL)
+    assert validate_program(
+        program,
+        known_commands={"test_hypothesis", "challenge", "decompose"},
+    ) is True
+
+
+def test_reformulate_seal_digest_deterministic():
+    program1 = parse_program(REFORMULATE_FULL)
+    program2 = parse_program(REFORMULATE_FULL)
+    digest1 = seal_digest(program1)
+    digest2 = seal_digest(program2)
+    assert digest1 == digest2
+    assert len(digest1) == 64
+
+
+def test_reformulate_in_canonical_json():
+    program = parse_program(REFORMULATE_FULL)
+    cj = canonical_json(program)
+    import json
+    payload = json.loads(cj)
+    # Find the Reformulate statement (inside a conditional)
+    for stmt in payload["statements"]:
+        if stmt.get("kind") == "conditional":
+            inner = stmt["statement"]
+            assert inner["kind"] == "reformulate"
+            assert inner["diagnose"]["command"] == "challenge"
+            assert inner["revise"] == [{"old": "H.cause", "new": "H.alt_cause"}]
+            assert inner["replan"]["command"] == "decompose"
+            assert inner["continue_ref"] == "G.plan2"
+            break
+    else:
+        pytest.fail("No conditional with reformulate found in canonical JSON")
+
+
+def test_reformulate_standalone_after_step():
+    source = """\
+PROGRAM standalone VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+  H.cause = "latency"
+
+step.test: DO test_hypothesis(hypothesis = H.cause) -> E.test
+DONE E.test.status == "confirmed"
+
+REFORMULATE
+  DIAGNOSE: DO challenge(claim = H.cause, evidence = E.test) -> R.why
+  REVISE: H.cause -> H.alt_cause
+  REPLAN: DO decompose(goal = G.goal, evidence = [E.test, R.why]) -> G.plan2
+  CONTINUE: G.plan2
+
+RETURN E.test
+"""
+    program = parse_program(source)
+    # The REFORMULATE is a top-level statement (not inside an IF)
+    ref = program.statements[1]
+    assert isinstance(ref, Reformulate)
+    assert ref.diagnose.command == "challenge"
+    assert ref.continue_ref == "G.plan2"

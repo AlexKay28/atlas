@@ -96,6 +96,10 @@ class EventType(str, Enum):
     LOOP_ITERATION = "loop.iteration"
     LOOP_EXITED = "loop.exited"
     LOOP_EXHAUSTED = "loop.exhausted"
+    # Issue #80: a REFORMULATE block fired — the plan was reformulated
+    # mid-execution.  Payload: {trigger_step, diagnosis_ref,
+    # revised_refs, new_plan_digest, preserved_refs}.
+    PLAN_REFORMULATED = "plan.reformulated"
     TASK_UPDATED = "task.updated"
 
 
