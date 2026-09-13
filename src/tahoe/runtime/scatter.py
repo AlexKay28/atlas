@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 from typing import TYPE_CHECKING, Any, Callable, Mapping
@@ -17,6 +18,20 @@ if TYPE_CHECKING:
 
 
 _CANDIDATE_INVOCATION_RE = re.compile(r"^inv-(\d+)\.cand(\d+)$")
+
+
+def _k_of_n(mode: str, total: int) -> int:
+    """Resolve the required-success count for a k-of-n or quorum mode.
+
+    ``k:3`` -> 3.  ``quorum:0.67`` -> ceil(total * 0.67).  Other modes
+    raise ValueError (callers should gate on the mode prefix first).
+    """
+    if mode.startswith("k:"):
+        return int(mode.split(":", 1)[1])
+    if mode.startswith("quorum:"):
+        ratio = float(mode.split(":", 1)[1])
+        return max(1, math.ceil(total * ratio))
+    raise ValueError(f"not a k-of-n or quorum mode: {mode}")
 
 
 def candidate_invocation_id(scatter_invocation_id: str, candidate: int) -> str:
@@ -344,6 +359,7 @@ class ScatterEngine:
         candidate_values: dict[int, dict[str, Any]] = {}
         loser_errors: dict[int, str] = {}
         winner: int | None = None
+        is_kofn = gather.mode.startswith("k:") or gather.mode.startswith("quorum:")
         for k in range(1, count + 1):
             if k in prior_success:
                 candidate_values[k] = prior_success[k]
@@ -407,9 +423,10 @@ class ScatterEngine:
                     error=payload_outcome,
                     validation=validation,
                 )
-            # USING any: the candidate is a loser — cancelled and recorded,
-            # never a FAILED event (audit truthfulness: a run that may yet
-            # succeed cannot carry FAILED events).
+            # USING any or k-of-n/quorum: the candidate is a loser —
+            # cancelled and recorded, never a FAILED event (audit
+            # truthfulness: a run that may yet succeed cannot carry
+            # FAILED events).
             loser_errors[k] = payload_outcome
             records = []
             self._cancel_task_if_unsettled(
@@ -434,6 +451,25 @@ class ScatterEngine:
                 loser_errors=loser_errors,
             )
 
+        if is_kofn:
+            required = _k_of_n(gather.mode, count)
+            succeeded = len(candidate_values)
+            if succeeded < required:
+                return self._fail_scatter_kofn(
+                    run_id=run_id,
+                    plan=plan,
+                    statement_to_task=statement_to_task,
+                    idx=idx,
+                    scatter_invocation=scatter_invocation,
+                    scatter_task_id=task_id,
+                    body=body,
+                    candidate_tasks=candidate_tasks,
+                    candidate_values=candidate_values,
+                    loser_errors=loser_errors,
+                    required=required,
+                    mode=gather.mode,
+                )
+
         if crash_hook is not None:
             # Crash window after the fan-out completed, before the scatter
             # entry's own terminal batch: resume re-derives the expansion
@@ -447,6 +483,12 @@ class ScatterEngine:
         )
         if gather.mode == "any" and winner is not None:
             evidence += f"; first success at candidate {winner}"
+        if is_kofn:
+            required = _k_of_n(gather.mode, count)
+            evidence += (
+                f"; {len(candidate_values)}/{count} succeeded"
+                f" (required {required})"
+            )
         if loser_errors:
             evidence += (
                 f"; losers recorded: {len(loser_errors)}"
@@ -965,6 +1007,91 @@ class ScatterEngine:
             "error": error,
             "outputs": {},
         }
+    def _fail_scatter_kofn(
+        self,
+        *,
+        run_id: str,
+        plan: list[_PlanEntry],
+        statement_to_task: dict[int, str],
+        idx: int,
+        scatter_invocation: str,
+        scatter_task_id: str,
+        body: Invocation,
+        candidate_tasks: dict[int, str],
+        candidate_values: dict[int, dict[str, Any]],
+        loser_errors: dict[int, str],
+        required: int,
+        mode: str,
+    ) -> dict[str, Any]:
+        """Fail the run when k-of-n or quorum threshold was not met (issue #84).
+
+        Like ``_fail_scatter_all_losers`` but for the k-of-n/quorum join:
+        the losers' FAILED events are recorded now that the join cannot
+        succeed, and the run finishes failed through the standard shape.
+        """
+        records: list[_Record] = []
+        for k in sorted(loser_errors):
+            cand_task_id = candidate_tasks[k]
+            records.append(_Record(
+                event_type=EventType.FAILED,
+                instruction_id=body.step_id,
+                invocation_id=candidate_invocation_id(scatter_invocation, k),
+                task_id=cand_task_id,
+                payload={"error": loser_errors[k]},
+                store=self.store,
+            ))
+            records.append(_Record(
+                event_type=EventType.TASK_UPDATED,
+                task_id=cand_task_id,
+                payload={
+                    "kind": "invocation_recorded", "id": cand_task_id,
+                    "tokens": 0, "cost": 0.0, "retries": 0,
+                    "elapsed_seconds": 0.0,
+                },
+                store=self.store,
+            ))
+        records.append(_Record(
+            event_type=EventType.TASK_UPDATED,
+            task_id=scatter_task_id,
+            payload={"kind": "task_cancelled", "id": scatter_task_id},
+            store=self.store,
+        ))
+        for pending_idx in range(idx + 1, len(plan)):
+            if pending_idx in statement_to_task:
+                records.append(_Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=statement_to_task[pending_idx],
+                    payload={
+                        "kind": "task_cancelled",
+                        "id": statement_to_task[pending_idx],
+                    },
+                    store=self.store,
+                ))
+        succeeded = len(candidate_values)
+        total = len(candidate_tasks)
+        if mode.startswith("k:"):
+            error = (
+                f"USING k({required}) gather failed: only {succeeded}"
+                f" of {total} candidate(s) succeeded (need {required})"
+            )
+        else:
+            ratio = mode.split(":", 1)[1]
+            error = (
+                f"USING quorum({ratio}) gather failed: only {succeeded}"
+                f" of {total} candidate(s) succeeded (need {required})"
+            )
+        records.append(_Record(
+            event_type=EventType.RUN_FINISHED,
+            payload={"status": "failed", "error": error},
+            store=self.store,
+        ))
+        self.store.append_batch(run_id, records)
+        return {
+            "run_id": run_id,
+            "status": "failed",
+            "error": error,
+            "outputs": {},
+        }
     def _candidate_state_values(
         self,
         values: Mapping[str, Any],
@@ -1217,6 +1344,48 @@ class ScatterEngine:
             else:
                 evidence = (
                     f"join any: winner candidate {winner}; no losers"
+                )
+
+        elif gather.mode.startswith("k:") or gather.mode.startswith("quorum:"):
+            required = _k_of_n(gather.mode, count)
+            losers = scatter_record.get("losers", {})
+            joined: list[Any] = []
+            succeeded_count = 0
+            for k in range(1, count + 1):
+                leaf_values = self._candidate_state_values(
+                    values, alias, body, k
+                )
+                if leaf_values is not None:
+                    succeeded_count += 1
+                    if len(body.targets) == 1:
+                        joined.append(leaf_values[body.targets[0]])
+                    else:
+                        joined.append(
+                            {
+                                target.split(".")[-1]: value
+                                for target, value in leaf_values.items()
+                            }
+                        )
+            if succeeded_count < required:
+                return fail_gather(
+                    f"GATHER USING {gather.mode}: only {succeeded_count}"
+                    f" of {count} candidate(s) succeeded (need {required})"
+                )
+            alias_value = joined
+            selection["required"] = required
+            selection["succeeded"] = succeeded_count
+            selection["losers"] = losers
+            if losers:
+                evidence = (
+                    f"join {gather.mode}: committed {alias} from"
+                    f" {succeeded_count}/{count} candidate(s)"
+                    f" (required {required}); losers: {losers}"
+                )
+            else:
+                evidence = (
+                    f"join {gather.mode}: committed {alias} from"
+                    f" {succeeded_count}/{count} candidate(s)"
+                    f" (required {required})"
                 )
 
         else:  # ranked
