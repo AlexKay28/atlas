@@ -1077,3 +1077,325 @@ RETURN E.both
         assert state["nodes"]["E.both.c1.summary"]["value"] == "S-a"
         assert state["nodes"]["E.both.c2.detail"]["value"] == "D-b"
         assert audit_run(store, "r").ok
+
+
+# ---------------------------------------------------------------------------
+# Issue #84: k(n) and quorum(ratio) join rules
+# ---------------------------------------------------------------------------
+
+
+SCATTER_K2_PROGRAM = """\
+PROGRAM kofn VERSION 1.0
+INPUT
+    Q.parts = ["a", "b", "c"]
+SCATTER X.part IN Q.parts MAX 3
+  step.draft: DO summarize(source_refs = X.part) -> E.draft
+GATHER draft AS E.tests USING k(2)
+RETURN E.tests
+"""
+
+SCATTER_QUORUM_PROGRAM = """\
+PROGRAM quorum VERSION 1.0
+INPUT
+    Q.parts = ["a", "b", "c"]
+SCATTER X.part IN Q.parts MAX 3
+  step.draft: DO summarize(source_refs = X.part) -> E.draft
+GATHER draft AS E.tests USING quorum(0.5)
+RETURN E.tests
+"""
+
+
+def test_k_of_n_parses_correctly():
+    program = parse_program(SCATTER_K2_PROGRAM)
+    gather = program.statements[1]
+    assert gather.mode == "k:2"
+
+
+def test_quorum_parses_correctly():
+    program = parse_program(SCATTER_QUORUM_PROGRAM)
+    gather = program.statements[1]
+    assert gather.mode == "quorum:0.5"
+
+
+def test_k_of_n_seal_is_deterministic():
+    assert seal_digest(parse_program(SCATTER_K2_PROGRAM)) == seal_digest(
+        parse_program(SCATTER_K2_PROGRAM)
+    )
+
+
+def test_quorum_seal_is_deterministic():
+    assert seal_digest(parse_program(SCATTER_QUORUM_PROGRAM)) == seal_digest(
+        parse_program(SCATTER_QUORUM_PROGRAM)
+    )
+
+
+def test_k_of_n_all_succeed_commits_list(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store, make_worker()).execute(
+            parse_program(SCATTER_K2_PROGRAM), run_id="r"
+        )
+        assert result["status"] == "succeeded"
+        assert result["outputs"]["E.tests"] == [
+            "summary-of-a",
+            "summary-of-b",
+            "summary-of-c",
+        ]
+        assert audit_run(store, "r").ok
+
+
+def test_k_of_n_two_of_three_succeed_commits_list(tmp_path):
+    def flaky_summarize(source_refs):
+        if source_refs == "b":
+            raise RuntimeError("candidate b failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(SCATTER_K2_PROGRAM), run_id="r")
+        assert result["status"] == "succeeded"
+        assert result["outputs"]["E.tests"] == [
+            "summary-of-a",
+            "summary-of-c",
+        ]
+        assert audit_run(store, "r").ok
+
+
+def test_k_of_n_failure_when_too_few_succeed(tmp_path):
+    def flaky_summarize(source_refs):
+        if source_refs != "a":
+            raise RuntimeError(f"candidate {source_refs} failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(SCATTER_K2_PROGRAM), run_id="r")
+        assert result["status"] == "failed"
+        assert "only 1 of 3 candidate(s) succeeded (need 2)" in result["error"]
+        assert audit_run(store, "r").ok
+
+
+def test_quorum_all_succeed_commits_list(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store, make_worker()).execute(
+            parse_program(SCATTER_QUORUM_PROGRAM), run_id="r"
+        )
+        assert result["status"] == "succeeded"
+        assert result["outputs"]["E.tests"] == [
+            "summary-of-a",
+            "summary-of-b",
+            "summary-of-c",
+        ]
+        assert audit_run(store, "r").ok
+
+
+def test_quorum_two_of_three_succeed(tmp_path):
+    """ceil(3 * 0.5) = ceil(1.5) = 2, so 2 of 3 is enough."""
+    def flaky_summarize(source_refs):
+        if source_refs == "c":
+            raise RuntimeError("candidate c failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(SCATTER_QUORUM_PROGRAM), run_id="r")
+        assert result["status"] == "succeeded"
+        assert result["outputs"]["E.tests"] == [
+            "summary-of-a",
+            "summary-of-b",
+        ]
+        assert audit_run(store, "r").ok
+
+
+def test_quorum_failure_when_ratio_not_met(tmp_path):
+    """ceil(3 * 0.5) = 2, so 1 of 3 is not enough."""
+    def flaky_summarize(source_refs):
+        if source_refs != "a":
+            raise RuntimeError(f"candidate {source_refs} failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(SCATTER_QUORUM_PROGRAM), run_id="r")
+        assert result["status"] == "failed"
+        assert "only 1 of 3 candidate(s) succeeded (need 2)" in result["error"]
+        assert audit_run(store, "r").ok
+
+
+def test_k_of_n_no_failed_events_on_success(tmp_path):
+    """Audit truthfulness: a succeeding k-of-n run has no FAILED events."""
+    def flaky_summarize(source_refs):
+        if source_refs == "b":
+            raise RuntimeError("candidate b failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(SCATTER_K2_PROGRAM), run_id="r")
+        assert result["status"] == "succeeded"
+        assert not [
+            event
+            for event in store.events("r")
+            if event.event_type is EventType.FAILED
+        ]
+
+
+def test_k_of_n_failed_events_on_failure(tmp_path):
+    """Failed candidates record FAILED events once the join cannot succeed."""
+    def flaky_summarize(source_refs):
+        if source_refs != "a":
+            raise RuntimeError(f"candidate {source_refs} failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(SCATTER_K2_PROGRAM), run_id="r")
+        assert result["status"] == "failed"
+        failed_events = [
+            event
+            for event in store.events("r")
+            if event.event_type is EventType.FAILED
+        ]
+        assert len(failed_events) >= 2
+
+
+def test_k_of_n_with_k_equal_to_n_behaves_like_all(tmp_path):
+    source = SCATTER_K2_PROGRAM.replace("USING k(2)", "USING k(3)")
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store, make_worker()).execute(
+            parse_program(source), run_id="r"
+        )
+        assert result["status"] == "succeeded"
+        assert len(result["outputs"]["E.tests"]) == 3
+
+
+def test_k_of_n_with_k_equal_to_n_fails_on_one_failure(tmp_path):
+    source = SCATTER_K2_PROGRAM.replace("USING k(2)", "USING k(3)")
+    def flaky_summarize(source_refs):
+        if source_refs == "b":
+            raise RuntimeError("candidate b failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(source), run_id="r")
+        assert result["status"] == "failed"
+
+
+def test_quorum_1_0_behaves_like_all(tmp_path):
+    source = SCATTER_QUORUM_PROGRAM.replace("USING quorum(0.67)", "USING quorum(1.0)")
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store, make_worker()).execute(
+            parse_program(source), run_id="r"
+        )
+        assert result["status"] == "succeeded"
+        assert len(result["outputs"]["E.tests"]) == 3
+
+
+def test_quorum_1_0_fails_on_one_failure(tmp_path):
+    source = SCATTER_QUORUM_PROGRAM.replace("USING quorum(0.5)", "USING quorum(1.0)")
+    def flaky_summarize(source_refs):
+        if source_refs == "b":
+            raise RuntimeError("candidate b failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(source), run_id="r")
+        assert result["status"] == "failed"
+
+
+def test_k_of_n_rejects_judge():
+    source = SCATTER_K2_PROGRAM.replace(
+        "USING k(2)",
+        "USING k(2) JUDGE step.judge",
+    ).replace(
+        "RETURN E.tests",
+        "  step.judge: DO check(artifact = E.draft) -> V.score\nRETURN E.tests",
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="JUDGE is only valid with USING ranked"):
+        validate_program(program, known_commands={"summarize", "check"})
+
+
+def test_quorum_rejects_judge():
+    source = SCATTER_QUORUM_PROGRAM.replace(
+        "USING quorum(0.5)",
+        "USING quorum(0.5) JUDGE step.judge",
+    ).replace(
+        "RETURN E.tests",
+        "  step.judge: DO check(artifact = X.part) -> V.score\nRETURN E.tests",
+    )
+    program = parse_program(source)
+    with pytest.raises(ParseError, match="JUDGE is only valid with USING ranked"):
+        validate_program(program, known_commands={"summarize", "check"})
+
+
+def test_k_of_n_with_empty_collection_fails(tmp_path):
+    """k(2) with 0 candidates — 0 succeeded < 2 required, so fails."""
+    source = SCATTER_K2_PROGRAM.replace(
+        'Q.parts = ["a", "b", "c"]', "Q.parts = []"
+    )
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(store, make_worker()).execute(
+            parse_program(source), run_id="r"
+        )
+        assert result["status"] == "failed"
+
+
+def test_k_of_n_gather_evidence_recorded(tmp_path):
+    def flaky_summarize(source_refs):
+        if source_refs == "b":
+            raise RuntimeError("candidate b failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(SCATTER_K2_PROGRAM), run_id="r")
+        assert result["status"] == "succeeded"
+        ledger = store.task_ledger("r")
+        gather_task = next(
+            task
+            for task in ledger.tasks.values()
+            if task.text.startswith("GATHER")
+        )
+        evidence = gather_task.evidence[-1]
+        assert "k:2" in evidence
+        assert "2/3" in evidence
+
+
+def test_quorum_gather_evidence_recorded(tmp_path):
+    def flaky_summarize(source_refs):
+        if source_refs == "c":
+            raise RuntimeError("candidate c failed")
+        return f"summary-of-{source_refs}"
+
+    with EventStore(tmp_path / "events.db") as store:
+        result = SequentialCoordinator(
+            store, make_worker(summarize=flaky_summarize)
+        ).execute(parse_program(SCATTER_QUORUM_PROGRAM), run_id="r")
+        assert result["status"] == "succeeded"
+        ledger = store.task_ledger("r")
+        gather_task = next(
+            task
+            for task in ledger.tasks.values()
+            if task.text.startswith("GATHER")
+        )
+        evidence = gather_task.evidence[-1]
+        assert "quorum:0.5" in evidence
+        assert "2/3" in evidence
+
+
+def test_k_of_n_canonical_json_contains_mode():
+    payload = canonical_json(parse_program(SCATTER_K2_PROGRAM))
+    assert '"mode":"k:2"' in payload
+    payload_q = canonical_json(parse_program(SCATTER_QUORUM_PROGRAM))
+    assert '"mode":"quorum:0.5"' in payload_q

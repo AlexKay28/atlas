@@ -84,6 +84,13 @@ _GATHER_RE = re.compile(
     rf"^GATHER\s+(?P<step_id>(?:step\.)?{_NAME})\s+AS\s+(?P<alias>{_REF_PATTERN})\s+"
     rf"USING\s+(?P<mode>{_NAME})(?:\s+JUDGE\s+step\.(?P<judge_id>{_NAME}))?$"
 )
+# Issue #84: k(n) and quorum(ratio) join rules.  These use a parenthesised
+# argument after the mode keyword, so they need a separate regex.
+_GATHER_PARAM_RE = re.compile(
+    rf"^GATHER\s+(?P<step_id>(?:step\.)?{_NAME})\s+AS\s+(?P<alias>{_REF_PATTERN})\s+"
+    rf"USING\s+(?P<mode>k|quorum)\((?P<param>\d+(?:\.\d+)?)\)"
+    rf"(?:\s+JUDGE\s+step\.(?P<judge_id>{_NAME}))?$"
+)
 # Issue #24: PAR block grammar.  The header is ``PAR MAX <n>`` followed by
 # two or more indented branch lines (each a full DO invocation or a CALL
 # line) and terminated by a matching-dedent BARRIER line that optionally
@@ -95,8 +102,9 @@ _BARRIER_RE = re.compile(
 # Canonical join rules (issue #27 naming resolution): the draft spec's
 # all/any/ranked are canonical; the issue body's first/best are accepted
 # aliases (first == any, best == ranked) normalized at parse time so both
-# spellings parse and seal identically.
-_GATHER_MODES = frozenset({"all", "any", "ranked"})
+# spellings parse and seal identically.  Issue #84 adds k(n) and
+# quorum(ratio), stored as "k:<n>" and "quorum:<ratio>" in the mode field.
+_GATHER_MODES = frozenset({"all", "any", "ranked", "k", "quorum"})
 _GATHER_MODE_ALIASES = {"first": "any", "best": "ranked"}
 _STOP_KINDS = frozenset({"completed", "failed", "blocked", "denied", "cancelled", "unresolved"})
 _DONE_OPS = frozenset({"equals", "in", "matched", "ne", "eq_ref", "ne_ref", "count"})
@@ -561,15 +569,65 @@ def _parse_gather_line(line: str, line_no: int, lines) -> Gather:
 
     ``USING`` accepts the canonical rules ``all`` / ``any`` / ``ranked``
     and the aliases ``first`` (== any) and ``best`` (== ranked), normalized
-    at parse time.  ``JUDGE step.<id>`` is declared on the line for ranked
-    joins and the judge step itself is the immediately following indented
-    line, whose step id must match the declared one.
+    at parse time.  Issue #84 adds ``k(n)`` and ``quorum(ratio)`` — these
+    carry a parenthesised argument and are stored in the mode field as
+    ``k:<n>`` and ``quorum:<ratio>`` respectively.  ``JUDGE step.<id>`` is
+    declared on the line for ranked joins and the judge step itself is the
+    immediately following indented line, whose step id must match the
+    declared one.
     """
+    param_match = _GATHER_PARAM_RE.fullmatch(line)
+    if param_match is not None:
+        mode_name = param_match.group("mode")
+        param = param_match.group("param")
+        if mode_name == "k":
+            n = int(param)
+            if n < 1:
+                raise ParseError(
+                    "GATHER USING k(n) requires n >= 1",
+                    line_no,
+                    1,
+                )
+            mode = f"k:{n}"
+        else:
+            ratio = float(param)
+            if not (0 < ratio <= 1):
+                raise ParseError(
+                    "GATHER USING quorum(ratio) requires 0 < ratio <= 1",
+                    line_no,
+                    1,
+                )
+            mode = f"quorum:{ratio}"
+        body_step_id = param_match.group("step_id")
+        if not body_step_id.startswith("step."):
+            body_step_id = f"step.{body_step_id}"
+        judge: Invocation | None = None
+        judge_id = param_match.group("judge_id")
+        if judge_id is not None:
+            judge_line_no, judge_line = _consume_block_line(
+                lines, f"GATHER judge step step.{judge_id}", line_no
+            )
+            judge = _parse_invocation_text(judge_line, judge_line_no)
+            if judge.step_id != f"step.{judge_id}":
+                raise ParseError(
+                    f"GATHER JUDGE declares step.{judge_id} but the following"
+                    f" line defines {judge.step_id}",
+                    judge_line_no,
+                    1,
+                )
+        return Gather(
+            body_step_id,
+            param_match.group("alias"),
+            mode,
+            judge,
+            line_no,
+        )
+
     match = _GATHER_RE.fullmatch(line)
     if match is None:
         raise ParseError(
             "malformed GATHER (expected GATHER <step-id> AS <ref> USING"
-            " all|any|ranked [JUDGE step.<id>])",
+            " all|any|ranked|k(n)|quorum(ratio) [JUDGE step.<id>])",
             line_no,
             1,
         )
@@ -578,7 +636,7 @@ def _parse_gather_line(line: str, line_no: int, lines) -> Gather:
     if mode not in _GATHER_MODES:
         raise ParseError(
             f"unknown GATHER USING mode {written_mode!r} (expected all,"
-            " any, ranked, or the aliases first, best)",
+            " any, ranked, k(n), quorum(ratio), or the aliases first, best)",
             line_no,
             1,
         )
@@ -1792,10 +1850,12 @@ def _validate_gather_statement(
             f"GATHER names {statement.body_step_id} but the preceding"
             f" SCATTER body is {scatter.body.step_id}"
         )
-    if statement.mode not in _GATHER_MODES:
+    if statement.mode not in _GATHER_MODES and not (
+        statement.mode.startswith("k:") or statement.mode.startswith("quorum:")
+    ):
         raise ParseError(
             f"unknown GATHER USING mode {statement.mode!r} (expected all,"
-            " any, ranked, or the aliases first, best)"
+            " any, ranked, k(n), quorum(ratio), or the aliases first, best)"
         )
     alias = statement.alias_ref
     if alias.startswith("KB."):
