@@ -13,6 +13,7 @@ import json
 import os
 import random
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -112,7 +113,6 @@ def run_opencode_arm(task, trial_idx):
 def run_tahoe_arm(task, trial_idx):
     from tahoe.syntax import parse_program
     from tahoe.runtime import EventStore, SequentialCoordinator
-    from tahoe.runtime.coordinator import DeterministicWorker
     from tahoe.worker_adapter import make_worker
 
     program_source = task.get("program_source", "")
@@ -132,33 +132,50 @@ def run_tahoe_arm(task, trial_idx):
         }
 
     started = time.monotonic()
+    tmpdir = tempfile.mkdtemp()
+    db_path = os.path.join(tmpdir, "events.db")
     try:
         program = parse_program(program_source)
-        store = EventStore()
+        store = EventStore(path=db_path)
         api_base = os.environ.get("TAHOE_API_BASE", "")
         api_key = os.environ.get("TAHOE_API_KEY", "")
         if api_base and api_key:
             worker = make_worker(1, api_base=api_base, api_key=api_key,
                                  model=os.environ.get("TAHOE_MODEL", "."))
         else:
-            worker = DeterministicWorker()
+            from tahoe.runtime.coordinator import DeterministicWorker
+            from tahoe.registry import builtin_registry
+            reg = builtin_registry()
+            handlers = {name: reg.resolve(name) for name in reg.names()}
+            worker = DeterministicWorker(handlers=handlers)
         coordinator = SequentialCoordinator(store=store, worker=worker)
         run_id = f"ablation-{task['task_id']}-t{trial_idx}"
         coordinator.execute(program, run_id=run_id)
-        events = store.events
+        events = store.events(run_id)
         final_answer = ""
         for ev in reversed(events):
-            if ev.get("kind") == "step_result":
-                final_answer = str(ev.get("payload", {}).get("result", ""))
+            if ev.event_type == "invocation.result_received":
+                final_answer = str(ev.payload.get("result", ""))
                 break
+        if not final_answer:
+            for ev in reversed(events):
+                if ev.event_type == "run.finished":
+                    final_answer = str(ev.payload.get("status", ""))
+                    break
 
         input_tokens = 0
         output_tokens = 0
         for ev in events:
-            usage = ev.get("payload", {}).get("receipt", {}).get("usage", {})
-            if usage:
-                input_tokens += usage.get("input_tokens", 0) or 0
-                output_tokens += usage.get("output_tokens", 0) or 0
+            payload = ev.payload or {}
+            tokens = payload.get("tokens") or 0
+            if tokens:
+                input_tokens += int(tokens)
+
+        run_status = "succeeded"
+        for ev in reversed(events):
+            if ev.event_type == "run.finished":
+                run_status = ev.payload.get("status", "failed")
+                break
 
         return {
             "task_id": task["task_id"],
@@ -168,8 +185,8 @@ def run_tahoe_arm(task, trial_idx):
             "output_tokens": output_tokens,
             "total_tokens": input_tokens + output_tokens,
             "wall_seconds": time.monotonic() - started,
-            "passed": True,
-            "failure_class": "none",
+            "passed": run_status == "succeeded",
+            "failure_class": "none" if run_status == "succeeded" else "run_failed",
             "authoring_tokens": 0,
             "final_answer": final_answer,
         }

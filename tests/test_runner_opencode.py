@@ -63,6 +63,7 @@ class TestImportAndSignature:
             "cwd",
             "max_turns",
             "timeout_seconds",
+            "token_session_file",
         ]
         assert signature.parameters["model"].default == "GLM-5.3-Flash_alexkay28/."
         assert signature.parameters["agent"].default == "build"

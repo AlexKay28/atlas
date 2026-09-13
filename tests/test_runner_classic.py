@@ -190,7 +190,8 @@ def test_single_turn_immediate_answer():
     assert result.wall_seconds >= 0.0
     assert len(created) == 1
     client = created[0]
-    assert client.init_kwargs["api_key"] == "test-key"
+    assert client.init_kwargs["api_key"] == "dummy"
+    assert client.init_kwargs["default_headers"]["Authorization"] == "OAuth test-key"
     assert client.init_kwargs["base_url"] == "http://fake.local/v1"
     assert client.init_kwargs["timeout"] == 120
     calls = client.chat.completions.calls
@@ -307,7 +308,8 @@ def test_env_fallback_for_api_key_and_base():
             result = run("task-6", "hello")
     assert result.passed is True
     assert result.final_answer == "hi"
-    assert created[0].init_kwargs["api_key"] == "env-key"
+    assert created[0].init_kwargs["api_key"] == "dummy"
+    assert created[0].init_kwargs["default_headers"]["Authorization"] == "OAuth env-key"
     assert created[0].init_kwargs["base_url"] == "http://env.local/v1"
 
 

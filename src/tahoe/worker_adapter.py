@@ -536,8 +536,12 @@ class LiveModelWorker:
 
     @property
     def commands(self) -> set[str]:
-        """A live model serves arbitrary commands; it owns no registry."""
-        return set()
+        """A live model serves arbitrary commands — return all known."""
+        try:
+            from tahoe.registry import builtin_registry
+            return set(builtin_registry().names())
+        except Exception:
+            return set()
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -599,9 +603,27 @@ class LiveModelWorker:
         command: str,
         resolved_kwargs: dict[str, Any] | None = None,
         targets: Sequence[str] | None = None,
-    ) -> LiveResult:
-        """Coordinator-facing seam: render the step prompt, then dispatch."""
-        return self.dispatch(_build_step_prompt(command, resolved_kwargs, targets))
+    ) -> Any:
+        """Coordinator-facing seam: render the step prompt, dispatch, unwrap.
+
+        Returns the model's response text parsed as JSON if possible,
+        otherwise the raw text.  Raises WorkerError on API failure so
+        the coordinator's exception path handles it.
+        """
+        result = self.dispatch(_build_step_prompt(command, resolved_kwargs, targets))
+        if not result.success:
+            raise WorkerError(
+                f"LiveModelWorker dispatch failed ({result.failure_class}): {result.error}"
+            )
+        text = result.text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            if len(lines) >= 2:
+                text = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return text
 
 
 def _build_step_prompt(

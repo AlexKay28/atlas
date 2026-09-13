@@ -7,6 +7,8 @@ aggregation layer.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess
 import time
@@ -112,13 +114,30 @@ def run(
     cwd: str = ".",
     max_turns: int = 10,
     timeout_seconds: int = 300,
+    token_session_file: str = "",
 ) -> OpencodeResult:
     """Run one headless ``opencode run`` session for ``task_id``.
 
-    ``max_turns`` is part of the harness contract; the current ``opencode
-    run`` CLI exposes no turn-limit flag, so it is accepted but not forwarded.
+    If ``token_session_file`` is set, reads accumulated token counts from
+    that JSON file (written by ``eval/token_proxy.py``) instead of parsing
+    stdout.
     """
     started = time.monotonic()
+
+    env = None
+    if token_session_file:
+        token_file_before = token_session_file
+        try:
+            with open(token_file_before) as f:
+                before_data = json.load(f)
+            inp_before = before_data.get("input_tokens", 0)
+            out_before = before_data.get("output_tokens", 0)
+        except Exception:
+            inp_before = out_before = 0
+        env = dict(os.environ)
+        env["OPENAI_API_KEY"] = "dummy"
+        env["OPENAI_BASE_URL"] = f"http://127.0.0.1:18888"
+
     command = [
         "opencode",
         "run",
@@ -134,6 +153,7 @@ def run(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         wall_seconds = time.monotonic() - started
@@ -156,7 +176,19 @@ def run(
     wall_seconds = time.monotonic() - started
     stdout = _to_text(proc.stdout)
     stderr = _to_text(proc.stderr)
-    input_tokens, output_tokens, total_tokens = parse_token_usage(stdout + "\n" + stderr)
+
+    if token_session_file:
+        try:
+            with open(token_session_file) as f:
+                after_data = json.load(f)
+            input_tokens = after_data.get("input_tokens", 0) - inp_before
+            output_tokens = after_data.get("output_tokens", 0) - out_before
+            total_tokens = input_tokens + output_tokens
+        except Exception:
+            input_tokens, output_tokens, total_tokens = 0, 0, 0
+    else:
+        input_tokens, output_tokens, total_tokens = parse_token_usage(stdout + "\n" + stderr)
+
     passed = proc.returncode == 0
     return OpencodeResult(
         task_id=task_id,

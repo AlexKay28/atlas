@@ -73,7 +73,8 @@ class LiveModelWorkerImportTest(unittest.TestCase):
         self.assertTrue(hasattr(LMW, "execute"))
         worker = LMW(api_base=API_BASE, api_key=API_KEY)
         self.assertIsInstance(worker, LiveModelWorker)
-        self.assertEqual(worker.commands, set())
+        self.assertIsInstance(worker.commands, set)
+        self.assertTrue(len(worker.commands) > 0)
 
     def test_module_import_does_not_import_openai(self):
         # Requirement: the openai import is lazy, so importing the module
@@ -178,7 +179,8 @@ class DispatchTest(unittest.TestCase):
         self.assertIsNone(result.error)
 
         fake_openai.OpenAI.assert_called_once_with(
-            base_url=API_BASE, api_key=API_KEY, timeout=DEFAULT_TIMEOUT_SECONDS
+            base_url=API_BASE, api_key="dummy", timeout=DEFAULT_TIMEOUT_SECONDS,
+            default_headers={"Authorization": f"OAuth {API_KEY}", "Ya-Pool": "notelm"}
         )
         client.chat.completions.create.assert_called_once()
         kwargs = client.chat.completions.create.call_args.kwargs
@@ -222,8 +224,8 @@ class DispatchTest(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"openai": fake_openai}):
             result = self._worker().execute("echo", {"value": 7})
 
-        self.assertTrue(result.success)
-        self.assertEqual(result.text, '{"ok": true}')
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result, {"ok": True})
         sent = client.chat.completions.create.call_args.kwargs
         self.assertEqual(sent["model"], DEFAULT_LIVE_MODEL)
         prompt = sent["messages"][0]["content"]
