@@ -57,5 +57,9 @@ define · calculate · search · choose · check · decompose · rank · compare
 
 ## Output
 
-Output ONLY the final answer. No program, no reasoning transcript.
-Multiple choice: (C). Math: 21. Text: one sentence. No markdown.
+The protocols produce reasoning internally. Only OUT.answer is returned.
+V.check is internal verification — never include it in the output.
+
+Multiple choice: (C)
+Math: 21
+Text: one sentence

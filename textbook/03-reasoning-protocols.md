@@ -254,7 +254,7 @@ unit mistakes, and lost intermediate values.
 Required artifacts:
 
 ```text
-G.goal + E.givens -> P.steps (each with concrete values) -> V.check -> OUT.answer
+G.goal + E.givens -> P.steps (each with concrete values) -> V.check (internal) -> OUT.answer (only this is returned)
 ```
 
 Procedure:
@@ -263,10 +263,11 @@ Procedure:
 2. List all given numbers and their meanings as E. evidence.
 3. Break the computation into atomic steps, each producing one intermediate value.
 4. Each step uses concrete numbers, not variable names alone.
-5. After all steps, re-check the final arithmetic by computing backwards.
-6. Return only the final number.
+5. After all steps, verify internally by reverse computation.
+6. Return only the final value as OUT.answer. The verification (V.check) is
+   internal — never include it in the output.
 
-Example:
+Example (internal reasoning, not output):
 
 ```text
 G.goal: How much will 3 books cost at $12 each with 10% tax?
@@ -277,7 +278,12 @@ P.subtotal: 3 * 12 = 36
 P.tax: 36 * 0.10 = 3.60
 P.total: 36 + 3.60 = 39.60
 V.check: 39.60 / 1.10 = 36.0 = subtotal — correct
-OUT.answer: 39.60
+```
+
+Output (what the user sees):
+
+```text
+39.60
 ```
 
 Failure modes:
@@ -285,7 +291,8 @@ Failure modes:
 - skipping intermediate steps and computing in one jump;
 - using variable names without resolving to concrete numbers;
 - not verifying by an independent check (reverse computation or estimation);
-- losing track of units or order of operations.
+- losing track of units or order of operations;
+- including verification steps in the output instead of keeping them internal.
 
 ## Select Protocol
 
@@ -295,7 +302,7 @@ distractors. The danger is selecting by familiarity rather than elimination.
 Required artifacts:
 
 ```text
-G.goal + E.options -> P.elimination (per option) -> D.choice -> V.check -> OUT.answer
+G.goal + E.options -> P.elimination (per option) -> D.choice -> V.check (internal) -> OUT.answer (only this is returned)
 ```
 
 Procedure:
@@ -304,22 +311,25 @@ Procedure:
 2. For each option, determine if it can be eliminated by a specific reason.
 3. If multiple options survive elimination, compare them on the question's
    specific criterion.
-4. Verify the chosen option against the question's constraints.
-5. Return the option letter.
+4. Verify the chosen option against the question's constraints internally.
+5. Return only the option letter as OUT.answer.
 
-Example:
+Example (internal reasoning, not output):
 
 ```text
 G.goal: Which process causes Europa's surface cracks?
 E.options: A) volcanic eruptions B) tectonic movements C) asteroid impacts D) solar flares
-P.eliminate_A: Europa has no known active volcanoes — eliminate
-P.eliminate_B: Tidal forces create tectonic stress on ice — plausible
-P.eliminate_C: Cracks from impacts would be radial, not patterned — eliminate
-P.eliminate_D: Solar flares don't affect ice surfaces — eliminate
+P.eliminate_A: No active volcanoes — eliminate
+P.eliminate_C: Impact cracks would be radial — eliminate
+P.eliminate_D: Solar flares don't affect ice — eliminate
 D.choice: B
-V.check: Question asks about "distinctive surface-cracking patterns" — tectonic
-movement of ice produces patterned cracks. Consistent.
-OUT.answer: (B)
+V.check: "distinctive surface-cracking patterns" → tectonic movement produces patterned cracks
+```
+
+Output:
+
+```text
+(B)
 ```
 
 Failure modes:
@@ -327,7 +337,8 @@ Failure modes:
 - selecting the first plausible option without eliminating others;
 - not reading the question's specific qualifier ("which is the most likely");
 - confusing "possible" with "most likely";
-- not checking the chosen answer against the exact question wording.
+- not checking the chosen answer against the exact question wording;
+- including elimination reasoning in the output instead of just the letter.
 
 ## Deduce Protocol
 
@@ -338,7 +349,7 @@ multiple constraints.
 Required artifacts:
 
 ```text
-G.goal + C.constraints -> P.positions (explicit assignment) -> V.all_constraints_met -> OUT.answer
+G.goal + C.constraints -> P.positions (explicit assignment) -> V.all_constraints_met (internal) -> OUT.answer (only this is returned)
 ```
 
 Procedure:
@@ -347,10 +358,10 @@ Procedure:
 2. List all constraints as C. entries.
 3. Assign positions explicitly using a numbered list (1 through N).
 4. Process constraints in order of most restrictive first.
-5. After all constraints are applied, verify every constraint is satisfied.
-6. Read the answer from the completed arrangement.
+5. After all constraints are applied, verify every constraint is satisfied internally.
+6. Return only the answer letter as OUT.answer.
 
-Example:
+Example (internal reasoning, not output):
 
 ```text
 G.goal: Which book is third from the right?
@@ -359,9 +370,14 @@ C.rightmost: Black is rightmost (position 7)
 C.orange: Orange is second from the right (position 6)
 C.gray: Gray is fourth from the left (position 4)
 P.positions: 1=White, 2=Blue, 3=Red, 4=Gray, 5=Brown, 6=Orange, 7=Black
-V.check: White(1)=leftmost OK, Black(7)=rightmost OK, Orange(6)=2nd from right OK, Gray(4)=4th from left OK
-P.answer: Third from the right = position 5 = Brown
-OUT.answer: (C)
+V.check: White(1)=leftmost ✓, Black(7)=rightmost ✓, Orange(6)=2nd from right ✓, Gray(4)=4th from left ✓
+P.answer: Third from right = position 5 = Brown
+```
+
+Output:
+
+```text
+(C)
 ```
 
 Failure modes:
@@ -369,7 +385,8 @@ Failure modes:
 - reasoning verbally without writing down the explicit position assignment;
 - not verifying all constraints after filling positions;
 - processing constraints in arbitrary order instead of most restrictive first;
-- confusing "from the left" and "from the right".
+- confusing "from the left" and "from the right";
+- including the full position assignment in the output instead of just the answer.
 
 ## Protocol Exit Contract
 
