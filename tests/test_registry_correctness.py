@@ -140,9 +140,9 @@ def test_builtin_digest_is_stable_across_calls():
     assert len(d1) == 64
 
 
-def test_builtin_registry_has_23_commands():
+def test_builtin_registry_has_25_commands():
     """Acceptance (4): doc count matches len(builtin_registry().names())."""
-    assert len(builtin_registry().names()) == 23
+    assert len(builtin_registry().names()) == 25
 
 
 # --- Issue #34: prerelease ordering and minimum_tier enforcement --------------
@@ -247,10 +247,10 @@ def test_unbounded_int_parameter_raises_schema_error():
         _make_spec(parameters=("limit:int",))
 
 
-def test_all_23_builtins_register_with_type_validation():
-    """Acceptance (3): all 23 builtins still register."""
+def test_all_25_builtins_register_with_type_validation():
+    """Acceptance (3): all 25 builtins still register."""
     r = builtin_registry()
-    assert len(r.names()) == 23
+    assert len(r.names()) == 25
 
 
 def test_missing_colon_raises_schema_error():

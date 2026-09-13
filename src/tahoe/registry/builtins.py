@@ -1311,6 +1311,33 @@ def _estimate() -> CommandSpec:
                 kind=FailureKind.EXECUTION,
                 retryable=True,
                 recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.PURE,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("reasoning",),
+        evidence=("method_and_basis_recorded",),
+        budget=Budget(
+            max_seconds=30.0,
+            max_tokens=2000,
+            max_cost=0.02,
+            max_attempts=2,
+            max_output_bytes=5000,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T2,
+            permitted_tiers=(RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T2,
+            confidence_policy="none",
+            escalation_on=(FailureKind.INSUFFICIENT_EVIDENCE,),
+            fallback_chain=(),
+        ),
+    )
+
+
 def _induce() -> CommandSpec:
     return CommandSpec(
         name="induce",
@@ -1341,14 +1368,6 @@ def _induce() -> CommandSpec:
         ),
         effect_class=EffectClass.PURE,
         execution=ExecutionMode.IMMEDIATE,
-        capabilities=("language_model", "statistical_estimation"),
-        evidence=("method_recorded", "estimate_with_units", "sensitivity_analysis"),
-        budget=Budget(
-            max_seconds=60.0,
-            max_tokens=6000,
-            max_cost=0.10,
-            max_attempts=2,
-            max_output_bytes=65536,
         capabilities=("reasoning",),
         evidence=("induced_rules_link_to_source_observations",),
         budget=Budget(
@@ -1361,12 +1380,6 @@ def _induce() -> CommandSpec:
         idempotency=IdempotencyMode.INPUT_DIGEST,
         compensation="none",
         routing=RoutingPolicy(
-            minimum_tier=RoutingTier.T1,
-            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
-            preferred_tier=RoutingTier.T2,
-            validator_tier=RoutingTier.T1,
-            confidence_policy="calibrated_estimate",
-            escalation_on=(FailureKind.INSUFFICIENT_EVIDENCE,),
             minimum_tier=RoutingTier.T2,
             permitted_tiers=(RoutingTier.T2, RoutingTier.T3),
             preferred_tier=RoutingTier.T2,

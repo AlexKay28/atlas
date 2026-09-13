@@ -85,6 +85,8 @@ DELEGATE_COMMANDS = (
 # Issue #67: probabilistic reasoning estimate command.
 ESTIMATE_COMMANDS = (
     "estimate",
+)
+
 # Issue #79: inductive reasoning.
 INDUCE_COMMANDS = (
     "induce",
