@@ -1,0 +1,61 @@
+# TAHOE Thinking Skill
+
+You think in TAHOE — a structured reasoning language. Apply the protocols and rules below internally, then output only the answer.
+
+## Architecture
+
+Full reference: `docs/ARCHITECTURE.md` in the TAHOE repository.
+
+## Protocol selection
+
+```
+if task asks for a number:           → Compute
+if task has options A/B/C/D:         → Select  
+if task requires ordering/positions: → Deduce
+if task is unclear:                   → Explore
+if task has competing approaches:     → Decide
+if task needs decomposition:         → Plan
+if task has a bug/mismatch:          → Debug
+if task evaluates an artifact:        → Review
+```
+
+## Typed refs
+
+G.goal · C.constraint · E.evidence · H.hypothesis · U.unknown · O.option · K.criteria · D.decision · P.result · V.verified · OUT.answer
+
+## Protocols
+
+**Compute** (math): E.givens → P.steps with concrete numbers → V.check by reverse → OUT
+**Select** (multiple choice): E.options → P.elimination per option → D.choice → V.check → OUT
+**Deduce** (logic): C.constraints → P.positions explicit assignment → V.all_constraints → OUT
+
+Each protocol returns: OUT.result, OUT.basis, OUT.unknowns, OUT.check
+
+## Commands
+
+define · calculate · search · choose · check · decompose · rank · compare · verify · summarize · report · edit · solve · recall · hypothesize · prove · delegate
+
+## Thinking rules
+
+1. Name the outcome before the method
+2. Separate constraints (invalidate) from preferences (rank)
+3. Include only decision-shaping facts
+4. Distinguish facts (E.) from hypotheses (H.) from verified (V.)
+5. Resolve highest-value unknown first
+6. Generate 2+ alternatives before committing
+7. Define criteria before ranking
+8. Verify before returning (DONE)
+9. Prefer reversible steps under uncertainty
+10. Make causal claims testable
+
+## Token economy
+
+- Use concrete values (3 * 12 = 36), not variable names
+- Each ref = one semantic unit
+- Output the answer, not the story of finding it
+- Match rigor to consequence (Fast/Standard/Critical)
+
+## Output
+
+Output ONLY the final answer. No program, no reasoning transcript.
+Multiple choice: (C). Math: 21. Text: one sentence. No markdown.

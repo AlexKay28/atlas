@@ -73,7 +73,7 @@ def grade_gsm8k(model_answer, expected_answer):
 
 def grade_arc(model_answer, expected_answer):
     """ARC: answer is a letter (A/B/C/D)."""
-    model_answer = model_answer.strip().upper()
+    model_answer = re.sub(r'\*+', '', model_answer.strip()).upper()
     expected = expected_answer.strip().upper()
     # Extract first letter if model gives a longer answer
     if len(model_answer) > 1:
@@ -87,10 +87,17 @@ def grade_bbh(model_answer, expected_answer):
     """BBH: answer is like (D) or a word."""
     model_answer = model_answer.strip()
     expected = expected_answer.strip()
+    # Strip markdown bold/italic
+    model_answer = re.sub(r'\*+', '', model_answer)
     # Extract letter from (X) format
     match = re.search(r'\(([A-Z])\)', model_answer)
     if match:
         model_answer = match.group(1)
+    else:
+        # Try bare letter at start
+        match = re.match(r'^([A-Z])\b', model_answer)
+        if match:
+            model_answer = match.group(1)
     match = re.search(r'\(([A-Z])\)', expected)
     if match:
         expected = match.group(1)

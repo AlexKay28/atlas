@@ -1,96 +1,113 @@
 # TAHOE — Task-Aware Language Harness for Orchestrated Execution
 
-*Make agent work executable.*
+*A structured reasoning language that makes LLM thinking better.*
 
-TAHOE is an executable text harness for durable AI-agent work. It turns a
-human-readable program into a sealed sequence of atomic tasks, validates worker
-results, and persists state, evidence, progress, and failures as an event log.
+TAHOE teaches LLMs to reason in typed protocols — Compute, Select, Deduce,
+Decide, Plan, Debug — instead of free-form chain-of-thought. The model learns
+the framework from a thinking skill (system prompt), applies it internally
+during reasoning, and produces better answers. Same single inference call,
+structured thinking.
 
-```text
-PROGRAM demo VERSION 1.0
-INPUT
-    G.left = 5
-    G.right = 7
-step.define: DO define(goal = G.left) -> G.goal
-step.calculate: DO calculate(left = G.left, right = G.right) -> OUT.total
-RETURN G.goal, OUT.total
+```
+classic:  Q → {thinking} → answer
+tahoe:    Q + skill → {thinking · tahoe} → answer
 ```
 
-## Why
+## Repository structure
 
-Natural-language agent prompts often hide control flow, completion conditions,
-and state mutation. TAHOE makes those decisions inspectable and replayable:
+```
+textbook/          Thinking recipes — the language, rules, protocols
+├── 01-smart-thinking-rules.md    15 rules for structured reasoning
+├── 02-token-economy.md           Token optimization without quality loss
+├── 03-reasoning-protocols.md     9 protocols (Compute, Select, Deduce, ...)
+├── 04-graph-construction.md      How to build reasoning graphs
+├── 05-quality-control.md         Evidence quality, verification, confidence
+├── 06-personal-profile.md        Agent profiles and defaults
+└── ARCHITECTURE.md               Machine-readable map of all TAHOE concepts
 
-- programs are linted and sealed before execution;
-- each `DO` instruction is one bounded task;
-- worker outputs become immutable state deltas;
-- task completion requires evidence;
-- terminal failures cannot commit partial multi-target state;
-- SQLite event replay reconstructs state and task progress.
+src/               TAHOE language runtime (parser, coordinator, events)
+├── tahoe/                        Python package
+└── spec/                          Language specification (5 docs)
 
-## Quick Start
+benchmarks/        Evaluation code and results
+├── run_trials.py                 Custom task ablation runner
+├── run_public_bench.py           Public benchmark runner (GSM8K, ARC, BBH)
+├── tahoe_skill_prompt.txt         The TAHOE thinking skill (system prompt)
+├── tasks/                         7 custom task manifests with graders
+├── results/                       Trial data and reports
+├── graders.py                     Programmatic graders
+└── report.py                      Token distribution report generator
 
-TAHOE requires Python 3.10 or newer and has no runtime dependencies.
+tests/             Tests
+├── reasoning/                    Tests that verify model understands TAHOE
+└── test_*.py                      Unit tests for runtime, parser, etc.
+
+analysis/          Reasoning trajectory analysis
+├── trajectory_score.py            Score reasoning quality against TAHOE rules
+└── README.md                      Scoring methodology
+
+paper/             Research paper (arxiv draft)
+├── TAHOE.md                       Paper draft
+├── design/                        Architecture decision records
+└── research-*.md                  Related work survey
+
+demo/              Demo tasks and sealed runs
+examples/          Example .think programs
+protocols/         Learned protocol candidates
+archive/           Historical files (old reports, build artifacts)
+```
+
+## Results
+
+| Benchmark | Classic | TAHOE | Improvement |
+|---|---|---|---|
+| GSM8K (math) | 80% | **90%** | +10% |
+| ARC-Challenge (science) | 83% | **90%** | +7% |
+| BBH (logical deduction) | 97% | **100%** | +3% |
+| Custom routing-02 | 20% | **100%** | +80% |
+| Custom plan-01 | 0% | **60%** | +60% |
+| Custom recover-01 | 80% | **100%** | +20% |
+
+Token cost: 1.6-2.5x classic (system prompt overhead, same single API call).
+
+## Quick start
 
 ```bash
-python3 -m pip install .
+# Install
+pip install -e .
+
+# Lint and seal a program
 tahoe lint examples/demo.think
-SEAL=$(tahoe seal examples/demo.think)
-tahoe run examples/demo.think --db demo.db --run-id demo-1 --seal "$SEAL"
-tahoe status --db demo.db --run-id demo-1
-tahoe events --db demo.db --run-id demo-1
+tahoe seal examples/demo.think
+
+# Run benchmarks
+export TAHOE_API_BASE="https://api.eliza.yandex.net/raw/internal/v2/models/GLM-5.3-Flash_alexkay28/v1"
+export TAHOE_API_KEY="$(cat ~/.soy/token)"
+export SSL_CERT_FILE=/etc/ssl/certs/yandex-ca.pem
+PYTHONPATH=src python3 benchmarks/run_public_bench.py
 ```
 
-The bundled CLI currently uses deterministic demonstration handlers. Real model
-workers can implement the same coordinator contract; model dispatch adapters are
-the next integration layer.
+## The thinking skill
 
-## CLI Reference
+The TAHOE thinking skill (`benchmarks/tahoe_skill_prompt.txt`) is a distilled
+version of the textbook. It teaches the model:
 
-| Subcommand | Required flags | Purpose |
-| --- | --- | --- |
-| `lint` | `program` | Parse and validate a `.think` program file |
-| `seal` | `program` | Print the sealed SHA-256 digest of a program; `--check --seal <digest>` verifies a file against its seal (exit 0 = match, 4 = drifted) |
-| `run` | `program`, `--db`, `--run-id`, `--seal` | Execute a sealed program; optional `--workspace`, `--worker` |
-| `resume` | `--db`, `--run-id`, `--program`, `--seal` | Resume an interrupted run after a crash; optional `--workspace`, `--worker` |
-| `status` | `--db`, `--run-id` | Print run status and progress bar |
-| `events` | `--db`, `--run-id` | Print ordered event log as JSON lines |
-| `audit` | `--db`, `--run-id` | Verify a persisted run against audit invariants |
-| `learn` | `--runs` | Mine a runs directory into protocol candidates and failure clusters; optional `--out` |
-| `bench` | — | Run the deterministic benchmark harness; optional `--repetitions`, `--out`, `--latency-seconds` |
-| `next` | `--db`, `--run-id`, `--program`, `--seal` | Render the task envelope for the next ready invocation (external driver) |
-| `submit` | `--db`, `--run-id`, `--invocation-id`, `--result-file` | Submit a result envelope for a dispatched invocation; optional `--program`, `--seal`, `--claim-token`, `--claim-timeout` |
-| `ready` | `--db`, `--run-id`, `--program`, `--seal` | Render and claim the next ready invocation; optional `--workspace`, `--claim-timeout` |
-| `claim` | `--db`, `--run-id`, `--program`, `--seal` | Like `ready` but records a claimant name; optional `--claimant`, `--workspace`, `--claim-timeout` |
-| `renew` | `--db`, `--run-id`, `--program`, `--seal`, `--invocation-id`, `--claim-token` | Extend an open claim's freshness by a heartbeat so long work is not re-issued; optional `--claim-timeout` |
+- **Typed refs**: G (goal), C (constraint), E (evidence), H (hypothesis),
+  V (verified), OUT (answer) — prevents assumptions from becoming facts
+- **Protocols**: Compute (math), Select (multiple choice), Deduce (ordering)
+  — matches reasoning pattern to task type
+- **Rules**: Name outcome before method, verify before returning, match
+  rigor to consequence
+- **Token economy**: Use concrete values, output the answer not the story
 
-All commands print human-readable output by default; `status`, `audit`, `learn`, `bench` and `run` accept `--json` for machine-readable output (route `--out` confirmations to stderr). Exit codes: `0` ok, `1` usage/input error, `2` program execution failed, `3` audit violations found, `4` seal mismatch (argparse syntax errors exit `2`).
+## For researchers
 
-See the [design doc](docs/design/01-reasoning-language-foundation.md) for the
-reasoning behind the frozen 23-command registry, the [CHANGELOG](CHANGELOG.md)
-for release history, and the [command catalog](docs/spec/02-command-catalog.md)
-for the full command contract specification.
-
-## Agent Demo
-
-`demo/tasks/` contains hard evaluation tasks. The project-local skill at
-`.opencode/skills/tahoe-demo/SKILL.md` instructs OpenCode agents to author and
-seal a TAHOE plan before solving a task, then record step-level evidence under
-`demo/runs/`.
-
-## Development
-
-```bash
-python3 -m pytest -q
-```
-
-The current suite covers syntax and seals, command contracts, transactional
-event batches, state replay, task-ledger invariants, coordinator lifecycle, and
-CLI behavior.
-
-See [`docs/README.md`](docs/README.md) for the architecture decisions, language
-specification, command catalog, and runtime semantics.
+- **Paper draft**: `paper/TAHOE.md`
+- **Architecture map**: `textbook/ARCHITECTURE.md`
+- **Trajectory scoring**: `analysis/trajectory_score.py` — scores reasoning
+  quality for RL reward signals
+- **Raw results**: `benchmarks/results/`
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT. See [CHANGELOG.md](CHANGELOG.md) for release history.

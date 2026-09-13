@@ -1,4 +1,4 @@
-"""Tests for eval/graders.py: pass/fail cases per grader type, the factory,
+"""Tests for benchmarks/graders.py: pass/fail cases per grader type, the factory,
 and composite behavior with mixed pass/fail."""
 
 import sys
@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from eval.graders import (
+from benchmarks.graders import (
     CompositeGrader,
     ContainsGrader,
     ExactMatchGrader,

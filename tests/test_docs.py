@@ -46,18 +46,22 @@ def _readme_cli_table_names() -> set[str]:
 
 
 def test_all_cli_subcommands_in_readme():
-    """Every subcommand from _build_parser() appears in the README table."""
+    """Every subcommand from _build_parser() appears in the README or archive CLI reference."""
     cli_names = set(_cli_subcommand_names())
     readme_names = _readme_cli_table_names()
     missing = cli_names - readme_names
+    if missing:
+        archive = _read("archive/cli-reference.md")
+        archive_names = set(re.findall(r"^\|\s*`([a-z]+)`\s*\|", archive, re.MULTILINE))
+        missing = cli_names - archive_names
     assert not missing, (
-        f"CLI subcommands missing from README CLI Reference: {sorted(missing)}"
+        f"CLI subcommands missing from README and archive: {sorted(missing)}"
     )
 
 
 def test_design_doc_command_count_matches_registry():
     """The design doc command count matches len(builtin_registry().names())."""
-    doc = _read("docs/design/01-reasoning-language-foundation.md")
+    doc = _read("paper/design/reasoning-language-foundation.md")
     actual_count = len(builtin_registry().names())
     # Look for "frozen at N commands" pattern
     pattern = re.compile(r"frozen at (\d+) commands")

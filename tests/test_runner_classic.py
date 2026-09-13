@@ -1,4 +1,4 @@
-"""Tests for eval/runner_classic.py, the classic inference arm (A1)."""
+"""Tests for benchmarks/runner_classic.py, the classic inference arm (A1)."""
 
 import dataclasses
 import importlib.util
@@ -13,12 +13,12 @@ import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
-_RUNNER_PATH = os.path.join(_ROOT, "eval", "runner_classic.py")
+_RUNNER_PATH = os.path.join(_ROOT, "benchmarks", "runner_classic.py")
 
 
 def _load_runner_module():
     try:
-        import eval.runner_classic as module
+        import benchmarks.runner_classic as module
 
         if os.path.abspath(module.__file__ or "") == os.path.abspath(_RUNNER_PATH):
             return module

@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 
-from eval.runner_opencode import OpencodeResult, parse_token_usage, run
+from benchmarks.runner_opencode import OpencodeResult, parse_token_usage, run
 
 
 def _fake_completed(returncode=0, stdout="", stderr=""):
@@ -48,7 +48,7 @@ class TestOpencodeResultDataclass:
 
 class TestImportAndSignature:
     def test_runner_importable(self):
-        import eval.runner_opencode as runner_module
+        import benchmarks.runner_opencode as runner_module
 
         assert callable(runner_module.run)
         assert dataclasses.is_dataclass(runner_module.OpencodeResult)
@@ -79,7 +79,7 @@ class TestRunSuccess:
             returncode=0,
             stdout=(
                 "Reading repository...\n"
-                "Editing eval/runner_opencode.py\n"
+                "Editing benchmarks/runner_opencode.py\n"
                 "input_tokens: 500\n"
                 "output_tokens: 120\n"
                 "total_tokens: 620\n"

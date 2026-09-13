@@ -247,4 +247,50 @@ only when acceptance rate and outcome quality do not decline.
 - Repeated concepts have stable identifiers.
 - The message contains deltas rather than full history.
 - Output format and stopping condition are explicit.
+
+## Reasoning Token Economy
+
+The largest token cost in single-call reasoning is not the prompt — it is the
+output. A model that meanders through 500 tokens of exploration before
+reaching the answer costs more than one that structures its reasoning in 50
+tokens and answers directly.
+
+TAHOE's typed refs and protocols reduce reasoning tokens by forcing the model
+to commit intermediate values early instead of narrating an open-ended thought
+process:
+
+```text
+# Without TAHOE: 400 output tokens of exploration
+"Well, let me think about this. The question asks about Europa's surface cracks.
+I know that Europa is an icy moon... [300 tokens of narrative]... so the answer
+is tectonic movements, which is option B."
+
+# With TAHOE: 60 output tokens of structured reasoning
+"G.goal: Which process causes Europa's surface cracks?
+E.options: A) volcanic B) tectonic C) impacts D) flares
+P.eliminate_A: No active volcanoes on Europa — eliminate
+P.eliminate_C: Impact cracks would be radial, not patterned — eliminate
+P.eliminate_D: Solar flares don't affect ice — eliminate
+D.choice: B (tectonic movements of ice produce patterned cracks)
+OUT.answer: (B)"
+```
+
+The structure forces commitment, eliminates narrative, and produces a checkable
+chain of reasoning. Each ref is one semantic unit. The model spends tokens on
+the answer, not on telling a story about how it found the answer.
+
+### Protocol Selection Reduces Tokens
+
+Choosing the right protocol at the start prevents the model from exploring
+multiple reasoning styles. The protocol tells the model which artifacts to
+produce and in what order. This eliminates the "let me try this approach..."
+preamble that wastes 50-100 tokens before the real reasoning starts.
+
+### Concrete Values Reduce Tokens
+
+Using concrete numbers (`P.subtotal: 3 * 12 = 36`) instead of variable names
+(`P.subtotal: quantity * price`) forces the model to compute immediately rather
+than carrying symbols through multiple steps. Each step produces a number, not
+a description of a number. This eliminates the "now I need to substitute..."
+paragraph that bridges symbolic and numeric reasoning.
 - Important uncertainty, evidence, and risk survived compression.

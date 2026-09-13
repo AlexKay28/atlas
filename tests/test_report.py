@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from eval.report import (
+from benchmarks.report import (
     compute_stats,
     generate_json_report,
     generate_markdown_table,

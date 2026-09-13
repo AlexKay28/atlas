@@ -26,6 +26,7 @@ tooling. All subcommands use argparse and the standard library only.
 | `submit` | `--db`, `--run-id`, `--invocation-id`, `--result-file` | `--program`, `--seal`, `--claim-token`, `--claim-timeout` | Submit a result envelope for a dispatched invocation |
 | `ready` | `--db`, `--run-id`, `--program`, `--seal` | `--workspace`, `--claim-timeout` | Render and claim the next ready invocation as a task envelope + claim token |
 | `claim` | `--db`, `--run-id`, `--program`, `--seal` | `--claimant`, `--workspace`, `--claim-timeout` | Like `ready` but records the claimant name on the claim event |
+| `renew` | `--db`, `--run-id`, `--program`, `--seal`, `--invocation-id`, `--claim-token` | `--claim-timeout` | Extend an open claim's freshness by a heartbeat |
 
 ## Command Groups
 

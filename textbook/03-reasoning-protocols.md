@@ -245,6 +245,132 @@ debug.D.root_cause -> plan.G.fix
 Do not run all protocols by default. Each protocol must reduce a specific uncertainty or
 produce an artifact needed by the next one.
 
+## Compute Protocol
+
+Use for arithmetic, algebra, and any task where the answer is a number or a
+concrete computed value. The danger is not ambiguity but arithmetic errors,
+unit mistakes, and lost intermediate values.
+
+Required artifacts:
+
+```text
+G.goal + E.givens -> P.steps (each with concrete values) -> V.check -> OUT.answer
+```
+
+Procedure:
+
+1. State the goal as a concrete value to compute.
+2. List all given numbers and their meanings as E. evidence.
+3. Break the computation into atomic steps, each producing one intermediate value.
+4. Each step uses concrete numbers, not variable names alone.
+5. After all steps, re-check the final arithmetic by computing backwards.
+6. Return only the final number.
+
+Example:
+
+```text
+G.goal: How much will 3 books cost at $12 each with 10% tax?
+E.price = 12
+E.quantity = 3
+E.tax_rate = 0.10
+P.subtotal: 3 * 12 = 36
+P.tax: 36 * 0.10 = 3.60
+P.total: 36 + 3.60 = 39.60
+V.check: 39.60 / 1.10 = 36.0 = subtotal — correct
+OUT.answer: 39.60
+```
+
+Failure modes:
+
+- skipping intermediate steps and computing in one jump;
+- using variable names without resolving to concrete numbers;
+- not verifying by an independent check (reverse computation or estimation);
+- losing track of units or order of operations.
+
+## Select Protocol
+
+Use for multiple-choice questions where one option is correct and others are
+distractors. The danger is selecting by familiarity rather than elimination.
+
+Required artifacts:
+
+```text
+G.goal + E.options -> P.elimination (per option) -> D.choice -> V.check -> OUT.answer
+```
+
+Procedure:
+
+1. State what the question asks for.
+2. For each option, determine if it can be eliminated by a specific reason.
+3. If multiple options survive elimination, compare them on the question's
+   specific criterion.
+4. Verify the chosen option against the question's constraints.
+5. Return the option letter.
+
+Example:
+
+```text
+G.goal: Which process causes Europa's surface cracks?
+E.options: A) volcanic eruptions B) tectonic movements C) asteroid impacts D) solar flares
+P.eliminate_A: Europa has no known active volcanoes — eliminate
+P.eliminate_B: Tidal forces create tectonic stress on ice — plausible
+P.eliminate_C: Cracks from impacts would be radial, not patterned — eliminate
+P.eliminate_D: Solar flares don't affect ice surfaces — eliminate
+D.choice: B
+V.check: Question asks about "distinctive surface-cracking patterns" — tectonic
+movement of ice produces patterned cracks. Consistent.
+OUT.answer: (B)
+```
+
+Failure modes:
+
+- selecting the first plausible option without eliminating others;
+- not reading the question's specific qualifier ("which is the most likely");
+- confusing "possible" with "most likely";
+- not checking the chosen answer against the exact question wording.
+
+## Deduce Protocol
+
+Use for logical deduction puzzles where positions, orderings, or relationships
+must be inferred from constraints. The danger is losing track of state across
+multiple constraints.
+
+Required artifacts:
+
+```text
+G.goal + C.constraints -> P.positions (explicit assignment) -> V.all_constraints_met -> OUT.answer
+```
+
+Procedure:
+
+1. State the goal: what position, ordering, or relationship is asked.
+2. List all constraints as C. entries.
+3. Assign positions explicitly using a numbered list (1 through N).
+4. Process constraints in order of most restrictive first.
+5. After all constraints are applied, verify every constraint is satisfied.
+6. Read the answer from the completed arrangement.
+
+Example:
+
+```text
+G.goal: Which book is third from the right?
+C.leftmost: White is leftmost (position 1)
+C.rightmost: Black is rightmost (position 7)
+C.orange: Orange is second from the right (position 6)
+C.gray: Gray is fourth from the left (position 4)
+P.positions: 1=White, 2=Blue, 3=Red, 4=Gray, 5=Brown, 6=Orange, 7=Black
+V.check: White(1)=leftmost OK, Black(7)=rightmost OK, Orange(6)=2nd from right OK, Gray(4)=4th from left OK
+P.answer: Third from the right = position 5 = Brown
+OUT.answer: (C)
+```
+
+Failure modes:
+
+- reasoning verbally without writing down the explicit position assignment;
+- not verifying all constraints after filling positions;
+- processing constraints in arbitrary order instead of most restrictive first;
+- confusing "from the left" and "from the right".
+
 ## Protocol Exit Contract
 
 Every protocol returns:
