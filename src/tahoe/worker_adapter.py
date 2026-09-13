@@ -545,8 +545,12 @@ class LiveModelWorker:
 
             self._client = openai.OpenAI(
                 base_url=self.api_base,
-                api_key=self.api_key,
+                api_key="dummy",
                 timeout=self.timeout_seconds,
+                default_headers={
+                    "Authorization": f"OAuth {self.api_key}",
+                    "Ya-Pool": "notelm",
+                },
             )
         return self._client
 

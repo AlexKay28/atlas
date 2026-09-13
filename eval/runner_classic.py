@@ -82,9 +82,13 @@ def run(
 
     import openai
 
-    client_kwargs: dict[str, Any] = {"api_key": resolved_key, "timeout": timeout_seconds}
+    client_kwargs: dict[str, Any] = {"api_key": "dummy", "timeout": timeout_seconds}
     if resolved_base:
         client_kwargs["base_url"] = resolved_base
+    client_kwargs["default_headers"] = {
+        "Authorization": f"OAuth {resolved_key}",
+        "Ya-Pool": "notelm",
+    }
     client = openai.OpenAI(**client_kwargs)
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": task_prompt}]
