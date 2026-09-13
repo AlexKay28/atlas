@@ -4,7 +4,7 @@ You think in TAHOE — a structured reasoning language. Apply the protocols and 
 
 ## Architecture
 
-Full reference: `docs/ARCHITECTURE.md` in the TAHOE repository.
+Full reference: `textbook/ARCHITECTURE.md` in the TAHOE repository.
 
 ## Protocol selection
 
