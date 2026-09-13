@@ -35,7 +35,7 @@ SKILL_PATH = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
 ARMS = ["classic", "tahoe"]
 TRIALS_PER_TASK = 3
 SEED = 42
-MAX_SAMPLES_PER_BENCH = 3  # pilot — 3 samples per benchmark
+MAX_SAMPLES_PER_BENCH = 10  # 10 samples per benchmark for paper
 
 # MATH grader: extract \boxed{} answer
 def grade_math(model_answer, expected_answer):
@@ -314,23 +314,6 @@ def load_tasks():
             "difficulty": "hard",
         })
 
-    # MATH — competition math (very hard — Level 5 problems, deep reasoning)
-    import re as _re
-    math = load_dataset('HuggingFaceH4/MATH', split='test')
-    # Filter to Level 4-5 (hardest)
-    hard_math = [ex for ex in math if ex['level'] in ('Level 4', 'Level 5')]
-    indices = rng.sample(range(len(hard_math)), MAX_SAMPLES_PER_BENCH)
-    for idx in indices:
-        ex = hard_math[idx]
-        tasks.append({
-            "task_id": f"math-{ex['level']}-{idx:04d}",
-            "benchmark": "math",
-            "description": f"{ex['problem']}\n\nSolve step by step. Put your final answer in \\boxed{{}}.",
-            "expected": ex['solution'],
-            "grader": "math",
-            "difficulty": "very_hard",
-        })
-
     # RACE — long reading comprehension (hard — 1500+ char passages)
     import ast as _ast
     race = load_dataset("EleutherAI/race", "high", split="test")
@@ -471,23 +454,39 @@ def main():
     for t in all_trials:
         groups[(t["benchmark"], t["arm"])].append(t)
 
-    print("| benchmark | arm | trials | pass_rate | mean_tokens | mean_wall | RE | RC | RR |")
-    print("|---|---|---|---|---|---|---|---|---|")
-    for (bench, arm) in sorted(groups):
-        trials = groups[(bench, arm)]
-        passed = sum(1 for t in trials if t["passed"])
-        mean_tokens = sum(t["total_tokens"] for t in trials) / len(trials)
-        mean_wall = sum(t["wall_seconds"] for t in trials) / len(trials)
-        rm = compute_all_metrics({
-            "verified_logical_steps": sum(t.get("verified_logical_steps", 0) for t in trials),
-            "total_tokens": sum(t.get("total_tokens", 0) for t in trials),
-            "typed_refs_produced": sum(t.get("typed_refs_produced", 0) for t in trials),
-            "output_tokens": sum(t.get("output_tokens", 0) for t in trials),
-            "repeated_refs": sum(t.get("repeated_refs", 0) for t in trials),
-            "retired_refs": sum(t.get("retired_refs", 0) for t in trials),
-            "total_refs_produced": sum(t.get("total_refs_produced", 0) for t in trials),
-        })
-        print(f"| {bench} | {arm} | {len(trials)} | {passed}/{len(trials)} ({100*passed/len(trials):.0f}%) | {mean_tokens:.0f} | {mean_wall:.1f}s | {rm['re_reasoning_efficiency']:.4f} | {rm['rc_reasoning_concentration']:.4f} | {rm['rr_redundancy_rate']:.4f} |")
+    print("\n=== PAPER RESULTS TABLE ===\n")
+    print(f"{'benchmark':14s} | {'classic':>8s} | {'tahoe':>8s} | {'cl out':>7s} | {'tah out':>7s} | {'ratio':>5s} | {'cl pass':>7s} | {'tah pass':>8s}")
+    print("-" * 85)
+
+    for bench in sorted(set(t['benchmark'] for t in all_trials)):
+        c = [t for t in all_trials if t['benchmark']==bench and t['arm']=='classic']
+        t = [t for t in all_trials if t['benchmark']==bench and t['arm']=='tahoe']
+        cp = sum(1 for x in c if x['passed'])
+        tp = sum(1 for x in t if x['passed'])
+        co = sum(x['output_tokens'] for x in c) / len(c) if c else 0
+        to = sum(x['output_tokens'] for x in t) / len(t) if t else 0
+        ratio = f"{to/co:.2f}x" if co > 0 else "N/A"
+        print(f"{bench:14s} | {cp:>3d}/{len(c):<4d} | {tp:>3d}/{len(t):<4d} | {co:>7.0f} | {to:>7.0f} | {ratio:>5s} | {100*cp/len(c):>6.0f}% | {100*tp/len(t):>7.0f}%")
+
+    # Overall
+    ac = [t for t in all_trials if t['arm']=='classic']
+    at = [t for t in all_trials if t['arm']=='tahoe']
+    cp = sum(1 for t in ac if t['passed'])
+    tp = sum(1 for t in at if t['passed'])
+    co = sum(t['output_tokens'] for t in ac)
+    to = sum(t['output_tokens'] for t in at)
+    qc = cp / len(ac)
+    qt = tp / len(at)
+    eff = co / to if to > 0 else 0
+    hm_c = 2 * qc / (qc + 1)
+    hm_t = 2 * qt * eff / (qt + eff) if (qt + eff) > 0 else 0
+
+    print("-" * 85)
+    print(f"{'OVERALL':14s} | {cp:>3d}/{len(ac):<4d} | {tp:>3d}/{len(at):<4d} | {co//len(ac):>7.0f} | {to//len(at):>7.0f} | {to/co:>4.2f}x | {100*qc:>6.0f}% | {100*qt:>7.0f}%")
+    print(f"\nClassic: quality={qc:.3f} output_tokens={co} HM={hm_c:.3f}")
+    print(f"Tahoe:   quality={qt:.3f} output_tokens={to} HM={hm_t:.3f} ratio={1/eff:.2f}x")
+    print(f"TAHOE saves {100*(1-to/co):.0f}% reasoning tokens")
+    print(f"HM winner: {'TAHOE' if hm_t > hm_c else 'classic'}")
 
     # Save
     results_dir = Path(__file__).parent / "results"

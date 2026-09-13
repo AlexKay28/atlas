@@ -59,16 +59,24 @@ archive/           Historical files (old reports, build artifacts)
 
 ## Results
 
-| Benchmark | Classic | TAHOE | Improvement |
-|---|---|---|---|
-| GSM8K (math) | 80% | **90%** | +10% |
-| ARC-Challenge (science) | 83% | **90%** | +7% |
-| BBH (logical deduction) | 97% | **100%** | +3% |
-| Custom routing-02 | 20% | **100%** | +80% |
-| Custom plan-01 | 0% | **60%** | +60% |
-| Custom recover-01 | 80% | **100%** | +20% |
+10 public benchmarks, 10 samples each, 3 trials, 600 trials total (GLM-5.3-Flash).
 
-Token cost: 1.6-2.5x classic (system prompt overhead, same single API call).
+| Benchmark | Classic | TAHOE | Cl out | Tah out | Ratio |
+|---|---|---|---|---|---|
+| ARC | 90% | 87% | 183 | 160 | 0.87x |
+| BBH (deduction) | 60% | **80%** | 457 | 253 | 0.55x |
+| BBH-track | 83% | 73% | 484 | 270 | 0.56x |
+| BBH-arith | 100% | 100% | 123 | 132 | 1.07x |
+| GSM8K | 83% | 80% | 201 | 57 | 0.28x |
+| LSAT | 100% | 100% | 407 | 239 | 0.59x |
+| MMLU-acct | 87% | **100%** | 488 | 182 | 0.37x |
+| MMLU-logic | 100% | 100% | 125 | 97 | 0.78x |
+| MMLU-math | 97% | 90% | 555 | 512 | 0.92x |
+| RACE | 77% | **80%** | 330 | 100 | 0.30x |
+| **OVERALL** | **88%** | **89%** | **335** | **200** | **0.60x** |
+
+**TAHOE saves 40% reasoning tokens** (60,055 vs 100,595) while improving quality +1%.
+HM: 1.162 (TAHOE) vs 0.934 (classic).
 
 ## Quick start
 
