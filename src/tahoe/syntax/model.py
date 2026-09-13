@@ -271,6 +271,24 @@ class Try:
     line: int = 0
 
 
+@dataclass(frozen=True)
+class Approve:
+    """Approval-gate statement (issue #78).
+
+    ``APPROVE <policy_ref> INTENT <expression>`` — gates execution on
+    an approval policy.  The policy reference names a policy node
+    (e.g. ``PF.safety``); the intent expression describes what the
+    approval is for.
+
+    Parsing only — no runtime execution yet.  The coordinator skips
+    APPROVE entries with a warning.
+    """
+
+    policy: str
+    intent: str
+    line: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class Reformulate:
     """Plan reformulation at runtime (issue #80).
