@@ -51,6 +51,7 @@ from tahoe.runtime.scatter import (
     candidate_invocation_id,
     candidate_node_id,
 )
+from tahoe.runtime.deterministic import DeterministicStepExecutor
 from tahoe.runtime.helpers import (
     _CANDIDATE_INVOCATION_RE,
     _PAR_INVOCATION_RE,
@@ -144,7 +145,20 @@ class DriveEngine:
         a running handler cannot be interrupted, so an overrunning
         result is discarded by failing the invocation (the DISPATCHED
         idempotency key keeps the at-least-once contract honest).
+
+        Issue #61: when deterministic execution is enabled (env var
+        ``TAHOE_DETERMINISTIC=1``), pure-computation commands
+        (``calculate``, ``check``, ``choose``, ``rank``) are evaluated
+        locally by :class:`DeterministicStepExecutor` before the worker
+        is called.  If the executor returns ``None`` (inputs require
+        model reasoning), the call falls through to the worker as
+        before.
         """
+        det_result = DeterministicStepExecutor.try_execute(
+            command, resolved_kwargs
+        )
+        if det_result is not None:
+            return det_result
         if gate is None:
             return self.worker.execute(command, resolved_kwargs)
         per_invocation = gate.budget.per_invocation_deadline_seconds
@@ -859,6 +873,12 @@ class DriveEngine:
                 }
                 if branch_claim_held is not None:
                     dispatched_payload["resource_claims"] = [branch_claim_held]
+                if DeterministicStepExecutor.is_enabled():
+                    dispatched_payload["_deterministic"] = (
+                        DeterministicStepExecutor.try_execute(
+                            statement.command, resolved_kwargs
+                        ) is not None
+                    )
                 self.store.append(
                     run_id,
                     EventType.INVOCATION_DISPATCHED,
