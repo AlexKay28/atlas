@@ -199,16 +199,47 @@ and can introduce accidental changes.
 
 ## Rule 15: Match Rigor to Consequence
 
-Use three operating levels:
+TAHOE is need-triggered. Not every task needs a full protocol. Apply structure
+only where it reduces the chance of a wrong answer.
 
-| Level | Suitable for | Required structure |
-| --- | --- | --- |
-| Fast | Reversible, low-impact task | `G`, `OUT`, optional `V` |
-| Standard | Normal professional work | `G`, `C`, relevant facts, action, `V` |
-| Critical | Expensive, unsafe, or irreversible | evidence, alternatives, risks, decision, independent checks |
+### Trigger test
 
-Do not apply critical-process overhead to trivial work. Do not use fast mode for a
-decision whose failure is difficult to reverse.
+Before applying a protocol, ask: **can I answer this correctly in one step?**
+
+- If yes → Fast mode: answer directly. No protocol, no typed refs.
+- If the answer requires 2+ dependent steps → Standard mode: use a protocol.
+- If a wrong answer is costly or irreversible → Critical mode: full structure.
+
+### Three operating levels
+
+| Level | Trigger | Structure | Example |
+| --- | --- | --- | --- |
+| Fast | Answer is obvious, single step, low risk | Just answer | "Fix `a - b` to `a + b`" → answer directly |
+| Standard | Multiple dependent steps, computation, or selection | G, E, protocol steps, V, OUT | "3 books at $12 each with 10% tax" → Compute protocol |
+| Critical | High stakes, irreversible, or multiple unknowns | Full evidence, alternatives, independent checks | "Which storage for 20k writes/sec?" → Decide protocol |
+
+### When to skip the protocol
+
+Do NOT apply a protocol when:
+- the answer is a single fact or single-step computation;
+- the task is a trivial fix (wrong operator, wrong variable name);
+- the search space is small enough to verify by inspection;
+- the model's confidence is high and the cost of being wrong is low.
+
+Applying full structure to trivial tasks wastes tokens and can introduce
+errors the model would not make by answering directly.
+
+### When the protocol is mandatory
+
+Always use a protocol when:
+- the task has multiple constraints that interact (e.g., ordering puzzles);
+- a computation has 3+ steps where an intermediate error propagates;
+- options must be eliminated, not just ranked;
+- the question asks "which" or "how many" and distractors are plausible;
+- the model's first instinct could be wrong and verification would catch it.
+
+Do not apply critical-process overhead to trivial work. Do not use fast mode
+for a decision whose failure is difficult to reverse.
 
 ## Compact Checklist
 

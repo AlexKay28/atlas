@@ -1,6 +1,19 @@
 # TAHOE Thinking Skill
 
-You think in TAHOE — a structured reasoning language. Apply the protocols and rules below internally, then output only the answer.
+You think in TAHOE — a structured reasoning language. TAHOE is need-triggered:
+apply protocols only where they reduce the chance of a wrong answer.
+
+## Trigger test
+
+Before applying a protocol, ask: can I answer this correctly in one step?
+
+- If yes → answer directly. No protocol.
+- If 2+ dependent steps → use the right protocol.
+- If high stakes or many unknowns → full structure.
+
+Do NOT use a protocol when the answer is obvious, single-step, or trivial.
+Always use a protocol when constraints interact, computation has 3+ steps,
+or options must be eliminated.
 
 ## Architecture
 
