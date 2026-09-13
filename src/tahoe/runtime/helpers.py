@@ -8,7 +8,7 @@ coordinator.py and driver.py can import them without circularity.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from tahoe.syntax import is_typed_reference, parse_condition
 from tahoe.syntax.model import (
@@ -314,10 +314,19 @@ def evaluate_done_predicate(
             if passed:
                 return True, ""
             return False, f"no element satisfies {pred_func}({pred[1:]})"
+    if done.op == "history":
+        raise ValueError(
+            "history() DONE predicate requires an event-store context"
+            " — use evaluate_done_predicate with a history callback"
+        )
     raise ValueError(f"unknown DONE predicate {done.op!r}")
 
 
-def evaluate_condition(condition: str, values: Mapping[str, Any]) -> bool:
+def evaluate_condition(
+    condition: str,
+    values: Mapping[str, Any],
+    history_fn: "Callable[[str], list[dict[str, Any]]] | None" = None,
+) -> bool:
     """Purely and deterministically evaluate an IF condition (issue #3).
 
     Parses ``condition`` (the raw text stored on the ``Conditional``) and
@@ -329,25 +338,51 @@ def evaluate_condition(condition: str, values: Mapping[str, Any]) -> bool:
     requires a list-valued operand.  A ref that no longer resolves (or a
     field selection that misses) raises ValueError — static validation
     cannot see mid-run retirements or value shapes.
+
+    ``history_fn`` (issue #81) is an optional callback that receives a
+    typed reference and returns a list of revision records (dicts with
+    ``action``, ``value``, ``event_type``) for all SUCCEEDED deltas that
+    touched that ref.  When ``None``, ``history()`` in a condition raises
+    ValueError.
     """
     ast = parse_condition(condition)
-    return _eval_condition_node(ast, values)
+    return _eval_condition_node(ast, values, history_fn)
 
 
-def _eval_condition_node(node: tuple, values: Mapping[str, Any]) -> bool:
+def _eval_condition_node(
+    node: tuple,
+    values: Mapping[str, Any],
+    history_fn: "Callable[[str], list[dict[str, Any]]] | None" = None,
+) -> bool:
     kind = node[0]
     if kind == "eq":
         return _json_equal(_condition_operand(node[1], values), node[2])
     if kind == "ne":
         return not _json_equal(_condition_operand(node[1], values), node[2])
     if kind == "count":
-        operand = _condition_operand(node[1], values)
+        if isinstance(node[1], tuple) and node[1][0] == "history":
+            if history_fn is None:
+                raise ValueError(
+                    "history() requires an event-store context —"
+                    " no history callback provided"
+                )
+            operand = history_fn(node[1][1])
+        else:
+            operand = _condition_operand(node[1], values)
         if not isinstance(operand, list):
             raise ValueError(
                 f"count condition requires a list-valued reference"
                 f" ({node[1]}), got {type(operand).__name__}"
             )
         return _compare(len(operand), node[2], node[3])
+    if kind == "history":
+        if history_fn is None:
+            raise ValueError(
+                "history() requires an event-store context —"
+                " no history callback provided"
+            )
+        history_fn(node[1])
+        return True
     if kind in ("every", "any"):
         operand = _condition_operand(node[1], values)
         if not isinstance(operand, list):
@@ -385,14 +420,14 @@ def _eval_condition_node(node: tuple, values: Mapping[str, Any]) -> bool:
             return all(results)
         return any(results)
     if kind == "not":
-        return not _eval_condition_node(node[1], values)
+        return not _eval_condition_node(node[1], values, history_fn)
     if kind == "and":
-        return _eval_condition_node(node[1], values) and _eval_condition_node(
-            node[2], values
+        return _eval_condition_node(node[1], values, history_fn) and _eval_condition_node(
+            node[2], values, history_fn
         )
     if kind == "or":
-        return _eval_condition_node(node[1], values) or _eval_condition_node(
-            node[2], values
+        return _eval_condition_node(node[1], values, history_fn) or _eval_condition_node(
+            node[2], values, history_fn
         )
     raise ValueError(f"unknown condition node {kind!r}")
 

@@ -164,7 +164,7 @@ _REFORMULATE_DO_RE = re.compile(
 _GATHER_MODES = frozenset({"all", "any", "ranked", "k", "quorum"})
 _GATHER_MODE_ALIASES = {"first": "any", "best": "ranked"}
 _STOP_KINDS = frozenset({"completed", "failed", "blocked", "denied", "cancelled", "unresolved"})
-_DONE_OPS = frozenset({"equals", "in", "matched", "ne", "eq_ref", "ne_ref", "count", "every", "any"})
+_DONE_OPS = frozenset({"equals", "in", "matched", "ne", "eq_ref", "ne_ref", "count", "every", "any", "history"})
 _DONE_MATCHED_RE = re.compile(r"^matched\((?P<inner>.*)\)$", re.DOTALL)
 _DONE_QUANTIFIER_RE = re.compile(r"^(?P<quantifier>every|any)\((?P<inner>.*)\)$", re.DOTALL)
 # Condition grammar (issue #3): ordering operators are only valid on
@@ -1719,6 +1719,8 @@ class _ConditionScanner:
             return self.parse_quantifier_condition("every")
         if self.source.startswith("any(", self.pos):
             return self.parse_quantifier_condition("any")
+        if self.source.startswith("history(", self.pos):
+            return self.parse_history_condition()
         ref_match = re.compile(_REF_PATTERN).match(self.source, self.pos)
         if ref_match is None:
             raise ParseError(
@@ -1768,15 +1770,19 @@ class _ConditionScanner:
     def parse_count_comparison(self) -> tuple:
         self.pos += len("count(")
         self.skip_spaces()
-        ref_match = re.compile(_REF_PATTERN).match(self.source, self.pos)
-        if ref_match is None:
-            raise ParseError(
-                "count requires a typed reference: count(<ref>)",
-                self.line_no,
-                self.pos + 1,
-            )
-        ref = ref_match.group(0)
-        self.pos = ref_match.end()
+        if self.source.startswith("history(", self.pos):
+            inner = self.parse_history_condition()
+            ref = inner
+        else:
+            ref_match = re.compile(_REF_PATTERN).match(self.source, self.pos)
+            if ref_match is None:
+                raise ParseError(
+                    "count requires a typed reference: count(<ref>)",
+                    self.line_no,
+                    self.pos + 1,
+                )
+            ref = ref_match.group(0)
+            self.pos = ref_match.end()
         self.skip_spaces()
         if self.pos >= self.n or self.source[self.pos] != ")":
             raise ParseError(
@@ -1806,6 +1812,34 @@ class _ConditionScanner:
             )
         self.pos = end
         return ("count", ref, op, value)
+
+    def parse_history_condition(self) -> tuple:
+        """Parse ``history(<ref>)`` temporal query (issue #81).
+
+        Returns a ``("history", ref)`` AST node.  The node yields a list of
+        revision records for all SUCCEEDED deltas that added, revised, or
+        retired the named ref over the run.
+        """
+        self.pos += len("history(")
+        self.skip_spaces()
+        ref_match = re.compile(_REF_PATTERN).match(self.source, self.pos)
+        if ref_match is None:
+            raise ParseError(
+                "history requires a typed reference: history(<ref>)",
+                self.line_no,
+                self.pos + 1,
+            )
+        ref = ref_match.group(0)
+        self.pos = ref_match.end()
+        self.skip_spaces()
+        if self.pos >= self.n or self.source[self.pos] != ")":
+            raise ParseError(
+                "history requires a closing parenthesis: history(<ref>)",
+                self.line_no,
+                self.pos + 1,
+            )
+        self.pos += 1
+        return ("history", ref)
 
     def parse_quantifier_condition(self, quantifier: str) -> tuple:
         """Parse ``every(ref, pred)`` or ``any(ref, pred)`` (issue #83)."""
@@ -1937,7 +1971,11 @@ def _condition_refs(node: tuple) -> tuple[str, ...]:
     segment may address a field of a committed node.
     """
     kind = node[0]
-    if kind in ("eq", "ne", "count"):
+    if kind in ("eq", "ne", "history"):
+        return (node[1],)
+    if kind == "count":
+        if isinstance(node[1], tuple) and node[1][0] == "history":
+            return (node[1][1],)
         return (node[1],)
     if kind in ("eq_ref", "ne_ref"):
         return (node[1], node[2])
@@ -2040,6 +2078,10 @@ def _parse_done_expression(expression: str, line_no: int) -> DonePredicate:
     if text.startswith("count("):
         return _parse_done_count(text, line_no)
 
+    # Issue #81: history() temporal query.
+    if text.startswith("history("):
+        return _parse_done_history(text, line_no)
+
     # Issue #36: != operator (not-equals).
     ne_index = _find_top_level(text, "!=")
     if ne_index != -1:
@@ -2136,6 +2178,22 @@ def _parse_done_count(text: str, line_no: int) -> DonePredicate:
         )
     _, ref, op, value = ast
     return DonePredicate("count", ref, (op, value), line_no)
+
+
+def _parse_done_history(text: str, line_no: int) -> DonePredicate:
+    """Parse a DONE ``history(<ref>)`` temporal query (issue #81)."""
+    try:
+        ast = parse_condition(text, line_no)
+    except ParseError:
+        raise ParseError(
+            f"unsupported DONE expression: {text}", line_no, 5
+        )
+    if ast[0] != "history":
+        raise ParseError(
+            f"unsupported DONE expression: {text}", line_no, 5
+        )
+    _, ref = ast
+    return DonePredicate("history", ref, None, line_no)
 
 
 def _parse_matched_predicate(inner: str, line_no: int) -> DonePredicate:
@@ -2458,6 +2516,7 @@ def _split_top_level(text: str, line_no: int = 0) -> tuple[str, ...]:
 
 _type_warnings: list[str] = []
 _call_type_warnings: list[str] = []
+_call_committed: dict[str, str] = {}
 
 
 def get_type_warnings() -> list[str]:
@@ -2492,6 +2551,7 @@ def validate_program(
         raise ParseError("expected Program")
     known = set(known_commands) if known_commands is not None else None
     available: set[str] = set()
+    _call_committed.clear()
     for declaration in program.declarations:
         # KB.* is cross-run semantic memory, not run-local state: it cannot
         # be declared in INPUT and resolves from the KnowledgeBase at runtime.
@@ -2552,6 +2612,8 @@ def validate_program(
                 )
                 for target in targets:
                     available.add(target)
+                    if branch.call is not None:
+                        _call_committed[target] = target.split(".")[0]
         elif isinstance(statement, Gather):
             _validate_gather_statement(
                 statement, pending_scatter, known, available, steps
@@ -2602,9 +2664,51 @@ def validate_program(
                 if target in available:
                     raise ParseError(f"duplicate target {target}")
                 available.add(target)
+                _call_committed[target] = target.split(".")[0]
+            _saved_call_committed = dict(_call_committed)
             _validate_call_contract(
                 statement, known, protocols_dir, _protocol_stack
             )
+            _call_committed.clear()
+            _call_committed.update(_saved_call_committed)
+            from ..typecheck import is_subtype, ALL_TYPES
+            from ..typecheck import _parse_input_spec
+            protocol_prog = load_protocol(statement.protocol, protocols_dir)
+            input_types: dict[str, str | None] = {}
+            for declaration in protocol_prog.declarations:
+                name, node_type = _parse_input_spec(
+                    declaration.ref.split(".")[-1]
+                    + ":"
+                    + declaration.ref.split(".")[0]
+                )
+                input_types[name] = node_type
+            for argument in statement.args:
+                if not isinstance(argument.value, str):
+                    continue
+                if not _REF_RE.fullmatch(argument.value):
+                    continue
+                arg_value = argument.value
+                for call_target, call_prefix in _call_committed.items():
+                    if arg_value != call_target:
+                        continue
+                    if call_prefix not in ALL_TYPES:
+                        continue
+                    for declaration in protocol_prog.declarations:
+                        if declaration.ref.split(".")[-1] != argument.name:
+                            continue
+                        decl_prefix = declaration.ref.split(".")[0]
+                        if decl_prefix not in ALL_TYPES:
+                            continue
+                        if not is_subtype(call_prefix, decl_prefix):
+                            _call_type_warnings.append(
+                                f"CALL chain handoff: {statement.protocol}"
+                                f" argument '{argument.name}' passes"
+                                f" {arg_value} committed by an earlier"
+                                f" CALL as {call_prefix}.*"
+                                f" but protocol INPUT expects"
+                                f" {declaration.ref} ({decl_prefix}.*)"
+                                f" — cross-CALL type mismatch warning"
+                            )
         elif isinstance(statement, Return):
             for ref in statement.refs:
                 if ref not in available:
@@ -2793,6 +2897,7 @@ def validate_program(
                     elif isinstance(body_stmt, Call):
                         for target in body_stmt.targets:
                             available.add(target)
+                            _call_committed[target] = target.split(".")[0]
         elif isinstance(statement, Reformulate):
             _validate_reformulate_statement(
                 statement, known, available, steps
@@ -3768,29 +3873,29 @@ def _validate_call_contract(
             f" uncovered {', '.join(uncovered)}"
         )
 
-    # Issue #87: type-compatibility warnings for CALL arguments.  When a
-    # CALL argument value is a typed reference whose prefix differs from the
-    # protocol INPUT declaration's prefix, emit a warning (not an error) so
-    # the author can catch obvious type mismatches (e.g. passing E.* where
-    # the protocol expects H.*).  Warnings go to _type_warnings.
-    _prefix_re = re.compile(rf"^({_PREFIX})\.")
+    # Issue #87: subtype-aware type-compatibility warnings for CALL
+    # arguments.  When a CALL argument value is a typed reference whose
+    # prefix is NOT a subtype of the protocol INPUT declaration's prefix
+    # (per the subtyping lattice in typecheck.py), emit a warning (not an
+    # error).  For example, passing E.* where F.* is expected is fine
+    # (E ⊑ F), but passing D.* where H.* is expected warns (D and H are
+    # orthogonal).  Warnings go to _call_type_warnings.
+    from ..typecheck import is_subtype, ALL_TYPES
     for argument in call.args:
         if not isinstance(argument.value, str):
             continue
         if not _REF_RE.fullmatch(argument.value):
             continue
-        caller_prefix_match = _prefix_re.match(argument.value)
-        if caller_prefix_match is None:
+        caller_prefix = argument.value.split(".")[0]
+        if caller_prefix not in ALL_TYPES:
             continue
         for declaration in protocol.declarations:
             if declaration.ref.split(".")[-1] != argument.name:
                 continue
-            decl_prefix_match = _prefix_re.match(declaration.ref)
-            if decl_prefix_match is None:
+            decl_prefix = declaration.ref.split(".")[0]
+            if decl_prefix not in ALL_TYPES:
                 continue
-            caller_prefix = caller_prefix_match.group(1)
-            decl_prefix = decl_prefix_match.group(1)
-            if caller_prefix != decl_prefix:
+            if not is_subtype(caller_prefix, decl_prefix):
                 _call_type_warnings.append(
                     f"CALL {call.protocol} argument '{argument.name}'"
                     f" passes {argument.value} ({caller_prefix}.*)"

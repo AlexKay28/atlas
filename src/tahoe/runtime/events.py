@@ -598,6 +598,66 @@ class EventStore:
 
     # -- projection ---------------------------------------------------
 
+    def ref_history(self, run_id: str, ref: str) -> list[dict[str, Any]]:
+        """Return the revision history of a single ref (issue #81).
+
+        Replays all SUCCEEDED deltas in seq order and collects every event
+        that added, revised, or retired *ref*, producing a list of revision
+        records in chronological order::
+
+            {"action": "add"|"revise"|"retire", "value": <value>,
+             "event_type": "invocation.succeeded", "seq": <int>,
+             "invocation_id": "..."}
+
+        A ref that was never touched returns an empty list (not an error).
+        Retire records carry ``value: None``.
+        """
+        from tahoe.state import StateDelta
+
+        records: list[dict[str, Any]] = []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT seq, event_type, invocation_id, payload"
+                " FROM events WHERE run_id = ? ORDER BY seq ASC",
+                (run_id,),
+            ).fetchall()
+        for seq, event_type, invocation_id, payload_json in rows:
+            if EventType(event_type) is not EventType.SUCCEEDED:
+                continue
+            if payload_json is None:
+                continue
+            payload = json.loads(payload_json)
+            if not isinstance(payload, dict) or "delta" not in payload:
+                continue
+            delta = StateDelta.from_dict(payload["delta"])
+            for node in delta.add_nodes:
+                if node.get("id") == ref:
+                    records.append({
+                        "action": "add",
+                        "value": node.get("value"),
+                        "event_type": event_type,
+                        "seq": seq,
+                        "invocation_id": invocation_id,
+                    })
+            for node in delta.revise_nodes:
+                if node.get("id") == ref:
+                    records.append({
+                        "action": "revise",
+                        "value": node.get("value"),
+                        "event_type": event_type,
+                        "seq": seq,
+                        "invocation_id": invocation_id,
+                    })
+            if ref in delta.retire_nodes:
+                records.append({
+                    "action": "retire",
+                    "value": None,
+                    "event_type": event_type,
+                    "seq": seq,
+                    "invocation_id": invocation_id,
+                })
+        return records
+
     def project_state(self, run_id: str) -> dict:
         """Deterministically project run state from its event history."""
         info = self.run(run_id)
