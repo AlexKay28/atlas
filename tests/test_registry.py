@@ -34,6 +34,7 @@ BUILTIN_NAMES = (
     "define",
     "delegate",
     "edit",
+    "estimate",
     "extract",
     "fetch",
     "hypothesize",
@@ -78,6 +79,11 @@ FORMAL_COMMANDS = (
 # Issue #25: runtime-authored child plans.
 DELEGATE_COMMANDS = (
     "delegate",
+)
+
+# Issue #67: probabilistic reasoning estimate command.
+ESTIMATE_COMMANDS = (
+    "estimate",
 )
 
 CONTRACT_FIELDS = (
@@ -248,6 +254,7 @@ def test_decision_commands_extend_the_nine_originals():
         | set(EFFECTFUL_COMMANDS)
         | set(FORMAL_COMMANDS)
         | set(DELEGATE_COMMANDS)
+        | set(ESTIMATE_COMMANDS)
     )
 
 

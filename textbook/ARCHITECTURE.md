@@ -15,6 +15,7 @@ TAHOE
 │   ├── Graph Construction       → docs/language/04-graph-construction.md
 │   ├── Quality Control          → docs/language/05-quality-control.md
 │   └── Personal Profile         → docs/language/06-personal-profile.md
+│   └── Probabilistic Reasoning  → textbook/07-probabilistic-reasoning.md
 ├── Specification (what the language is)
 │   ├── Language and State       → docs/spec/01-language-and-state.md
 │   ├── Command Catalog          → docs/spec/02-command-catalog.md
@@ -51,6 +52,7 @@ TAHOE
 | `V.` | Verified | Result that passed a DONE check |
 | `X.` | Action | Executable step with observable result |
 | `R.` | Risk | Failure mode with probability and impact |
+| `PR.` | Probability | Probabilistic state (prior, likelihood, posterior) |
 | `ART.` | Artifact | Durable output (report, code, document) |
 | `OUT.` | Output | Final answer returned to the caller |
 
@@ -67,6 +69,7 @@ TAHOE
 | **Debug** | Observed ≠ expected | Q + F + E → H → V → D/X → V.regression → OUT | 03 §Debug |
 | **Review** | Evaluate an artifact | CTX + C → E + R → D/X → OUT | 03 §Review |
 | **Learn** | Transferable understanding | Q → H → E → V.recall + V.transfer → OUT | 03 §Learn |
+| **Bayes** | Probabilistic belief updating | H + PR.prior + E → PR.likelihood → PR.posterior → V → OUT | 07 §Bayes |
 
 ## Protocol selection rule
 

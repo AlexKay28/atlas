@@ -95,8 +95,8 @@ argument      = name, "=", expression ;
 references    = reference, (",", reference)* ;
 reference     = type, ".", name, (".", name)* ;
 type          = "G" | "Q" | "CTX" | "C" | "P" | "PF" | "F" | "E" | "A" |
-                "H" | "O" | "K" | "D" | "X" | "V" | "R" | "U" |
-                "OUT" | "ART" ;
+                 "H" | "O" | "K" | "D" | "X" | "V" | "R" | "U" |
+                 "OUT" | "ART" | "PR" ;
 protocol      = "protocol.", name ;
 policy_ref    = name, (".", name)* ;
 join_rule     = "all" | "any" | "k(", integer, ")" |
@@ -207,6 +207,23 @@ namespace or from graph nodes. `A.*` remains the ADR-0001 Assumption type.
 
 Artifacts are content-addressed by digest. Mutable external resources are stored as
 versioned observations, never as mutable artifact content.
+
+## Probability Type
+
+| Type | Meaning | Usage |
+| --- | --- | --- |
+| `PR` | Probability | Probabilistic state: prior, likelihood, posterior |
+
+`PR.*` refs hold numeric values in the [0, 1] range and represent probabilistic
+belief states — priors, likelihoods, and posteriors used in Bayesian reasoning.
+A `PR.prior` is the initial belief before evidence; a `PR.likelihood` is
+P(evidence | hypothesis); a `PR.posterior` is the updated belief after applying
+Bayes' rule; a `PR.contradiction` is P(claim is false | new evidence).
+
+The parser does not enforce the [0, 1] range — that is a lint-time check for
+later. `PR.*` is distinct from `P.*` (Plan) and `PF.*` (Preference): a plan is
+an intermediate computed result, a preference is a soft ranking criterion,
+and a probability is a numeric belief level.
 
 ## Memory Classes
 
