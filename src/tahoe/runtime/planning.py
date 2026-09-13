@@ -231,9 +231,7 @@ def collect_anchors(program: Program) -> dict[int, list]:
                             )
             elif isinstance(statement, Call):
                 count += 1
-            elif isinstance(statement, (Scatter, Gather, Par, Loop, Try, Reformulate, First)):
-            elif isinstance(statement, (Scatter, Gather, Par, Loop, Try, Reformulate, Await)):
-            elif isinstance(statement, (Scatter, Gather, Par, Loop, Try, Reformulate, Approve)):
+            elif isinstance(statement, (Scatter, Gather, Par, Loop, Try, Reformulate, First, Await, Approve)):
                 count += 1
         return count
 

@@ -322,9 +322,12 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
                 continue
             if entry.first is not None:
                 # Issue #76: a FIRST block creates no task of its own —
+                # event-choice execution is not yet implemented.
+                continue
             if entry.await_ is not None:
                 # Issue #77: an AWAIT statement creates no task —
                 # the event system is not yet implemented.
+                continue
             if entry.approve is not None:
                 # Issue #78: an APPROVE statement creates no task —
                 # the approval system is not yet implemented.

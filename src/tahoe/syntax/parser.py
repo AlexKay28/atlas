@@ -138,6 +138,7 @@ _FIRST_RE = re.compile(rf"^FIRST\s+(?P<selectors>.+)$")
 # ``AWAIT <event_selector>`` optionally followed by ``TIMEOUT <duration>``.
 _AWAIT_RE = re.compile(
     rf"^AWAIT\s+(?P<selector>.+?)(?:\s+TIMEOUT\s+(?P<timeout>.+))?$"
+)
 # Issue #78: APPROVE approval-gate grammar.  The header is
 # ``APPROVE <policy_ref> INTENT <expression>``.
 _APPROVE_RE = re.compile(
