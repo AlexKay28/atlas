@@ -1,0 +1,28 @@
+# TAHOE roadmap resolution plan — close the umbrella with evidence
+# Tracks the full lifecycle: original 15 (#1-#15), parallel frontier (#17-#27),
+# sprint 1 bugs (#28-#49), rebrand (#51-#53), and the remaining benchmark milestone (#50).
+
+PROGRAM roadmap_resolution VERSION 2.0
+
+INPUT
+    G.goal = "Close roadmap umbrella #16 with evidence: every tracked issue resolved, repo named TAHOE, 974 tests green, 49/49 seals verified"
+    C.state = "issues #1-#15 (original roadmap) CLOSED; issues #17-#27 (parallel frontier) CLOSED; issues #28-#49 (sprint 1-2 bugs) CLOSED; #51-#53 (skill gate, rebrand) CLOSED; 974 tests green, 49/49 seals verified; repo named TAHOE"
+    C.rebrand = "tikhon -> ATLAS (#52) -> TAHOE (#53); digest is package-name-independent, verified across 45+ sealed runs with zero drift"
+    C.convention = "documentation seal on issue -> worker copies and re-seals -> executed run in demo/runs/ -> evidence comment with embedded plan"
+    Q.open = ["50-benchmark-milestone"]
+    Q.closed = ["1-15-original-roadmap", "17-27-parallel-frontier", "28-49-sprint-bugs", "51-skill-gate", "52-atlas-rebrand", "53-tahoe-rebrand"]
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.inventory: DO search(query = G.goal, scope = Q.closed) -> E.resolved
+step.verify_scope: DO verify(goal = G.goal, evidence = E.resolved) -> V.scope_ok
+DONE V.scope_ok == "all_closed"
+step.check_tests: DO test(path = "tests/", timeout_seconds = 600) -> V.tests
+DONE matched(V.tests, "974_green")
+step.check_seals: DO check(artifact = "demo/runs/", criteria = "seal_verified") -> V.seals
+DONE matched(V.seals, "49_verified")
+step.assess_benchmark: DO search(query = "benchmark milestone #50", scope = Q.open) -> E.benchmark
+step.decide: DO choose(valid_options = ["close_16_now", "wait_for_50"], evidence = E.benchmark) -> D.verdict
+DONE D.verdict == "close_16_now"
+step.report: DO report(committed_refs = [V.tests, V.seals, E.resolved, D.verdict], format = "markdown") -> ART.summary
+
+RETURN D.verdict, V.tests, V.seals, ART.summary

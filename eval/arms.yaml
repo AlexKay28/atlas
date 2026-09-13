@@ -1,25 +1,58 @@
-# Eval pilot configuration — arms 1 and 4 per #50 section 4
+# Eval pilot configuration — all 6 arms per #50 section 4
 #
 # Arm 1: plain agent/ReAct-style execution (no sealed-program scaffolding)
-# Arm 4: Tikhon core, sequential execution, no learned protocols
+# Arm 2: chain-of-draft concise natural-language reasoning baseline
+# Arm 3: structured natural-language state/plan + updates
+# Arm 4: TAHOE core, sequential execution, no learned protocols
+# Arm 5: TAHOE with learned protocols from protocols/ directory
+# Arm 6: TAHOE with bounded parallel/nested execution
 #
-# Both arms use the same model/version, tools, environment, grader and
+# All arms use the same model/version, tools, environment, grader and
 # resource ceilings per #50's authoring-parity clause.
-# Authoring attempts on the tikhon arm are COUNTED as charged steps.
+# Authoring attempts on tahoe arms are COUNTED as charged steps.
 
 arms:
   - name: react-baseline
     kind: react
     max_workers: 1
     # worker_factory: null in scaffold (deterministic); live runs use
-    # TIKHON_WORKER_TRANSPORT/TIKHON_MODEL/TIKHON_API_* env
+    # TAHOE_WORKER_TRANSPORT/TAHOE_MODEL/TAHOE_API_* env
     prompt_template: |
       You are a tool-using agent. Solve the task using available tools.
       Respond with JSON actions and observations until the task is complete.
 
-  - name: tikhon-core
-    kind: tikhon
+  - name: chain-of-draft
+    kind: chain_of_draft
     max_workers: 1
-    # The tikhon arm's program is authored IN-LOOP by the model via the
+    prompt_template: |
+      Think in concise bullet-point drafts before each action.
+      Respond with JSON actions and observations until the task is complete.
+
+  - name: structured-nl
+    kind: structured_nl
+    max_workers: 1
+    prompt_template: |
+      Produce a structured plan with explicit state tracking (goal,
+      subtasks, current state, next action) in natural language before
+      acting. Respond with JSON actions and observations until the
+      task is complete.
+
+  - name: tahoe-core
+    kind: tahoe
+    max_workers: 1
+    # The tahoe arm's program is authored IN-LOOP by the model via the
     # delegate authoring loop in live runs; in the scaffold path the
     # program_source is provided by the task manifest.
+
+  - name: tahoe-learned
+    kind: tahoe_learned
+    max_workers: 1
+    protocol_dir: protocols/
+    # Same as tahoe-core but loads learned .think protocol files from
+    # the protocols/ directory as candidate CALL targets.
+
+  - name: tahoe-parallel
+    kind: tahoe_parallel
+    max_workers: 3
+    # Same as tahoe-core but with bounded parallel/nested execution.
+    # max_workers > 1 enables concurrent branch execution.

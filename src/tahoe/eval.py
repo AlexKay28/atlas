@@ -8,8 +8,10 @@ graders; live model runs are the orchestrator's post-merge step through
 
 Key types:
 
-- :class:`ArmSpec` — names an arm and its kind (``"react"`` or
-  ``"tahoe"``).  ``react`` is the plain tool-loop baseline prompt; the
+- :class:`ArmSpec` — names an arm and its kind (``"react"``,
+  ``"tahoe"``, or one of the stub kinds ``"chain_of_draft"``,
+  ``"structured_nl"``, ``"tahoe_learned"``, ``"tahoe_parallel"`` which
+  currently behave like their baseline counterparts).  ``react`` is the plain tool-loop baseline prompt; the
   model runs unconstrained.  ``tahoe`` is the sealed-program arm where
   the program is authored IN-LOOP by the model under test, and every
   authoring attempt is COUNTED as a charged step per #50's
@@ -42,8 +44,11 @@ Both arms' usage (tokens, cost, wall) is recorded on the same
 from __future__ import annotations
 
 import dataclasses
+import enum
+import hashlib
 import json
 import os
+import random
 import tempfile
 import time
 from pathlib import Path
@@ -58,9 +63,12 @@ from tahoe.syntax import parse_program
 __all__ = [
     "ArmKind",
     "ArmSpec",
+    "CHAIN_OF_DRAFT_PROMPT",
     "DBStateGrader",
+    "FaultInjectionMode",
     "PilotReport",
     "ProgrammaticGrader",
+    "STRUCTURED_NL_PROMPT",
     "TaskManifest",
     "TrialRecord",
     "TrialResult",
@@ -68,7 +76,64 @@ __all__ = [
 ]
 
 
-ArmKind = str  # "react" | "tahoe"
+ArmKind = str  # "react" | "tahoe" | "chain_of_draft" | "structured_nl" | "tahoe_learned" | "tahoe_parallel"
+
+VALID_ARM_KINDS: tuple[str, ...] = (
+    "react",
+    "tahoe",
+    "chain_of_draft",
+    "structured_nl",
+    "tahoe_learned",
+    "tahoe_parallel",
+)
+
+#: Baseline react prompt (plain tool-loop, no scaffolding).  Used by the
+#: live dispatch path; the scaffold path executes the same baseline
+#: program for all react-shaped arms.
+REACT_BASELINE_PROMPT = (
+    "You are a plain tool-loop agent. Reason step by step and issue"
+    " tool calls with JSON actions and observations until the task is"
+    " complete."
+)
+
+#: chain_of_draft arm prompt: concise bullet-point drafts before acting.
+CHAIN_OF_DRAFT_PROMPT = (
+    "Think in concise bullet-point drafts before each action. Respond"
+    " with JSON actions and observations until the task is complete."
+)
+
+#: structured_nl arm prompt: structured plan with explicit state
+#: tracking before acting.
+STRUCTURED_NL_PROMPT = (
+    "Produce a structured plan with explicit state tracking (goal,"
+    " subtasks, current state, next action) in natural language before"
+    " acting. Respond with JSON actions and observations until the"
+    " task is complete."
+)
+
+#: Kind-default prompt templates for the react-shaped arms (used when
+#: ``ArmSpec.prompt_template`` is None in live runs).
+_KIND_DEFAULT_PROMPTS: dict[str, str] = {
+    "react": REACT_BASELINE_PROMPT,
+    "chain_of_draft": CHAIN_OF_DRAFT_PROMPT,
+    "structured_nl": STRUCTURED_NL_PROMPT,
+}
+
+
+class FaultInjectionMode(enum.Enum):
+    """Chaos-style fault modes for pilot resilience studies.
+
+    Scaffolding for fault-injection experiments: ``run_pilot`` accepts
+    a mode plus a fraction and injects the fault into per-trial records
+    before grading (see :func:`_inject_fault`).
+    """
+
+    none = "none"
+    transport_failure = "transport_failure"
+    process_loss = "process_loss"
+    delayed_results = "delayed_results"
+    stale_submission = "stale_submission"
+    lease_expiry = "lease_expiry"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -88,6 +153,9 @@ class ArmSpec:
     ``max_workers`` and ``budget`` configure execution parallelism for
     the arm (defaults: 1 worker, no budget cap — the pilot measures
     sequential execution for both arms to isolate language effects).
+    ``protocol_dir`` is an optional directory of ``.think`` protocol
+    files; the ``tahoe_learned`` stub arm collects their paths as the
+    arm's available protocols (no execution yet).
     """
 
     name: str
@@ -96,13 +164,16 @@ class ArmSpec:
     prompt_template: str | None = None
     max_workers: int = 1
     budget: ExecutionBudget | None = None
+    protocol_dir: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.name.strip():
             raise ValueError("ArmSpec.name must be nonempty")
-        if self.kind not in ("react", "tahoe"):
+        if self.kind not in VALID_ARM_KINDS:
             raise ValueError(
-                f'ArmSpec.kind must be "react" or "tahoe", got {self.kind!r}'
+                "ArmSpec.kind must be one of "
+                + ", ".join(repr(k) for k in VALID_ARM_KINDS)
+                + f", got {self.kind!r}"
             )
         if not isinstance(self.max_workers, int) or isinstance(
             self.max_workers, bool
@@ -444,6 +515,11 @@ def _run_react_arm(
     coordinator with a simple program that uses define/search/fetch/
     report — simulating a plain agent tool loop.  In live runs this
     would dispatch a plain ReAct prompt to the model.
+
+    The stub kinds ``"chain_of_draft"`` and ``"structured_nl"`` share
+    this exact scaffold path (identical baseline program); they differ
+    only in the live-path prompt template — ``arm.prompt_template`` or
+    the kind default from ``_KIND_DEFAULT_PROMPTS``.
     """
     react_program = (
         "PROGRAM react_arm VERSION 1.0\n"
@@ -610,6 +686,57 @@ def _default_eval_worker() -> DeterministicWorker:
     return DeterministicWorker(handlers=handlers)
 
 
+def _collect_protocol_paths(protocol_dir: str) -> list[str]:
+    """Collect ``.think`` protocol file paths from a directory.
+
+    Stub for the ``tahoe_learned`` arm: the paths are the list of
+    available protocols (sorted for determinism); no execution yet.
+    """
+    return sorted(str(p) for p in Path(protocol_dir).glob("*.think"))
+
+
+def _inject_fault(
+    trial_record: TrialRecord,
+    fault_mode: FaultInjectionMode,
+    fault_fraction: float,
+    rng: random.Random,
+) -> TrialRecord:
+    """Apply a chaos-style fault to a trial record (resilience studies).
+
+    With probability ``fault_fraction`` (drawn from ``rng``), the record
+    is rewritten according to ``fault_mode``:
+
+    - ``transport_failure`` / ``process_loss`` / ``stale_submission`` /
+      ``lease_expiry``: the trial is forced to fail with the mode as its
+      ``failure_class``.
+    - ``delayed_results``: the ``failure_class`` is annotated but
+      ``passed`` is kept as-is; ``usage["delayed"]`` is set to True.
+
+    Every injected trial records ``usage["fault_injected"]`` with the
+    mode value so reports can distinguish injected failures from real
+    ones.  When the mode is ``none``, the fraction is 0.0, or the rng
+    draw misses, the record is returned unchanged.
+    """
+    if fault_mode is FaultInjectionMode.none or fault_fraction == 0.0:
+        return trial_record
+    if rng.random() >= fault_fraction:
+        return trial_record
+    usage = {**trial_record.usage, "fault_injected": fault_mode.value}
+    if fault_mode is FaultInjectionMode.delayed_results:
+        result = dataclasses.replace(
+            trial_record.result,
+            failure_class="delayed_results",
+        )
+        usage["delayed"] = True
+    else:
+        result = dataclasses.replace(
+            trial_record.result,
+            passed=False,
+            failure_class=fault_mode.value,
+        )
+    return dataclasses.replace(trial_record, result=result, usage=usage)
+
+
 def run_pilot(
     manifest: Sequence[TaskManifest],
     arms: Sequence[ArmSpec],
@@ -617,6 +744,8 @@ def run_pilot(
     *,
     grader: ProgrammaticGrader | None = None,
     repetitions: int = 1,
+    fault_injection: FaultInjectionMode = FaultInjectionMode.none,
+    fault_fraction: float = 0.0,
 ) -> PilotReport:
     """Run a pilot: every task x every arm, graded.
 
@@ -639,6 +768,11 @@ def run_pilot(
             if the execution succeeded (status ``"succeeded"``).
         repetitions: number of independent trials per task per arm
             (for pass^k reliability per #50 section 1).
+        fault_injection: chaos mode for resilience studies
+            (:class:`FaultInjectionMode`); applied per-trial with
+            probability ``fault_fraction`` before grading.
+        fault_fraction: fraction of trials the injected fault applies
+            to, in ``[0.0, 1.0]`` (default 0.0 = no faults).
 
     Returns:
         A :class:`PilotReport` with :meth:`to_json` and
@@ -652,8 +786,20 @@ def run_pilot(
         raise ValueError(
             f"repetitions must be int >= 1, got {repetitions!r}"
         )
+    if not isinstance(fault_injection, FaultInjectionMode):
+        fault_injection = FaultInjectionMode(fault_injection)
+    if (
+        isinstance(fault_fraction, bool)
+        or not isinstance(fault_fraction, (int, float))
+        or not 0.0 <= float(fault_fraction) <= 1.0
+    ):
+        raise ValueError(
+            "fault_fraction must be a number in [0.0, 1.0],"
+            f" got {fault_fraction!r}"
+        )
 
     all_trials: list[TrialRecord] = []
+    trial_index = 0
     with tempfile.TemporaryDirectory(prefix="tahoe-eval-") as workdir:
         for rep in range(1, repetitions + 1):
             for task in manifest:
@@ -661,7 +807,11 @@ def run_pilot(
                     run_id = (
                         f"{task.task_id}-{arm.name}-r{rep}"
                     )
-                    if arm.kind == "react":
+                    if arm.kind in ("react", "chain_of_draft", "structured_nl"):
+                        # Stub kinds behave identically to the react
+                        # baseline here; chain_of_draft and
+                        # structured_nl differ only in their live-path
+                        # prompt_template (see _KIND_DEFAULT_PROMPTS).
                         record, raw_result = _run_react_arm(
                             task=task,
                             arm=arm,
@@ -669,12 +819,47 @@ def run_pilot(
                             run_id=run_id,
                         )
                     else:
+                        # "tahoe", "tahoe_learned", "tahoe_parallel".
+                        # tahoe_learned additionally collects .think
+                        # protocol paths from arm.protocol_dir (no
+                        # execution yet); tahoe_parallel relies on
+                        # max_workers already flowing through
+                        # _run_tahoe_program's coordinator call
+                        # instead of a forced-sequential default.
                         record, raw_result = _run_tahoe_arm(
                             task=task,
                             arm=arm,
                             workdir=workdir,
                             run_id=run_id,
                         )
+                        if arm.kind == "tahoe_learned" and arm.protocol_dir:
+                            record = dataclasses.replace(
+                                record,
+                                usage={
+                                    **record.usage,
+                                    "available_protocols": (
+                                        _collect_protocol_paths(
+                                            arm.protocol_dir
+                                        )
+                                    ),
+                                },
+                            )
+
+                    # Fault injection happens after the trial completes
+                    # and before grading; the rng is seeded from
+                    # (task_id, arm_name, trial_index) so runs are
+                    # reproducible.
+                    rng = random.Random(
+                        hashlib.sha256(
+                            f"{task.task_id}|{arm.name}|{trial_index}".encode(
+                                "utf-8"
+                            )
+                        ).hexdigest()
+                    )
+                    record = _inject_fault(
+                        record, fault_injection, fault_fraction, rng
+                    )
+                    trial_index += 1
 
                     if grader is not None and record.result.passed:
                         graded = grader(

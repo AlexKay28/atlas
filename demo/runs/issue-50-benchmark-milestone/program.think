@@ -1,0 +1,33 @@
+# TAHOE benchmark milestone plan — issue #50
+# Goal: deliver Tier-A deterministic runtime benchmarks, extend the eval harness,
+# and prepare the first public-suite A/B pilot (tau-bench) with honest reporting.
+
+PROGRAM benchmark_milestone VERSION 1.0
+
+INPUT
+    G.goal = "Produce reproducible evidence for whether TAHOE improves LLM reasoning quality, token efficiency, and reliability — including negative or inconclusive results"
+    C.state = "eval.py (694 lines) and benchmarks.py (1071 lines) exist; 57 eval/bench tests pass; arms.yaml has react-baseline and tikhon-core; tau-bench-retail.yaml and custom-battery.yaml stubs exist; #43 cost telemetry CLOSED; #46 bench extensibility CLOSED; #47 A/B evaluation CLOSED"
+    C.scope = "Tier A: deterministic CI benchmarks with fake workers; Tier B: small real-model pilot on tau-bench; Tier C: confirmatory frozen run; Tier D: protocol learning and transfer"
+    C.baselines = "arm 1 react, arm 2 chain-of-draft, arm 3 structured-nl, arm 4 tahoe-core, arm 5 tahoe-learned, arm 6 tahoe-parallel"
+    C.rules = "predeclare targets; paired comparisons with CI; distinguish pass@1 pass@k pass^k; charge unsuccessful work; freeze before confirmatory; null result is valid"
+    Q.open = ["50-benchmark-milestone"]
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.inventory: DO search(query = "eval and benchmark harness", scope = C.state) -> E.existing
+step.assess: DO verify(goal = G.goal, evidence = E.existing) -> V.gaps
+step.tier_a: DO test(path = "tests/test_eval.py tests/test_benchmarks.py", timeout_seconds = 600) -> V.tier_a
+DONE matched(V.tier_a, "passed")
+step.design_manifests: DO extract(artifact = E.existing, schema = "task_manifests") -> P.manifests
+step.extend_runner: DO delegate(goal = "extend eval runner with fault injection and protocol-learning modes", constraints = C.scope, max_steps = 8) -> OUT.runner
+step.add_arms: DO delegate(goal = "implement arms 2 (chain-of-draft) and 3 (structured-nl) baselines", constraints = C.baselines, max_steps = 6) -> OUT.arms
+step.tau_bench: DO delegate(goal = "wire tau-bench retail subset with real task IDs and grader", constraints = C.rules, max_steps = 8) -> OUT.taubench
+step.pilot: DO delegate(goal = "run Tier-B pilot 20-50 tasks 5 trials with matched budget", constraints = C.rules, max_steps = 10) -> OUT.pilot
+step.report_pilot: DO report(committed_refs = OUT.pilot, format = "json") -> ART.pilot_report
+step.freeze: DO verify(goal = "freeze task IDs models configs hypotheses for confirmatory", evidence = ART.pilot_report) -> V.frozen
+step.confirmatory: DO delegate(goal = "execute Tier-C confirmatory with frozen settings", constraints = V.frozen, max_steps = 12) -> OUT.confirm
+step.transfer: DO delegate(goal = "evaluate protocol learning and transfer on held-out tasks", constraints = C.scope, max_steps = 10) -> OUT.transfer
+step.final: DO summarize(source_refs = [OUT.pilot, OUT.confirm, OUT.transfer], budget = 8000) -> ART.claim_matrix
+step.verify: DO verify(goal = G.goal, evidence = ART.claim_matrix) -> V.result
+DONE matched(V.result, "reproducible")
+
+RETURN V.result, ART.claim_matrix, OUT.pilot, OUT.confirm, OUT.transfer
