@@ -2328,9 +2328,20 @@ class DriveEngine:
         )
 
         from tahoe.syntax.parser import canonical_json as _canon_json
-        new_plan_digest = hashlib.sha256(
-            _canon_json(program).encode("utf-8")
-        ).hexdigest()
+        import json as _json
+        if isinstance(new_plan_value, str):
+            new_plan_digest = hashlib.sha256(
+                new_plan_value.encode("utf-8")
+            ).hexdigest()
+        elif isinstance(new_plan_value, (list, dict)):
+            new_plan_digest = hashlib.sha256(
+                _json.dumps(new_plan_value, sort_keys=True,
+                            default=str).encode("utf-8")
+            ).hexdigest()
+        else:
+            new_plan_digest = hashlib.sha256(
+                _canon_json(program).encode("utf-8")
+            ).hexdigest()
 
         self.store.append(
             run_id,

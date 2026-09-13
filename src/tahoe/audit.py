@@ -342,8 +342,10 @@ def _check_reformulation_invariants(
 
     - Max 3 reformulations per run.
     - Each PLAN_REFORMULATED event carries the required payload fields:
-      trigger_step, diagnosis_ref, new_plan_digest, preserved_refs.
+      trigger_step, diagnosis_ref, revised_refs, new_plan_digest,
+      preserved_refs.
     - The reformulation count is sequential (1, 2, 3, ...).
+    - Preserved refs include goal-level (G.*) refs from pre-reformulation.
     """
     findings: list[AuditFinding] = []
     reformulation_events = [
@@ -360,10 +362,11 @@ def _check_reformulation_invariants(
             ),
             seqs=tuple(ev.seq for ev in reformulation_events),
         ))
+    expected_count = 0
     for ev in reformulation_events:
         payload = ev.payload if isinstance(ev.payload, dict) else {}
         required_fields = (
-            "trigger_step", "diagnosis_ref",
+            "trigger_step", "diagnosis_ref", "revised_refs",
             "new_plan_digest", "preserved_refs",
         )
         missing = [
@@ -379,6 +382,34 @@ def _check_reformulation_invariants(
                 ),
                 seqs=(ev.seq,),
             ))
+        expected_count += 1
+        actual_count = payload.get("reformulation_count")
+        if actual_count != expected_count:
+            findings.append(AuditFinding(
+                code="reformulation_count_not_sequential",
+                message=(
+                    f"PLAN_REFORMULATED at seq {ev.seq} has"
+                    f" reformulation_count={actual_count!r}, expected"
+                    f" {expected_count}"
+                ),
+                seqs=(ev.seq,),
+            ))
+        preserved = payload.get("preserved_refs")
+        if isinstance(preserved, list):
+            has_goal_ref = any(
+                isinstance(r, str) and r.startswith("G.")
+                for r in preserved
+            )
+            if not has_goal_ref:
+                findings.append(AuditFinding(
+                    code="reformulation_no_goal_ref_preserved",
+                    message=(
+                        f"PLAN_REFORMULATED at seq {ev.seq} preserved_refs"
+                        f" contains no G.* goal-level ref — goal-level"
+                        f" DONE predicates may be lost"
+                    ),
+                    seqs=(ev.seq,),
+                ))
     return findings
 
 
