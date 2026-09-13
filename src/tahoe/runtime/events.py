@@ -266,8 +266,6 @@ class EventStore:
         )
         self._succeeded_cache: dict[str, set[str]] = {}
         self._ledger_cache: dict[str, tuple["TaskLedger", int]] = {}
-        self._resume_locks: dict[str, threading.Lock] = {}
-        self._resume_locks_guard = threading.Lock()
         with self._lock:
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.executescript(_SCHEMA)
@@ -317,30 +315,6 @@ class EventStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
-
-    def try_acquire_resume_lock(self, run_id: str) -> bool:
-        """Atomically acquire a per-run resume lock (issue #64).
-
-        Returns ``True`` if the caller now holds the lock and may
-        proceed with resume; ``False`` if another thread already holds
-        it (concurrent resume stampede).  The lock is released by
-        :meth:`release_resume_lock`.
-        """
-        with self._resume_locks_guard:
-            lock = self._resume_locks.get(run_id)
-            if lock is None:
-                lock = threading.Lock()
-                self._resume_locks[run_id] = lock
-            return lock.acquire(blocking=False)
-
-    def release_resume_lock(self, run_id: str) -> None:
-        """Release the per-run resume lock acquired by
-        :meth:`try_acquire_resume_lock`.
-        """
-        with self._resume_locks_guard:
-            lock = self._resume_locks.get(run_id)
-        if lock is not None and lock.locked():
-            lock.release()
 
     def __enter__(self) -> "EventStore":
         return self
@@ -509,9 +483,10 @@ class EventStore:
                 # duplicate SUCCEEDED terminal check
                 if event_type is EventType.SUCCEEDED and record.invocation_id:
                     if record.invocation_id in succeeded_invocations:
-                        raise ValueError(
+                        raise StateVersionConflict(
                             f"invocation {record.invocation_id!r} in run {run_id!r}"
                             " already has a SUCCEEDED terminal event"
+                            " (concurrent resume detected)"
                         )
                     succeeded_invocations.add(record.invocation_id)
 

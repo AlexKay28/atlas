@@ -2801,6 +2801,10 @@ def validate_program(
             _validate_first_statement(
                 statement, known, available, steps
             )
+            # A FIRST block whose body contains a STOP or RETURN satisfies
+            # the terminal requirement (the body fires when an event matches).
+            if any(isinstance(s, (Stop, Return)) for s in statement.body):
+                terminal = True
         elif isinstance(statement, Await):
             pass  # parsing only — no validation needed for AWAIT
         elif isinstance(statement, Approve):

@@ -2473,7 +2473,7 @@ class DriveEngine:
                 break
 
         if matched_selector is None:
-            # No matching event found — record a BLOCKED and return
+            # No matching event found — block the run
             self.store.append(
                 run_id,
                 EventType.BLOCKED,
@@ -2483,7 +2483,10 @@ class DriveEngine:
                     "reason": "no matching event",
                 },
             )
-            return None
+            return self._fail_run(
+                run_id, plan, statement_to_task, idx,
+                "FIRST: no matching event for any selector",
+            )
 
         # Record FIRST_EVENT_MATCHED
         self.store.append(
@@ -2499,8 +2502,14 @@ class DriveEngine:
             },
         )
 
-        # Execute body statements sequentially (reuse LOOP body path)
+        # Execute body statements sequentially (reuse LOOP body path for
+        # DO invocations; handle STOP/RETURN directly to avoid cancelling
+        # already-completed tasks from earlier plan entries).
         for body_stmt in first.body:
+            if isinstance(body_stmt, Stop):
+                return self._terminal_stop(run_id, body_stmt, values)
+            if isinstance(body_stmt, Return):
+                return self._terminal_return(run_id, body_stmt.refs, values)
             result = self._execute_loop_body_statement(
                 body_stmt,
                 program,
