@@ -36,6 +36,7 @@ from tahoe.syntax import (
     Conditional,
     DonePredicate,
     Invocation,
+    Loop,
     ParseError,
     Program,
     Return,
@@ -2340,3 +2341,231 @@ RETURN V.flag
     assert cond.else_branch is None
     assert isinstance(cond.statement, Stop)
     assert cond.statement.kind == "completed"
+
+
+# -- LOOP construct (issue #68) ----------------------------------------
+
+
+LOOP_PROGRAM = """\
+PROGRAM refine VERSION 1.0
+
+INPUT
+  V.result = "initial"
+  U.high_impact = ["gap1", "gap2"]
+
+LOOP refine
+  ENTRY V.result == "initial"
+  WHILE count(U.high_impact) > 0
+  PROGRESS count(U.high_impact) decreases
+  MAX 3
+  EXIT V.result == "passed"
+  EXHAUSTED STOP unresolved(U.high_impact)
+  step.improve: DO challenge(claim = V.result) -> R.gap
+  step.fix: DO edit(intent = R.gap) -> ART.fix
+  step.retest: DO test(target = ART.fix) -> V.result
+RETURN V.result
+"""
+
+
+def test_loop_parses_with_all_fields():
+    program = parse_program(LOOP_PROGRAM)
+    loop = program.statements[0]
+    assert isinstance(loop, Loop)
+    assert loop.name == "refine"
+    assert loop.entry_condition == 'V.result == "initial"'
+    assert loop.while_condition == "count(U.high_impact) > 0"
+    assert loop.progress_expression == "count(U.high_impact) decreases"
+    assert loop.max_iterations == 3
+    assert loop.exit_condition == 'V.result == "passed"'
+    assert isinstance(loop.exhausted, Stop)
+    assert loop.exhausted.kind == "unresolved"
+    assert loop.exhausted.ref == "U.high_impact"
+    assert len(loop.body) == 3
+    assert all(isinstance(s, Invocation) for s in loop.body)
+    assert loop.body[0].step_id == "step.improve"
+    assert loop.body[1].step_id == "step.fix"
+    assert loop.body[2].step_id == "step.retest"
+
+
+def test_loop_ast_node_is_frozen_dataclass():
+    loop = parse_program(LOOP_PROGRAM).statements[0]
+    assert dataclasses.is_dataclass(loop)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        loop.name = "other"
+
+
+def test_loop_validates():
+    program = parse_program(LOOP_PROGRAM)
+    assert validate_program(
+        program, known_commands={"challenge", "edit", "test", "define"}
+    ) is True
+
+
+def test_loop_missing_field_rejected():
+    for missing in ["ENTRY", "WHILE", "PROGRESS", "MAX", "EXIT", "EXHAUSTED"]:
+        lines = LOOP_PROGRAM.splitlines()
+        new_lines = [l for l in lines if not l.strip().startswith(missing + " ")]
+        source = "\n".join(new_lines) + "\n"
+        with pytest.raises(ParseError, match=f"LOOP.*{missing}"):
+            parse_program(source)
+
+
+def test_loop_non_integer_max_rejected():
+    source = LOOP_PROGRAM.replace("MAX 3", "MAX not-a-number")
+    with pytest.raises(ParseError, match="MAX must be a positive integer"):
+        parse_program(source)
+
+
+def test_loop_max_zero_rejected():
+    source = LOOP_PROGRAM.replace("MAX 3", "MAX 0")
+    with pytest.raises(ParseError, match="MAX must be >= 1"):
+        parse_program(source)
+
+
+def test_loop_seal_digest_deterministic():
+    base = seal_digest(parse_program(LOOP_PROGRAM))
+    assert seal_digest(parse_program(LOOP_PROGRAM)) == base
+    changed = LOOP_PROGRAM.replace("MAX 3", "MAX 5")
+    assert seal_digest(parse_program(changed)) != base
+
+
+def test_loop_body_can_contain_if():
+    source = """\
+PROGRAM loop_if VERSION 1.0
+
+INPUT
+  V.result = "initial"
+  U.issues = ["x"]
+
+LOOP refine
+  ENTRY V.result == "initial"
+  WHILE count(U.issues) > 0
+  PROGRESS count(U.issues) decreases
+  MAX 2
+  EXIT V.result == "done"
+  EXHAUSTED STOP unresolved(U.issues)
+  step.work: DO define(value = V.result) -> V.result
+  IF V.result == "initial" STOP blocked(V.result)
+RETURN V.result
+"""
+    program = parse_program(source)
+    loop = program.statements[0]
+    assert isinstance(loop, Loop)
+    assert len(loop.body) == 2
+    assert isinstance(loop.body[1], Conditional)
+    assert validate_program(program, known_commands={"define"}) is True
+
+
+def test_loop_body_can_contain_stop():
+    source = """\
+PROGRAM loop_stop VERSION 1.0
+
+INPUT
+  V.result = "initial"
+  U.issues = ["x"]
+
+LOOP refine
+  ENTRY V.result == "initial"
+  WHILE count(U.issues) > 0
+  PROGRESS count(U.issues) decreases
+  MAX 2
+  EXIT V.result == "done"
+  EXHAUSTED STOP unresolved(U.issues)
+  step.work: DO define(value = V.result) -> V.result
+  STOP completed()
+RETURN V.result
+"""
+    program = parse_program(source)
+    loop = program.statements[0]
+    assert isinstance(loop, Loop)
+    assert len(loop.body) == 2
+    assert isinstance(loop.body[1], Stop)
+
+
+def test_loop_body_can_contain_call():
+    source = """\
+PROGRAM loop_call VERSION 1.0
+
+INPUT
+  V.result = "initial"
+  U.issues = ["x"]
+
+LOOP refine
+  ENTRY V.result == "initial"
+  WHILE count(U.issues) > 0
+  PROGRESS count(U.issues) decreases
+  MAX 2
+  EXIT V.result == "done"
+  EXHAUSTED STOP unresolved(U.issues)
+  step.work: DO define(value = V.result) -> V.result
+  CALL protocol.helper(input = V.result) -> V.result
+RETURN V.result
+"""
+    program = parse_program(source)
+    loop = program.statements[0]
+    assert isinstance(loop, Loop)
+    assert len(loop.body) == 2
+    assert isinstance(loop.body[1], Call)
+
+
+def test_loop_nested():
+    source = """\
+PROGRAM nested VERSION 1.0
+
+INPUT
+  V.result = "initial"
+  U.outer = ["a"]
+  U.inner = ["x", "y"]
+
+LOOP outer
+  ENTRY V.result == "initial"
+  WHILE count(U.outer) > 0
+  PROGRESS count(U.outer) decreases
+  MAX 3
+  EXIT V.result == "done"
+  EXHAUSTED STOP unresolved(U.outer)
+  LOOP inner
+    ENTRY count(U.inner) > 0
+    WHILE count(U.inner) > 0
+    PROGRESS count(U.inner) decreases
+    MAX 2
+    EXIT count(U.inner) == 0
+    EXHAUSTED STOP unresolved(U.inner)
+    step.reduce: DO define(value = V.result) -> V.result
+  step.check: DO define(value = V.result) -> V.result
+RETURN V.result
+"""
+    program = parse_program(source)
+    outer = program.statements[0]
+    assert isinstance(outer, Loop)
+    assert outer.name == "outer"
+    assert len(outer.body) == 2
+    inner = outer.body[0]
+    assert isinstance(inner, Loop)
+    assert inner.name == "inner"
+    assert len(inner.body) == 1
+    assert validate_program(program, known_commands={"define"}) is True
+
+
+def test_loop_exhausted_can_be_expression_string():
+    source = """\
+PROGRAM loop_expr VERSION 1.0
+
+INPUT
+  V.result = "initial"
+  U.issues = ["x"]
+
+LOOP refine
+  ENTRY V.result == "initial"
+  WHILE count(U.issues) > 0
+  PROGRESS count(U.issues) decreases
+  MAX 2
+  EXIT V.result == "done"
+  EXHAUSTED STOP blocked(U.issues)
+  step.work: DO define(value = V.result) -> V.result
+RETURN V.result
+"""
+    program = parse_program(source)
+    loop = program.statements[0]
+    assert isinstance(loop.exhausted, Stop)
+    assert loop.exhausted.kind == "blocked"

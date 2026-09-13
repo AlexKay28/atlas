@@ -214,6 +214,43 @@ class Stop:
 
 
 @dataclass(frozen=True)
+class Loop:
+    """Bounded iterative refinement block (issue #68).
+
+    ``LOOP <name> ENTRY <expr> WHILE <expr> PROGRESS <expr> MAX <int>
+    EXIT <expr> EXHAUSTED <terminal>`` followed by an indented body of
+    statements.  The loop executes its body up to ``max_iterations`` times,
+    checking the WHILE condition before each iteration, the PROGRESS
+    metric after each body execution, and the EXIT condition after each
+    iteration.  If MAX is reached without EXIT, the EXHAUSTED terminal
+    fires (typically ``STOP unresolved(...)``).
+
+    ``entry_condition`` gates the entire loop: a false entry skips the
+    loop like a false IF condition.  ``while_condition`` gates each
+    iteration: a false while breaks the loop normally (not exhausted).
+    ``progress_expression`` is a raw expression text like
+    ``U.high_impact.count decreases`` — the coordinator evaluates the
+    metric before and after each iteration and blocks the run if no
+    progress is made.  ``exit_condition`` breaks the loop on success.
+    ``exhausted`` is a :class:`Stop` terminal or a raw expression string.
+
+    ``body`` is a tuple of statements (invocations, conditionals,
+    scatter/gather, par, calls, returns, stops) executed sequentially
+    each iteration.
+    """
+
+    name: str
+    entry_condition: str
+    while_condition: str
+    progress_expression: str
+    max_iterations: int
+    exit_condition: str
+    exhausted: "Stop | str"
+    body: tuple
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Program:
     name: str
     version: str

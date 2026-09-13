@@ -113,6 +113,28 @@ machine-readable AST schema, which remains a P0 implementation deliverable. Ever
 path must terminate or rejoin; a top-level terminal is not required when all branch paths
 terminate.
 
+### LOOP Implementation Notes (issue #68)
+
+The `LOOP` construct is a bounded iterative refinement block with the following
+semantics:
+
+1. **ENTRY** gates the entire loop: a false entry skips the loop (like a false IF).
+2. **WHILE** gates each iteration: checked before the body executes. If false, the
+   loop exits normally (not exhausted).
+3. **PROGRESS** is checked after each body execution. The expression contains a
+   metric (a typed reference or `count(<ref>)`) and a direction keyword
+   (`decreases` or `increases`). The metric is evaluated before and after each
+   iteration; if it does not move in the declared direction, the run is blocked
+   (`STOP blocked`). This prevents infinite loops that make no progress.
+4. **EXIT** is checked after each iteration. If true, the loop exits successfully.
+5. **MAX** bounds the iteration count (must be >= 1). If MAX is reached without
+   EXIT, the **EXHAUSTED** terminal fires (typically `STOP unresolved(...)`).
+6. The body may contain any statement type: `DO`, `IF`, `SCATTER`/`GATHER`,
+   `PAR`/`BARRIER`, `CALL`, `RETURN`, `STOP`, and nested `LOOP` (bounded by the
+   outer MAX). Body targets overwrite refs from INPUT or pre-loop steps; they
+   are not available to post-loop statements (the loop may not run or may exit
+   early).
+
 ## Deterministic Expressions
 
 Control expressions may contain only:

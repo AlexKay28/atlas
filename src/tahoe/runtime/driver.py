@@ -28,7 +28,7 @@ from tahoe.runtime.events import EventType, _Record
 from tahoe.runtime.tasks import TaskStatus
 from tahoe.state import StateDelta
 from tahoe.syntax import is_typed_reference
-from tahoe.syntax.model import Call, Program, Return, Stop
+from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation
 
 # Re-import constants and helpers from engine modules (issue #38 extraction).
 from tahoe.runtime.delegate import (
@@ -264,6 +264,7 @@ class DriveEngine:
                 entry.scatter is not None
                 or entry.gather is not None
                 or entry.par is not None
+                or entry.loop is not None
             ):
                 # Issue #22: the global deadline is checked before each
                 # dispatch, mirroring the other entry kinds.
@@ -297,6 +298,21 @@ class DriveEngine:
                         idx,
                         invocation_id,
                         task_id,
+                        values,
+                        plan,
+                        statement_to_task,
+                        crash_hook,
+                        gate,
+                        claims,
+                        branch_root,
+                    )
+                elif entry.loop is not None:
+                    result = self._execute_loop_entry(
+                        program,
+                        run_id,
+                        entry,
+                        idx,
+                        invocation_id,
                         values,
                         plan,
                         statement_to_task,
@@ -1049,6 +1065,462 @@ class DriveEngine:
             payload={"status": "succeeded"},
         )
         return {"run_id": run_id, "status": "succeeded", "outputs": outputs}
+
+    # ------------------------------------------------------------------
+    # LOOP execution (issue #68)
+    # ------------------------------------------------------------------
+
+    def _execute_loop_entry(
+        self,
+        program: Program,
+        run_id: str,
+        entry: "_PlanEntry",
+        idx: int,
+        invocation_id: str,
+        values: dict[str, Any],
+        plan: list["_PlanEntry"],
+        statement_to_task: dict[int, str],
+        crash_hook: "Callable[[int], None] | None",
+        gate: "BudgetGate | None",
+        claims: "ResourceLedger | None",
+        branch_root: str | None,
+    ) -> dict[str, Any] | None:
+        """Execute one LOOP block (issue #68).
+
+        Algorithm:
+        1. Check ENTRY condition. If false, skip the loop.
+        2. For iteration = 1 to MAX:
+           a. Check WHILE condition. If false, break (normal completion).
+           b. Execute body statements sequentially.
+           c. Check PROGRESS: compare progress metric to previous iteration.
+              If no progress, STOP blocked.
+           d. Check EXIT condition. If true, break (loop succeeds).
+        3. If MAX reached without EXIT: execute EXHAUSTED terminal.
+        """
+        loop = entry.loop
+        assert loop is not None
+
+        # Check ENTRY condition
+        try:
+            entry_holds = evaluate_condition(loop.entry_condition, values)
+        except ValueError as exc:
+            return self._fail_run(
+                run_id, plan, statement_to_task, idx, str(exc)
+            )
+        if not entry_holds:
+            self.store.append(
+                run_id,
+                EventType.LOOP_STARTED,
+                invocation_id=invocation_id,
+                payload={"name": loop.name, "entry": False},
+            )
+            return None
+
+        self.store.append(
+            run_id,
+            EventType.LOOP_STARTED,
+            invocation_id=invocation_id,
+            payload={"name": loop.name, "entry": True, "max": loop.max_iterations},
+        )
+
+        prev_progress: float | None = None
+        for iteration in range(1, loop.max_iterations + 1):
+            self.store.append(
+                run_id,
+                EventType.LOOP_ITERATION,
+                invocation_id=invocation_id,
+                payload={
+                    "name": loop.name,
+                    "iteration": iteration,
+                    "max": loop.max_iterations,
+                },
+            )
+
+            # Check WHILE condition
+            try:
+                while_holds = evaluate_condition(loop.while_condition, values)
+            except ValueError as exc:
+                return self._fail_run(
+                    run_id, plan, statement_to_task, idx, str(exc)
+                )
+            if not while_holds:
+                self.store.append(
+                    run_id,
+                    EventType.LOOP_EXITED,
+                    invocation_id=invocation_id,
+                    payload={
+                        "name": loop.name,
+                        "reason": "while_false",
+                        "iteration": iteration,
+                    },
+                )
+                return None
+
+            # Execute body statements
+            for body_stmt in loop.body:
+                result = self._execute_loop_body_statement(
+                    body_stmt,
+                    program,
+                    run_id,
+                    invocation_id,
+                    iteration,
+                    values,
+                    plan,
+                    statement_to_task,
+                    crash_hook,
+                    gate,
+                    claims,
+                    branch_root,
+                )
+                if result is not None:
+                    return result
+
+            # Check PROGRESS
+            current_progress = self._evaluate_progress(
+                loop.progress_expression, values, loop.line
+            )
+            if current_progress is not None:
+                if prev_progress is not None:
+                    direction = self._progress_direction(loop.progress_expression)
+                    if direction == "decreases":
+                        if current_progress >= prev_progress:
+                            # No progress — block the run
+                            stop = Stop("blocked", None)
+                            self.store.append(
+                                run_id,
+                                EventType.LOOP_EXHAUSTED,
+                                invocation_id=invocation_id,
+                                payload={
+                                    "name": loop.name,
+                                    "reason": "no_progress",
+                                    "iteration": iteration,
+                                },
+                            )
+                            return self._terminal_stop(run_id, stop, values)
+                    elif direction == "increases":
+                        if current_progress <= prev_progress:
+                            stop = Stop("blocked", None)
+                            self.store.append(
+                                run_id,
+                                EventType.LOOP_EXHAUSTED,
+                                invocation_id=invocation_id,
+                                payload={
+                                    "name": loop.name,
+                                    "reason": "no_progress",
+                                    "iteration": iteration,
+                                },
+                            )
+                            return self._terminal_stop(run_id, stop, values)
+                prev_progress = current_progress
+
+            # Check EXIT condition
+            try:
+                exit_holds = evaluate_condition(loop.exit_condition, values)
+            except ValueError as exc:
+                return self._fail_run(
+                    run_id, plan, statement_to_task, idx, str(exc)
+                )
+            if exit_holds:
+                self.store.append(
+                    run_id,
+                    EventType.LOOP_EXITED,
+                    invocation_id=invocation_id,
+                    payload={
+                        "name": loop.name,
+                        "reason": "exit_condition",
+                        "iteration": iteration,
+                    },
+                )
+                return None
+
+        # MAX reached without EXIT — run EXHAUSTED terminal
+        self.store.append(
+            run_id,
+            EventType.LOOP_EXHAUSTED,
+            invocation_id=invocation_id,
+            payload={
+                "name": loop.name,
+                "reason": "max_reached",
+                "iteration": loop.max_iterations,
+            },
+        )
+        if isinstance(loop.exhausted, Stop):
+            return self._terminal_stop(run_id, loop.exhausted, values)
+        return None
+
+    def _progress_direction(self, expr: str) -> str:
+        """Extract 'decreases' or 'increases' from a PROGRESS expression."""
+        lower = expr.lower()
+        if "decreases" in lower:
+            return "decreases"
+        if "increases" in lower:
+            return "increases"
+        return "decreases"
+
+    def _evaluate_progress(
+        self, expr: str, values: dict[str, Any], line_no: int
+    ) -> float | None:
+        """Evaluate a PROGRESS expression to a numeric metric.
+
+        The expression looks like ``U.high_impact.count decreases`` or
+        ``count(U.high_impact) decreases``.  We strip the trailing
+        direction keyword and evaluate the remaining ref or count()
+        expression against committed state.
+        """
+        lower = expr.lower()
+        for direction in ("decreases", "increases"):
+            idx = lower.rfind(direction)
+            if idx != -1:
+                metric_expr = expr[:idx].strip()
+                break
+        else:
+            metric_expr = expr.strip()
+
+        if metric_expr.startswith("count(") and metric_expr.endswith(")"):
+            ref = metric_expr[6:-1].strip()
+            val = values.get(ref)
+            if isinstance(val, list):
+                return float(len(val))
+            if isinstance(val, (int, float)):
+                return float(val)
+            return None
+
+        val = values.get(metric_expr)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return float(val)
+        if isinstance(val, list):
+            return float(len(val))
+        return None
+
+    def _execute_loop_body_statement(
+        self,
+        body_stmt: object,
+        program: Program,
+        run_id: str,
+        loop_invocation_id: str,
+        iteration: int,
+        values: dict[str, Any],
+        plan: list["_PlanEntry"],
+        statement_to_task: dict[int, str],
+        crash_hook: "Callable[[int], None] | None",
+        gate: "BudgetGate | None",
+        claims: "ResourceLedger | None",
+        branch_root: str | None,
+    ) -> dict[str, Any] | None:
+        """Execute one statement inside a LOOP body (issue #68).
+
+        Handles DO invocations, STOP, RETURN, and IF conditionals.  Each
+        DO invocation runs through the standard worker-dispatch path and
+        commits its results to ``values`` (the same shared dict as the
+        parent run).  STOP and RETURN terminate the run.
+        """
+        from tahoe.runtime.helpers import map_results_to_targets
+
+        if isinstance(body_stmt, Stop):
+            self._cancel_pending_after(
+                run_id, plan, statement_to_task, 0
+            )
+            return self._terminal_stop(run_id, body_stmt, values)
+
+        if isinstance(body_stmt, Return):
+            self._cancel_pending_after(
+                run_id, plan, statement_to_task, 0
+            )
+            return self._terminal_return(run_id, body_stmt.refs, values)
+
+        if isinstance(body_stmt, Invocation):
+            invocation_id = f"{loop_invocation_id}.iter{iteration}.{body_stmt.step_id}"
+            instruction_id = body_stmt.step_id
+
+            ledger = self.store.task_ledger(run_id)
+            task = ledger.create_task(
+                text=f"{body_stmt.step_id}: DO {body_stmt.command}"
+                f" [LOOP iteration {iteration}]",
+                creator="coordinator",
+            )
+            task_id = task.id
+
+            self.store.append_batch(run_id, [
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=task_id,
+                    payload={
+                        "kind": "task_created", "id": task_id,
+                        "text": task.text,
+                        "priority": task.priority, "parent": task.parent,
+                        "dependencies": task.dependencies,
+                        "creator": task.creator,
+                    },
+                    store=self.store,
+                ),
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=task_id,
+                    payload={"kind": "task_started", "id": task_id},
+                    store=self.store,
+                ),
+                _Record(
+                    event_type=EventType.INVOCATION_READY,
+                    instruction_id=instruction_id,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    payload={"command": body_stmt.command},
+                    store=self.store,
+                ),
+            ])
+
+            # Resolve arguments
+            try:
+                resolved_kwargs: dict[str, Any] = {}
+                for arg in body_stmt.args:
+                    self._reject_unresolved_refs(arg.value, values)
+                    if isinstance(arg.value, str) and arg.value in values:
+                        resolved_kwargs[arg.name] = values[arg.value]
+                    elif isinstance(arg.value, str) and arg.value.startswith("KB."):
+                        resolved_kwargs[arg.name] = self._resolve_kb_ref(arg.value)
+                    elif isinstance(arg.value, list):
+                        resolved_kwargs[arg.name] = [
+                            values[item] if isinstance(item, str) and item in values
+                            else self._resolve_kb_ref(item)
+                            if isinstance(item, str) and item.startswith("KB.")
+                            else item
+                            for item in arg.value
+                        ]
+                    else:
+                        resolved_kwargs[arg.name] = arg.value
+            except Exception as exc:
+                failed = True
+                error_msg = str(exc)
+                finish_failed_invocation = lambda idx, iid, vid, tid, err: None
+                records = _finalize.fail_invocation(
+                    self.store, run_id, plan, statement_to_task,
+                    0, instruction_id, invocation_id, task_id, error_msg,
+                )
+                self.store.append_batch(run_id, records)
+                return {"run_id": run_id, "status": "failed", "error": error_msg, "outputs": {}}
+
+            dispatch_root = branch_root or self.workspace_root
+            if (
+                dispatch_root is not None
+                and body_stmt.command in _effectful_commands()
+            ):
+                resolved_kwargs["_workspace_root"] = dispatch_root
+
+            self.store.append(
+                run_id,
+                EventType.INVOCATION_DISPATCHED,
+                instruction_id=instruction_id,
+                invocation_id=invocation_id,
+                task_id=task_id,
+                payload={
+                    "args": resolved_kwargs,
+                    "idempotency_key": f"{run_id}:{invocation_id}",
+                },
+            )
+
+            try:
+                result = self._execute_worker_call(
+                    body_stmt.command, resolved_kwargs, gate
+                )
+            except Exception as exc:
+                records = _finalize.fail_invocation(
+                    self.store, run_id, plan, statement_to_task,
+                    0, instruction_id, invocation_id, task_id, str(exc),
+                )
+                self.store.append_batch(run_id, records)
+                return {"run_id": run_id, "status": "failed", "error": str(exc), "outputs": {}}
+
+            self.store.append(
+                run_id,
+                EventType.RESULT_RECEIVED,
+                instruction_id=instruction_id,
+                invocation_id=invocation_id,
+                task_id=task_id,
+                payload={"result": result},
+            )
+
+            target_values, validation_error = map_results_to_targets(
+                body_stmt.targets, result
+            )
+            if validation_error is not None:
+                records = _finalize.fail_invocation(
+                    self.store, run_id, plan, statement_to_task,
+                    0, instruction_id, invocation_id, task_id, validation_error,
+                )
+                self.store.append_batch(run_id, records)
+                return {"run_id": run_id, "status": "failed", "error": validation_error, "outputs": {}}
+
+            self.store.append(
+                run_id,
+                EventType.VALIDATION_PASSED,
+                instruction_id=instruction_id,
+                invocation_id=invocation_id,
+                task_id=task_id,
+                payload={},
+            )
+
+            add_nodes: list[dict[str, Any]] = []
+            for target, val in target_values.items():
+                values[target] = val
+                add_nodes.append({"id": target, "value": val})
+
+            delta = StateDelta(add_nodes=tuple(add_nodes))
+            expected_sv = self.store._current_state_version(run_id)
+
+            self.store.append_batch(run_id, [
+                _Record(
+                    event_type=EventType.SUCCEEDED,
+                    instruction_id=instruction_id,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    expected_state_version=expected_sv,
+                    payload={"delta": delta},
+                    store=self.store,
+                ),
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=task_id,
+                    payload={
+                        "kind": "invocation_recorded", "id": task_id,
+                        "tokens": 0, "cost": 0.0, "retries": 0,
+                        "elapsed_seconds": 0.0,
+                    },
+                    store=self.store,
+                ),
+                _Record(
+                    event_type=EventType.TASK_UPDATED,
+                    task_id=task_id,
+                    payload={
+                        "kind": "task_completed", "id": task_id,
+                        "evidence": f"{body_stmt.command} -> {body_stmt.targets}",
+                    },
+                    store=self.store,
+                ),
+            ])
+            return None
+
+        if isinstance(body_stmt, Conditional):
+            try:
+                fired = evaluate_condition(body_stmt.condition, values)
+            except ValueError as exc:
+                return self._fail_run(
+                    run_id, plan, statement_to_task, 0, str(exc)
+                )
+            if fired:
+                embedded = body_stmt.statement
+                if isinstance(embedded, Stop):
+                    return self._terminal_stop(run_id, embedded, values)
+                if isinstance(embedded, Return):
+                    return self._terminal_return(run_id, embedded.refs, values)
+                if isinstance(embedded, Invocation):
+                    return self._execute_loop_body_statement(
+                        embedded, program, run_id, loop_invocation_id,
+                        iteration, values, plan, statement_to_task,
+                        crash_hook, gate, claims, branch_root,
+                    )
+            return None
+
+        return None
 
     # ------------------------------------------------------------------
     # Concurrent execution frontier (issue #21)
