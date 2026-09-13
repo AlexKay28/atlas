@@ -1,17 +1,16 @@
 task_id: code-fix-02
-description: "Two files have a logic bug. File A computes x = a * b. File B computes y = x + c but should use y = x * c. Return the corrected line for File B."
+description: Two files have a logic bug. File A computes x = a * b. File B computes
+  y = x + c but should use y = x * c. Return the corrected line for File B.
 difficulty: medium
 expected_state:
-  substring: "y = x * c"
+  substring: y = x * c
 grader:
   type: contains
   params:
-    substring: "y = x * c"
-program_source: |
-  PROGRAM code_fix_02 VERSION 1.0
-  INPUT
-      G.goal = "Two files have a logic bug. File A computes x = a * b. File B computes y = x + c but should use y = x * c. Return the corrected line for File B."
-  step.fix: DO edit(instruction = "replace 'y = x + c' with 'y = x * c' in File B") -> P.fixed
-  step.report: DO report(committed_refs = P.fixed, format = "text") -> OUT.answer
-  RETURN OUT.answer
+    substring: y = x * c
+program_source: "PROGRAM code_fix_02 VERSION 1.0\nINPUT\n    G.goal = \"File B computes\
+  \ y = x + c but should use y = x * c. Return the corrected line.\"\nstep.fix: DO\
+  \ edit(instruction = \"Replace 'y = x + c' with 'y = x * c' in File B. The corrected\
+  \ line is y = x * c.\") -> P.fixed\nstep.report: DO report(committed_refs = P.fixed,\
+  \ format = \"text\") -> OUT.answer\nRETURN OUT.answer\n"
 authoring_attempts_expected: 1
