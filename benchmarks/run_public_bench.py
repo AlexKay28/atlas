@@ -35,7 +35,39 @@ SKILL_PATH = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
 ARMS = ["classic", "tahoe"]
 TRIALS_PER_TASK = 3
 SEED = 42
-MAX_SAMPLES_PER_BENCH = 5  # 5 samples per benchmark for pilot
+MAX_SAMPLES_PER_BENCH = 3  # pilot — 3 samples per benchmark
+
+# MATH grader: extract \boxed{} answer
+def grade_math(model_answer, expected_answer):
+    """MATH: extract \\boxed{} from both, compare numerically when possible."""
+    def extract_boxed(text):
+        match = re.search(r'\\boxed\{([^}]+)\}', text)
+        return match.group(1).strip() if match else ""
+    model_boxed = extract_boxed(model_answer)
+    expected_boxed = extract_boxed(expected_answer)
+    if not model_boxed:
+        # Fallback: last number
+        nums = re.findall(r'-?\d+\.?\d*', model_answer)
+        model_boxed = nums[-1] if nums else model_answer.strip()[:50]
+    if not expected_boxed:
+        nums = re.findall(r'-?\d+\.?\d*', expected_answer)
+        expected_boxed = nums[-1] if nums else expected_answer.strip()
+    # Try numeric comparison
+    try:
+        return float(model_boxed) == float(expected_boxed), f"expected={expected_boxed}, got={model_boxed}"
+    except (ValueError, TypeError):
+        return model_boxed == expected_boxed, f"expected={expected_boxed}, got={model_boxed}"
+
+# RACE grader: answer is A/B/C/D
+def grade_race(model_answer, expected_answer):
+    """RACE: match answer letter (A/B/C/D)."""
+    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
+    expected = expected_answer.strip().upper()
+    if len(model_letter) > 1:
+        match = re.search(r'\b([A-D])\b', model_letter)
+        if match:
+            model_letter = match.group(1)
+    return model_letter == expected, f"expected={expected}, got={model_letter}"
 
 # MMLU grader: answer is index (0-3), choices are A-D
 def grade_mmlu(model_answer, expected_answer, choices=None):
@@ -282,6 +314,41 @@ def load_tasks():
             "difficulty": "hard",
         })
 
+    # MATH — competition math (very hard — Level 5 problems, deep reasoning)
+    import re as _re
+    math = load_dataset('HuggingFaceH4/MATH', split='test')
+    # Filter to Level 4-5 (hardest)
+    hard_math = [ex for ex in math if ex['level'] in ('Level 4', 'Level 5')]
+    indices = rng.sample(range(len(hard_math)), MAX_SAMPLES_PER_BENCH)
+    for idx in indices:
+        ex = hard_math[idx]
+        tasks.append({
+            "task_id": f"math-{ex['level']}-{idx:04d}",
+            "benchmark": "math",
+            "description": f"{ex['problem']}\n\nSolve step by step. Put your final answer in \\boxed{{}}.",
+            "expected": ex['solution'],
+            "grader": "math",
+            "difficulty": "very_hard",
+        })
+
+    # RACE — long reading comprehension (hard — 1500+ char passages)
+    import ast as _ast
+    race = load_dataset("EleutherAI/race", "high", split="test")
+    indices = rng.sample(range(len(race)), MAX_SAMPLES_PER_BENCH)
+    for i in indices:
+        ex = race[i]
+        probs = _ast.literal_eval(ex['problems'])
+        prob = probs[0]  # Take first question from each article
+        choices = "\n".join(f"({chr(ord('A')+j)}) {opt}" for j, opt in enumerate(prob['options']))
+        tasks.append({
+            "task_id": f"race-{i:04d}",
+            "benchmark": "race",
+            "description": f"Read the following passage and answer the question.\n\n{ex['article']}\n\nQuestion: {prob['question']}\n\n{choices}\n\nAnswer with just the letter (A, B, C, or D).",
+            "expected": prob['answer'],
+            "grader": "race",
+            "difficulty": "hard",
+        })
+
     return tasks
 
 
@@ -299,6 +366,10 @@ def grade_task(task, model_answer):
         return grade_lsat(model_answer, task["expected"])
     elif grader == "mmlu":
         return grade_mmlu(model_answer, task["expected"], task.get("choices"))
+    elif grader == "math":
+        return grade_math(model_answer, task["expected"])
+    elif grader == "race":
+        return grade_race(model_answer, task["expected"])
     return False, "unknown grader"
 
 
@@ -311,7 +382,7 @@ def run_trial(task, arm, skill_prompt, trial_idx):
         api_base=os.environ.get("TAHOE_API_BASE", ""),
         api_key=os.environ.get("TAHOE_API_KEY", ""),
         max_turns=1,
-        max_tokens=1024,
+        max_tokens=2048,  # increased for hard reasoning tasks
         timeout_seconds=60,
         system_prompt=system_prompt,
     )
