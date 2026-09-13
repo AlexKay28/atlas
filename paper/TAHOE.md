@@ -1,7 +1,6 @@
 # TAHOE: Task-Aware Language Harness for Orchestrated Execution
 
-> A structured reasoning language that improves LLM task-solving quality while
-> reducing reasoning token consumption by 40%.
+> A structured reasoning language that reduces reasoning token consumption by 43%.
 
 ## Abstract
 
@@ -9,10 +8,11 @@ TAHOE is a structured reasoning language that teaches LLMs to think in typed
 protocols — Compute, Select, Deduce — rather than free-form chain-of-thought.
 We evaluate TAHOE as a thinking skill (system prompt) against classic inference
 on 10 public benchmarks (GSM8K, ARC, BBH, MMLU, LSAT, RACE) using GLM-5.3-Flash
-with 10 samples per benchmark, 3 trials per sample, 600 trials total. Results
-show TAHOE improves pass rate by 1% (89% vs 88%) while reducing reasoning token
-consumption by 40% (60,055 vs 100,595 output tokens). The harmonic mean of
-quality and efficiency is 1.162 (TAHOE) vs 0.934 (classic).
+with up to 200 samples per benchmark, 3 trials per sample, 10,956 trials total.
+Results show TAHOE reduces reasoning token consumption by 43% (0.57x output
+ratio) while maintaining quality (89.0% vs 90.2%). The harmonic mean of quality
+and efficiency is 1.180 (TAHOE) vs 0.948 (classic) — TAHOE wins on the
+quality-efficiency frontier.
 
 ## 1. Introduction
 
@@ -72,31 +72,32 @@ actual work. TAHOE's value is reducing output tokens while improving quality.
 
 ### 3.3 Results
 
-10 benchmarks, 10 samples each, 3 trials per sample, 600 trials total.
-Run with 6 parallel workers, completed in 279 seconds.
+10 benchmarks, up to 200 samples each, 3 trials per sample, 10,956 trials total.
+Run with 6 parallel workers per benchmark, sequentially across benchmarks.
 
-| Benchmark | Classic | TAHOE | Cl out | Tah out | Ratio | Cl pass | Tah pass |
-|---|---|---|---|---|---|---|---|
-| ARC | 27/30 | 26/30 | 183 | 160 | 0.87x | 90% | 87% |
-| BBH (deduction) | 18/30 | **24/30** | 457 | 253 | 0.55x | 60% | **80%** |
-| BBH-track | 25/30 | 22/30 | 484 | 270 | 0.56x | 83% | 73% |
-| BBH-arith | 30/30 | 30/30 | 123 | 132 | 1.07x | 100% | 100% |
-| GSM8K | 25/30 | 24/30 | 201 | 57 | 0.28x | 83% | 80% |
-| LSAT | 30/30 | 30/30 | 407 | 239 | 0.59x | 100% | 100% |
-| MMLU-acct | 26/30 | **30/30** | 488 | 182 | 0.37x | 87% | **100%** |
-| MMLU-logic | 30/30 | 30/30 | 125 | 97 | 0.78x | 100% | 100% |
-| MMLU-math | 29/30 | 27/30 | 555 | 512 | 0.92x | 97% | 90% |
-| RACE | 23/30 | **24/30** | 330 | 100 | 0.30x | 77% | **80%** |
-| **OVERALL** | **263/300** | **267/300** | **335** | **200** | **0.60x** | **88%** | **89%** |
+| Benchmark | N | Classic | TAHOE | Cl out | Tah out | Ratio | Cl pass | Tah pass |
+|---|---|---|---|---|---|---|---|---|
+| GSM8K | 200 | 430/600 | **454/600** | 234 | 92 | 0.39x | 71.7% | **75.7%** |
+| ARC | 200 | 569/600 | **577/600** | 129 | 58 | 0.45x | 94.8% | **96.2%** |
+| BBH (deduction) | 200 | **463/600** | 460/600 | 481 | 307 | 0.64x | **77.2%** | 76.7% |
+| BBH-track | 200 | **539/600** | 440/600 | 534 | 266 | 0.50x | **89.8%** | 73.3% |
+| BBH-arith | 200 | **600/600** | 597/600 | 120 | 96 | 0.80x | **100%** | 99.5% |
+| MMLU-math | 150 | 283/300 | 283/300 | 399 | 318 | 0.80x | 94.3% | 94.3% |
+| MMLU-logic | 126 | **360/378** | 352/378 | 312 | 263 | 0.84x | **95.2%** | 93.1% |
+| MMLU-acct | 200 | 563/600 | **568/600** | 301 | 157 | 0.52x | 93.8% | **94.7%** |
+| LSAT | 200 | 558/600 | **570/600** | 474 | 229 | 0.48x | 93.0% | **95.0%** |
+| RACE | 200 | 574/600 | **575/600** | 179 | 97 | 0.54x | 95.7% | **95.8%** |
+| **OVERALL** | — | **4939/5478** | **4876/5478** | **311** | **178** | **0.57x** | **90.2%** | **89.0%** |
 
 ### 3.4 Key Findings
 
-1. **40% fewer reasoning tokens** overall (60,055 vs 100,595 output tokens)
-2. **+1% quality improvement** overall (89% vs 88%)
-3. **Harmonic mean**: 1.162 (TAHOE) vs 0.934 (classic) — TAHOE wins on both axes
-4. **Largest token savings**: GSM8K (72% less), RACE (70% less), MMLU-acct (63% less)
-5. **Largest quality gains**: BBH (+20%), MMLU-acct (+13%), RACE (+3%)
-6. **Only benchmark where classic edges TAHOE**: BBH-arith (token cost slightly higher 1.07x, quality equal)
+1. **43% fewer reasoning tokens** overall (0.57x output ratio)
+2. **Quality essentially matched** (89.0% vs 90.2% — 1.2% gap)
+3. **Harmonic mean**: 1.180 (TAHOE) vs 0.948 (classic) — TAHOE wins on quality-efficiency frontier
+4. **Largest token savings**: GSM8K (61%), ARC (55%), LSAT (52%), MMLU-acct (48%)
+5. **Quality wins**: GSM8K (+4%), LSAT (+2%), ARC (+1.4%), MMLU-acct (+0.9%), RACE (+0.1%)
+6. **Quality regressions**: BBH-track (-16.5%), MMLU-logic (-2.1%), BBH (-0.5%) — tasks requiring detailed state tracking
+7. **Token savings consistent**: every benchmark shows >16% savings, 8 of 10 show >36%
 
 ### 3.5 Why TAHOE Saves Tokens
 
@@ -166,9 +167,11 @@ consumption.
 ## 6. Limitations
 
 - Evaluated on one model (GLM-5.3-Flash); stronger models may show different patterns
-- 10 samples per benchmark, 3 trials each (600 trials); ceiling effects on some benchmarks
+- 200 samples per benchmark, 3 trials each (10,956 trials total)
+- Quality regression on BBH-track (-16.5%) — TAHOE's conciseness hurts on tasks requiring detailed state tracking
+- Quality regression on MMLU-logic (-2.1%) — formal logic benefits from verbose derivation
 - System prompt adds ~93 input tokens per call (fixed infrastructure cost)
-- BBH-arith is the only benchmark where TAHOE uses slightly more tokens (1.07x)
+- HM advantage (1.180 vs 0.948) is driven primarily by token savings, not quality gains
 
 ## 7. Future Work
 
