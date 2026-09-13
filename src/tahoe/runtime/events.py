@@ -87,6 +87,15 @@ class EventType(str, Enum):
     # the plan is subsequently rejected, so a failed authoring attempt
     # stays diagnosable.
     CHILD_PLAN_AUTHORED = "child_plan.authored"
+    # Issue #68: LOOP lifecycle events.  LOOP_STARTED fires when a loop
+    # begins (ENTRY condition true); LOOP_ITERATION fires at the start of
+    # each body execution; LOOP_EXITED fires when the EXIT condition
+    # triggers (loop succeeds); LOOP_EXHAUSTED fires when MAX is reached
+    # without EXIT (loop runs the EXHAUSTED terminal).
+    LOOP_STARTED = "loop.started"
+    LOOP_ITERATION = "loop.iteration"
+    LOOP_EXITED = "loop.exited"
+    LOOP_EXHAUSTED = "loop.exhausted"
     TASK_UPDATED = "task.updated"
 
 

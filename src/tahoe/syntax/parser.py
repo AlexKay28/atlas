@@ -17,6 +17,7 @@ from .model import (
     DonePredicate,
     Gather,
     Invocation,
+    Loop,
     Par,
     ParBranch,
     Program,
@@ -70,9 +71,9 @@ _PROTOCOL_PREFIX = "protocol."
 _MAX_PROTOCOL_DEPTH = 8
 _PROTOCOLS_DIR_DEFAULT = "protocols"
 # Issue #3: IF is no longer reserved — it parses a single-line deterministic
-# conditional.  FIRST/LOOP/TRY/AWAIT/APPROVE stay unsupported.  Issue #4:
-# SCATTER/GATHER are no longer reserved — they parse bounded fan-out blocks.
-_UNSUPPORTED = frozenset({"FIRST", "LOOP", "TRY", "AWAIT", "APPROVE"})
+# conditional.  Issue #68: LOOP is no longer reserved — it parses a bounded
+# iterative refinement block.  FIRST/TRY/AWAIT/APPROVE stay unsupported.
+_UNSUPPORTED = frozenset({"FIRST", "TRY", "AWAIT", "APPROVE"})
 # Issue #4: SCATTER/GATHER block grammar.  The SCATTER line is followed by
 # exactly one indented body step line; the GATHER line names that body step
 # and optionally a judge step, itself defined by the following indented line.
@@ -98,6 +99,15 @@ _GATHER_PARAM_RE = re.compile(
 _PAR_RE = re.compile(rf"^PAR\s+MAX\s+(?P<max>\d+)$")
 _BARRIER_RE = re.compile(
     rf"^BARRIER(?:\s*->\s*(?P<targets>{_REF_LIST_PATTERN}))?$"
+)
+# Issue #68: LOOP block grammar.  The header consists of fixed-position
+# keyword-separated fields on the same line (or a simple keyword scan):
+# LOOP <name> ENTRY <expr> WHILE <expr> PROGRESS <expr> MAX <int>
+# EXIT <expr> EXHAUSTED <terminal>
+# The body is an indented block of statements (like IF block bodies).
+_LOOP_RE = re.compile(rf"^LOOP\s+(?P<name>{_NAME})$")
+_LOOP_FIELD_RE = re.compile(
+    r"^(?P<keyword>ENTRY|WHILE|PROGRESS|EXIT|MAX|EXHAUSTED)\s+(?P<value>.+)$"
 )
 # Canonical join rules (issue #27 naming resolution): the draft spec's
 # all/any/ranked are canonical; the issue body's first/best are accepted
@@ -251,7 +261,7 @@ def parse_program(text: str) -> Program:
         raise ParseError("malformed PROGRAM header", header_line, 1)
 
     declarations: list[Declaration] = []
-    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather] = []
+    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop] = []
     in_input = False
     terminal_seen = False
 
@@ -415,6 +425,13 @@ def parse_program(text: str) -> Program:
                 line_no,
                 1,
             )
+
+        # Issue #68: bounded iterative refinement block.  The LOOP header
+        # spans multiple lines (LOOP <name> followed by ENTRY/WHILE/PROGRESS/
+        # MAX/EXIT/EXHAUSTED fields), then an indented body.
+        if re.match(r"LOOP\b", line):
+            statements.append(_parse_loop_block(line, line_no, lines))
+            continue
 
         # Issue #7: strip the optional trailing REVISE/RETIRE clause before
         # matching the invocation itself; the clause only ever follows the
@@ -847,6 +864,184 @@ def _parse_par_block(line: str, line_no: int, lines) -> Par:
             "PAR block requires at least two branch lines", line_no, 1
         )
     return Par(max_count, tuple(branches), barrier_targets, line_no)
+
+
+def _parse_loop_block(line: str, line_no: int, lines) -> Loop:
+    """Parse one ``LOOP <name> ... EXHAUSTED <terminal>`` block (issue #68).
+
+    The header spans multiple source lines:
+
+    .. code-block:: text
+
+       LOOP <name>
+       ENTRY <expression>
+       WHILE <expression>
+       PROGRESS <expression>
+       MAX <integer>
+       EXIT <expression>
+       EXHAUSTED <terminal>
+
+    Each field line starts with the keyword; the values are raw expression
+    text kept verbatim on the model.  The EXHAUSTED terminal is a STOP
+    statement (parsed with the standard STOP grammar).  After the header,
+    an indented body block is parsed (same as IF block bodies, plus
+    nested LOOP/SCATTER/PAR/CALL support).
+    """
+    match = _LOOP_RE.fullmatch(line)
+    if match is None:
+        raise ParseError(
+            "malformed LOOP (expected LOOP <name>)", line_no, 1
+        )
+    name = match.group("name")
+
+    fields: dict[str, str] = {}
+    field_order = ["ENTRY", "WHILE", "PROGRESS", "MAX", "EXIT", "EXHAUSTED"]
+    exhausted_terminal: Stop | None = None
+
+    for expected in field_order:
+        try:
+            next_line_no, next_raw, next_line = next(lines)
+        except StopIteration:
+            raise ParseError(
+                f"LOOP {name} is missing {expected} field", line_no, 1
+            ) from None
+        # Allow blank/comment lines to be skipped between fields
+        while not next_line.strip() or next_line.lstrip().startswith("#"):
+            try:
+                next_line_no, next_raw, next_line = next(lines)
+            except StopIteration:
+                raise ParseError(
+                    f"LOOP {name} is missing {expected} field", line_no, 1
+                ) from None
+        field_match = _LOOP_FIELD_RE.fullmatch(next_line)
+        if field_match is None or field_match.group("keyword") != expected:
+            raise ParseError(
+                f"LOOP {name} expected {expected} but got"
+                f" {next_line!r}",
+                next_line_no, 1,
+            )
+        value = field_match.group("value").strip()
+        if expected == "MAX":
+            if not value.isdigit():
+                raise ParseError(
+                    f"LOOP {name} MAX must be a positive integer",
+                    next_line_no, 1,
+                )
+            max_iterations = int(value)
+            if max_iterations < 1:
+                raise ParseError(
+                    f"LOOP {name} MAX must be >= 1",
+                    next_line_no, 1,
+                )
+        elif expected == "EXHAUSTED":
+            stop = _STOP_RE.fullmatch(value)
+            if stop is not None:
+                exhausted_terminal = Stop(stop.group("kind"), stop.group("ref"))
+            else:
+                exhausted_terminal = value
+        else:
+            fields[expected] = value
+
+    # Parse the indented body.  Track the indentation width of the
+    # first body line: only lines at the same (or deeper) indentation
+    # belong to this loop's body.  Lines at a shallower indentation are
+    # pushed back for the enclosing parser.  Check _pending_lines
+    # first (nested blocks push back lines they don't consume).
+    body: list = []
+    body_indent: int | None = None
+    while True:
+        if _pending_lines:
+            body_line_no, body_raw, body_line = _pending_lines.pop(0)
+        else:
+            try:
+                body_line_no, body_raw, body_line = next(lines)
+            except StopIteration:
+                break
+        if not body_raw[:1].isspace():
+            _pending_lines.append((body_line_no, body_raw, body_line))
+            break
+        current_indent = len(body_raw) - len(body_raw.lstrip())
+        if body_indent is None:
+            body_indent = current_indent
+        elif current_indent < body_indent:
+            _pending_lines.append((body_line_no, body_raw, body_line))
+            break
+        body.append(
+            _parse_loop_body_statement(body_line, body_line_no, lines, body_raw)
+        )
+
+    if not body:
+        raise ParseError(
+            f"LOOP {name} requires at least one indented body statement",
+            line_no, 1,
+        )
+
+    return Loop(
+        name=name,
+        entry_condition=fields["ENTRY"],
+        while_condition=fields["WHILE"],
+        progress_expression=fields["PROGRESS"],
+        max_iterations=max_iterations,
+        exit_condition=fields["EXIT"],
+        exhausted=exhausted_terminal,
+        body=tuple(body),
+        line=line_no,
+    )
+
+
+def _parse_loop_body_statement(
+    line: str, line_no: int, lines, raw: str
+) -> object:
+    """Parse one statement inside a LOOP body (issue #68).
+
+    Supports the same statement types as the top-level parser: DO
+    invocations, IF conditionals, CALL, SCATTER/GATHER, PAR/BARRIER,
+    STOP, RETURN, and nested LOOP.  DONE is handled by the main parser
+    flow (it attaches to the preceding invocation).
+    """
+    keyword = line.split(None, 1)[0]
+
+    if re.match(r"IF\b", line):
+        return _parse_if(line, line_no, lines, raw)
+
+    if re.match(r"STOP\b", line):
+        stop = _STOP_RE.fullmatch(line)
+        if stop is None:
+            raise ParseError("malformed STOP in LOOP body", line_no, 1)
+        return Stop(stop.group("kind"), stop.group("ref"))
+
+    if re.match(r"RETURN\b", line):
+        return Return(_parse_refs(line[6:].strip(), line_no, "RETURN"))
+
+    if re.match(r"CALL\b", line):
+        call = _CALL_RE.fullmatch(line)
+        if call is None:
+            raise ParseError("malformed CALL in LOOP body", line_no, 1)
+        args = tuple(_parse_argument(item, line_no) for item in _split_top_level(call.group("args"), line_no))
+        targets = _parse_refs(call.group("targets"), line_no, "target")
+        return Call(call.group("protocol"), args, targets, line_no)
+
+    if re.match(r"SCATTER\b", line):
+        return _parse_scatter_block(line, line_no, lines)
+
+    if re.match(r"GATHER\b", line):
+        return _parse_gather_line(line, line_no, lines)
+
+    if re.match(r"PAR\b", line):
+        return _parse_par_block(line, line_no, lines)
+
+    if re.match(r"LOOP\b", line):
+        return _parse_loop_block(line, line_no, lines)
+
+    if _CONDITION_STEP_RE.match(line):
+        return _parse_invocation_text(line, line_no)
+
+    raise ParseError(
+        "LOOP body statement must be a DO invocation, IF, CALL,"
+        " SCATTER, GATHER, PAR, LOOP, STOP, or RETURN",
+        line_no,
+        1,
+    )
 
 
 def parse_condition(text: str, line_no: int = 0) -> tuple:
@@ -2000,6 +2195,29 @@ def validate_program(
                 )
                 if if_terminal and else_terminal:
                     terminal = True
+        elif isinstance(statement, Loop):
+            if conditional_invocation_seen:
+                raise ParseError(
+                    f"LOOP {statement.name} appears after an IF ... DO"
+                    " conditional: a conditional DO invocation must come"
+                    " after every unconditional invocation line"
+                )
+            if pending_scatter is not None:
+                raise ParseError(
+                    f"LOOP {statement.name} appears between a SCATTER and"
+                    " its GATHER: a SCATTER block must be directly followed"
+                    " by its GATHER"
+                )
+            _validate_loop_statement(
+                statement, known, available, steps, protocols_dir,
+                _protocol_stack,
+            )
+            # A LOOP is not a terminal — it can exit early (WHILE false,
+            # EXIT true) and execution continues after it.  The EXHAUSTED
+            # terminal is a possible exit, not a guaranteed one.  The
+            # program still needs a RETURN or STOP after the loop (or
+            # the loop body itself may contain a terminal, but that is
+            # a conditional exit, not a guaranteed one).
         else:
             raise ParseError(f"unknown statement {type(statement).__name__}")
     if pending_scatter is not None:
@@ -2386,6 +2604,220 @@ def _validate_par_statement(
             )
 
 
+def _validate_loop_statement(
+    statement: Loop,
+    known: set[str] | None,
+    available: set[str],
+    steps: set[str],
+    protocols_dir: str | Path | None,
+    stack: tuple[str, ...],
+) -> None:
+    """Validate one LOOP block (issue #68).
+
+    The ENTRY, WHILE, EXIT conditions validate like IF conditions: their
+    refs must resolve against committed state at the loop's source
+    position.  The PROGRESS expression is a raw expression string (like
+    ``U.high_impact.count decreases``) and is validated at runtime, not
+    at parse time.  MAX must be >= 1 (enforced at parse time).
+
+    The EXHAUSTED terminal validates like a bare STOP.  The body
+    statements validate like top-level statements over the same
+    ``available`` namespace — the loop's body targets are conditionally
+    committed and never added to ``available`` (the loop may not run or
+    may exit early), so later body statements in the same iteration
+    that read a body-produced ref from an earlier iteration would fail
+    at runtime, not at validation.  This is the same semantics as IF-DO
+    conditionals.
+    """
+    for cond_name, cond_text in (
+        ("ENTRY", statement.entry_condition),
+        ("WHILE", statement.while_condition),
+        ("EXIT", statement.exit_condition),
+    ):
+        try:
+            cond_ast = parse_condition(cond_text, statement.line)
+        except ParseError:
+            raise ParseError(
+                f"LOOP {statement.name} {cond_name} condition is malformed:"
+                f" {cond_text}",
+                statement.line, 1,
+            )
+        for ref in _condition_refs(cond_ast):
+            if not _condition_ref_resolvable(ref, available):
+                raise ParseError(
+                    f"LOOP {statement.name} {cond_name} condition reference"
+                    f" {ref} used before definition: conditions read"
+                    " committed nodes (a declared INPUT or an earlier"
+                    " step's target, or a field of one)",
+                    statement.line, 1,
+                )
+
+    # Validate EXHAUSTED terminal
+    if isinstance(statement.exhausted, Stop):
+        if statement.exhausted.kind not in _STOP_KINDS:
+            raise ParseError(
+                f"LOOP {statement.name} EXHAUSTED has invalid STOP kind"
+                f" {statement.exhausted.kind}",
+                statement.line, 1,
+            )
+        if (
+            statement.exhausted.ref is not None
+            and statement.exhausted.ref not in available
+        ):
+            raise ParseError(
+                f"LOOP {statement.name} EXHAUSTED references undefined"
+                f" ref {statement.exhausted.ref}",
+                statement.line, 1,
+            )
+
+    # Validate body statements.  Body invocations may target refs
+    # already in available (from INPUT or pre-loop steps) — the loop
+    # overwrites them each iteration.  Fresh targets are added to a
+    # body-local namespace so subsequent body statements can read them.
+    # Post-loop statements cannot rely on body-only targets (the loop
+    # may not run or may exit early), so they never join the outer
+    # available set.
+    loop_available = set(available)
+    body_targets: set[str] = set()
+    for body_stmt in statement.body:
+        if isinstance(body_stmt, Invocation):
+            _validate_loop_body_invocation(
+                body_stmt, known, loop_available, steps, body_targets,
+            )
+        elif isinstance(body_stmt, Call):
+            for argument in body_stmt.args:
+                for ref in _references_in(argument.value):
+                    if ref.startswith("KB."):
+                        continue
+                    if ref not in loop_available:
+                        raise ParseError(
+                            f"reference {ref} used before definition"
+                            f" (LOOP {statement.name} body)",
+                            argument.line, 1,
+                        )
+            _validate_call_contract(
+                body_stmt, known, protocols_dir, stack
+            )
+        elif isinstance(body_stmt, (Stop, Return)):
+            pass  # validated at the top-level terminal check
+        elif isinstance(body_stmt, Conditional):
+            cond_ast = parse_condition(
+                body_stmt.condition, body_stmt.line
+            )
+            for ref in _condition_refs(cond_ast):
+                if not _condition_ref_resolvable(ref, loop_available):
+                    raise ParseError(
+                        f"LOOP {statement.name} body IF condition"
+                        f" reference {ref} used before definition",
+                        body_stmt.line, 1,
+                    )
+            embedded = body_stmt.statement
+            if isinstance(embedded, Invocation):
+                _validate_invocation_statement(
+                    embedded, known, loop_available, steps,
+                    commit_targets=False,
+                )
+            elif isinstance(embedded, (Stop, Return)):
+                pass
+        elif isinstance(body_stmt, (Scatter, Gather, Par)):
+            pass  # validated when their own entries are processed
+        elif isinstance(body_stmt, Loop):
+            pass  # nested loops validated recursively
+
+
+def _validate_loop_body_invocation(
+    statement: Invocation,
+    known: set[str] | None,
+    available: set[str],
+    steps: set[str],
+    body_targets: set[str],
+) -> None:
+    """Validate one invocation inside a LOOP body (issue #68).
+
+    Like a normal invocation but: targets may overwrite refs already in
+    ``available`` (INPUT declarations or pre-loop targets) since the loop
+    overwrites them each iteration; fresh targets are added to both
+    ``available`` and ``body_targets`` so subsequent body statements can
+    read them.  Duplicate targets within the body are rejected.
+    """
+    if statement.step_id in steps:
+        raise ParseError(f"duplicate step {statement.step_id}")
+    steps.add(statement.step_id)
+    if known is not None and statement.command not in known:
+        raise ParseError(f"unknown command {statement.command}")
+    for argument in statement.args:
+        for ref in _references_in(argument.value):
+            if ref.startswith("KB."):
+                continue
+            if ref not in available:
+                raise ParseError(
+                    f"reference {ref} used before definition"
+                    f" (LOOP body)",
+                    argument.line, 1,
+                )
+    if statement.revisions and len(statement.targets) != 1:
+        raise ParseError(
+            f"REVISE on {statement.step_id} requires exactly one target"
+        )
+    for kind, refs in (
+        ("REVISE", statement.revisions),
+        ("RETIRE", statement.retirements),
+    ):
+        for ref in refs:
+            if ref.startswith("KB."):
+                raise ParseError(
+                    f"{kind} reference {ref} cannot correct KB.* nodes"
+                )
+            if ref in statement.targets:
+                raise ParseError(
+                    f"{kind} reference {ref} is one of the step's own targets"
+                )
+            if ref not in available:
+                raise ParseError(
+                    f"{kind} reference {ref} used before definition"
+                )
+    overlap = sorted(set(statement.revisions) & set(statement.retirements))
+    if overlap:
+        raise ParseError(
+            f"reference(s) {', '.join(overlap)} appear in both"
+            " REVISE and RETIRE"
+        )
+    for target in statement.targets:
+        if target.startswith("KB."):
+            raise ParseError(
+                f"KB reference {target} cannot be an invocation target"
+            )
+        if target in body_targets:
+            raise ParseError(
+                f"duplicate target {target} in LOOP body:"
+                " two body steps produce the same target"
+            )
+        body_targets.add(target)
+        available.add(target)
+    if statement.done is not None:
+        if statement.done.op not in _DONE_OPS:
+            raise ParseError(
+                f"unknown DONE predicate {statement.done.op}",
+                statement.done.line, 5,
+            )
+        if not _done_ref_matches_targets(statement.done.ref, statement.targets):
+            raise ParseError(
+                f"DONE reference {statement.done.ref} must be one of"
+                f" the step's targets ({', '.join(statement.targets)})",
+                statement.done.line, 5,
+            )
+        if statement.done.op in ("eq_ref", "ne_ref"):
+            rhs_ref = statement.done.value
+            if isinstance(rhs_ref, str) and _REF_RE.fullmatch(rhs_ref):
+                if rhs_ref.startswith("KB."):
+                    pass
+                elif not _condition_ref_resolvable(rhs_ref, available):
+                    raise ParseError(
+                        f"DONE reference {rhs_ref} used before definition",
+                        statement.done.line, 5,
+                    )
+
+
 def _validate_call_contract(
     call: Call,
     known_commands: Iterable[str] | None,
@@ -2665,6 +3097,22 @@ def _statement_dict(statement: object) -> dict[str, Any]:
                 else None
             ),
         }
+    if isinstance(statement, Loop):
+        return {
+            "kind": "loop",
+            "name": statement.name,
+            "entry_condition": statement.entry_condition,
+            "while_condition": statement.while_condition,
+            "progress_expression": statement.progress_expression,
+            "max_iterations": statement.max_iterations,
+            "exit_condition": statement.exit_condition,
+            "exhausted": (
+                _statement_dict(statement.exhausted)
+                if isinstance(statement.exhausted, Stop)
+                else statement.exhausted
+            ),
+            "body": [_statement_dict(s) for s in statement.body],
+        }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 
@@ -2800,6 +3248,22 @@ def _statement_dict_v2(statement: object) -> dict[str, Any]:
                 if statement.judge is not None
                 else None
             ),
+        }
+    if isinstance(statement, Loop):
+        return {
+            "kind": "loop",
+            "name": statement.name,
+            "entry_condition": statement.entry_condition,
+            "while_condition": statement.while_condition,
+            "progress_expression": statement.progress_expression,
+            "max_iterations": statement.max_iterations,
+            "exit_condition": statement.exit_condition,
+            "exhausted": (
+                _statement_dict_v2(statement.exhausted)
+                if isinstance(statement.exhausted, Stop)
+                else statement.exhausted
+            ),
+            "body": [_statement_dict_v2(s) for s in statement.body],
         }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 

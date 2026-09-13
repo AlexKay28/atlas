@@ -146,12 +146,15 @@ Every intentional loop must declare:
 
 ```text
 LOOP refine
-ENTRY exists(V.result)
-WHILE exists(U.high_impact)
-PROGRESS U.high_impact.count decreases
-MAX 3
-EXIT V.acceptance.status == "passed"
-EXHAUSTED STOP unresolved(U.high_impact)
+  ENTRY V.result == "initial"
+  WHILE count(U.high_impact) > 0
+  PROGRESS count(U.high_impact) decreases
+  MAX 3
+  EXIT V.acceptance.status == "passed"
+  EXHAUSTED STOP unresolved(U.high_impact)
+  step.improve: DO challenge(claim = V.result) -> R.gap
+  step.fix: DO edit(intent = R.gap) -> ART.fix
+  step.retest: DO test(target = ART.fix) -> V.result
 ```
 
 The normative executable form is defined in

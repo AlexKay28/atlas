@@ -16,6 +16,7 @@ from tahoe.syntax.model import (
     Conditional,
     Gather,
     Invocation,
+    Loop,
     Par,
     Scatter,
 )
@@ -130,6 +131,11 @@ def _uses_scatter(program: Program) -> bool:
 def _uses_par(program: Program) -> bool:
     """Whether the program contains PAR blocks (issue #24)."""
     return any(isinstance(statement, Par) for statement in program.statements)
+
+
+def _uses_loop(program: "Program") -> bool:
+    """Whether the program contains LOOP blocks (issue #68)."""
+    return any(isinstance(statement, Loop) for statement in program.statements)
 
 
 def _uses_delegate(program: Program) -> bool:

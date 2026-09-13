@@ -22,6 +22,7 @@ from tahoe.syntax.model import (
     Declaration,
     Gather,
     Invocation,
+    Loop,
     Par,
     ParBranch,
     Program,
@@ -63,6 +64,7 @@ class PlanEntry:
     scatter: "Scatter | None" = None
     gather: "Gather | None" = None
     par: "Par | None" = None
+    loop: "Loop | None" = None
     task_prefix: str = ""
     binds: tuple[tuple[str, tuple, tuple], ...] = ()
     finalizes: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -114,6 +116,8 @@ def build_plan(program: Program) -> list[PlanEntry]:
                 entries.append(PlanEntry(scatter=statement))
             elif isinstance(statement, Par):
                 entries.append(PlanEntry(par=statement))
+            elif isinstance(statement, Loop):
+                entries.append(PlanEntry(loop=statement))
             elif isinstance(statement, Gather):
                 entries.append(PlanEntry(gather=statement))
 
@@ -134,6 +138,9 @@ def task_text(entry: PlanEntry) -> str:
     if entry.par is not None:
         par = entry.par
         return f"PAR MAX {par.max_count} BARRIER"
+    if entry.loop is not None:
+        loop = entry.loop
+        return f"LOOP {loop.name} MAX {loop.max_iterations}"
     if entry.gather is not None:
         gather = entry.gather
         return (
@@ -185,7 +192,7 @@ def collect_anchors(program: Program) -> dict[int, list]:
                             )
             elif isinstance(statement, Call):
                 count += 1
-            elif isinstance(statement, (Scatter, Gather, Par)):
+            elif isinstance(statement, (Scatter, Gather, Par, Loop)):
                 count += 1
         return count
 

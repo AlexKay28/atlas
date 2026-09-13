@@ -2560,3 +2560,198 @@ RETURN E.items
             parse_program(source), run_id="run-any-if"
         )
         assert result["status"] == "blocked"
+
+
+# -- LOOP construct (issue #68) ----------------------------------------
+
+
+LOOP_EXIT_PROGRAM = """\
+PROGRAM loop_exit VERSION 1.0
+INPUT
+    V.result = "initial"
+    U.issues = ["gap1", "gap2"]
+LOOP refine
+  ENTRY V.result == "initial"
+  WHILE count(U.issues) > 0
+  PROGRESS count(R.work) decreases
+  MAX 3
+  EXIT V.result == "passed"
+  EXHAUSTED STOP unresolved(U.issues)
+  step.work: DO define(goal = V.result) -> R.work
+  step.update: DO define(goal = V.result) -> V.result
+RETURN V.result
+"""
+
+
+def test_loop_executes_body_then_exits(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        iteration = [0]
+        def define_handler_loop(goal):
+            iteration[0] += 1
+            if iteration[0] >= 4:
+                return "passed"
+            # R.work shrinks each iteration: [1,2] -> [1] -> []
+            return list(range(max(0, 3 - iteration[0])))
+        worker = DeterministicWorker(
+            handlers={"define": define_handler_loop}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(LOOP_EXIT_PROGRAM), run_id="run-loop-exit"
+        )
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"V.result": "passed"}
+
+        history = store.events("run-loop-exit")
+        loop_started = [e for e in history if e.event_type is EventType.LOOP_STARTED]
+        assert len(loop_started) == 1
+        assert loop_started[0].payload["entry"] is True
+        loop_iterations = [e for e in history if e.event_type is EventType.LOOP_ITERATION]
+        assert len(loop_iterations) == 2
+        loop_exited = [e for e in history if e.event_type is EventType.LOOP_EXITED]
+        assert len(loop_exited) == 1
+        assert loop_exited[0].payload["reason"] == "exit_condition"
+        loop_exhausted = [e for e in history if e.event_type is EventType.LOOP_EXHAUSTED]
+        assert len(loop_exhausted) == 0
+
+
+def test_loop_exhausted_when_exit_never_triggers(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        iter_count = [0]
+        def define_handler_exhausted(goal):
+            iter_count[0] += 1
+            return list(range(max(0, 3 - iter_count[0])))
+        def echo_handler(goal):
+            return goal
+        worker = DeterministicWorker(
+            handlers={"define": define_handler_exhausted, "echo": echo_handler}
+        )
+        source = LOOP_EXIT_PROGRAM.replace("step.update: DO define(", "step.update: DO echo(")
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-loop-exhausted"
+        )
+        assert result["status"] == "unresolved"
+        history = store.events("run-loop-exhausted")
+        loop_exhausted = [e for e in history if e.event_type is EventType.LOOP_EXHAUSTED]
+        assert len(loop_exhausted) == 1
+        assert loop_exhausted[0].payload["reason"] == "max_reached"
+        assert history[-1].event_type is EventType.RUN_FINISHED
+        assert history[-1].payload["status"] == "unresolved"
+
+
+def test_loop_skipped_when_entry_false(tmp_path):
+    source = LOOP_EXIT_PROGRAM.replace(
+        'V.result = "initial"', 'V.result = "already_done"'
+    )
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"define": lambda goal: goal}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-loop-skipped"
+        )
+        assert result["status"] == "succeeded"
+        history = store.events("run-loop-skipped")
+        loop_started = [e for e in history if e.event_type is EventType.LOOP_STARTED]
+        assert len(loop_started) == 1
+        assert loop_started[0].payload["entry"] is False
+        loop_iterations = [e for e in history if e.event_type is EventType.LOOP_ITERATION]
+        assert len(loop_iterations) == 0
+
+
+def test_loop_blocked_when_progress_stalls(tmp_path):
+    source = """\
+PROGRAM loop_stall VERSION 1.0
+INPUT
+    V.result = "initial"
+    U.issues = ["gap1", "gap2"]
+LOOP refine
+  ENTRY V.result == "initial"
+  WHILE count(U.issues) > 0
+  PROGRESS count(R.work) decreases
+  MAX 3
+  EXIT V.result == "passed"
+  EXHAUSTED STOP unresolved(U.issues)
+  step.work: DO define(goal = V.result) -> R.work
+  step.update: DO define(goal = V.result) -> V.result
+RETURN V.result
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        # R.work stays the same size every iteration: no progress.
+        worker = DeterministicWorker(
+            handlers={"define": lambda goal: [1, 2]}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-loop-stall"
+        )
+        assert result["status"] == "blocked"
+
+
+def test_loop_with_body_executing_multiple_steps(tmp_path):
+    source = """\
+PROGRAM loop_multi VERSION 1.0
+INPUT
+    V.result = "initial"
+    U.issues = ["gap1", "gap2"]
+LOOP refine
+  ENTRY V.result == "initial"
+  WHILE count(U.issues) > 0
+  PROGRESS count(R.work) decreases
+  MAX 3
+  EXIT V.result == "passed"
+  EXHAUSTED STOP unresolved(U.issues)
+  step.first: DO define(goal = V.result) -> R.work
+  step.second: DO define(goal = V.result) -> V.result
+RETURN V.result
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        call_count = [0]
+        def define_handler_multi(goal):
+            call_count[0] += 1
+            if call_count[0] >= 3:
+                return "passed"
+            # R.work shrinks: iter1 -> [1], iter2 -> []
+            return list(range(max(0, 2 - (call_count[0] + 1) // 2)))
+        worker = DeterministicWorker(
+            handlers={"define": define_handler_multi}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-loop-multi"
+        )
+        assert result["status"] == "succeeded"
+        assert result["outputs"] == {"V.result": "passed"}
+        history = store.events("run-loop-multi")
+        succeeded = [e for e in history if e.event_type is EventType.SUCCEEDED]
+        assert len(succeeded) == 4  # 2 steps * 2 iterations
+
+
+def test_loop_while_false_breaks_normally(tmp_path):
+    source = """\
+PROGRAM loop_while VERSION 1.0
+INPUT
+    V.result = "initial"
+    U.issues = []
+LOOP refine
+  ENTRY V.result == "initial"
+  WHILE count(U.issues) > 0
+  PROGRESS count(R.work) decreases
+  MAX 3
+  EXIT V.result == "passed"
+  EXHAUSTED STOP unresolved(U.issues)
+  step.work: DO define(goal = V.result) -> R.work
+  step.update: DO define(goal = V.result) -> V.result
+RETURN V.result
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"define": lambda goal: goal}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-loop-while-false"
+        )
+        assert result["status"] == "succeeded"
+        history = store.events("run-loop-while-false")
+        loop_exited = [e for e in history if e.event_type is EventType.LOOP_EXITED]
+        assert len(loop_exited) == 1
+        assert loop_exited[0].payload["reason"] == "while_false"
+        succeeded = [e for e in history if e.event_type is EventType.SUCCEEDED]
+        assert len(succeeded) == 0

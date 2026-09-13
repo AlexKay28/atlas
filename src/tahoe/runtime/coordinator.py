@@ -50,6 +50,7 @@ from tahoe.syntax.model import (
     Declaration,
     Gather,
     Invocation,
+    Loop,
     Par,
     ParBranch,
     Program,
@@ -136,6 +137,7 @@ from tahoe.runtime.helpers import (  # noqa: E402,F401
     _uses_scatter,
     _uses_par,
     _uses_delegate,
+    _uses_loop,
     _invocation_uses_kb_refs,
     _json_equal,
     evaluate_done_predicate,
@@ -300,6 +302,11 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
                 # Issue #24: a PAR block creates no task of its own — the
                 # ledger carries one task per branch, created when the
                 # entry executes (_par_branch_task_ids).
+                continue
+            if entry.loop is not None:
+                # Issue #68: a LOOP block creates no task of its own —
+                # body iteration tasks are created lazily during
+                # execution.
                 continue
             task = create_ledger.create_task(
                 text=self._task_text(entry),
@@ -657,6 +664,7 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             and not _uses_scatter(program)
             and not _uses_par(program)
             and not _uses_delegate(program)
+            and not _uses_loop(program)
         )
         if concurrent_run:
             metadata["concurrent"] = True
@@ -864,7 +872,8 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
         ledger = self.store.task_ledger(run_id)
         task_ids = list(ledger.tasks)
         static_positions = [
-            idx for idx, entry in enumerate(plan) if entry.par is None
+            idx for idx, entry in enumerate(plan)
+            if entry.par is None and entry.loop is None
         ]
         if len(task_ids) > len(static_positions):
             # Issue #4: tasks beyond the plan's own entries are per-candidate
