@@ -18,6 +18,7 @@ from tahoe.syntax.model import (
     Invocation,
     Loop,
     Par,
+    Reformulate,
     Scatter,
     Try,
 )
@@ -163,6 +164,14 @@ def _uses_delegate(program: Program) -> bool:
             ):
                 return True
     return False
+
+
+def _uses_reformulate(program: "Program") -> bool:
+    """Whether the program contains REFORMULATE blocks (issue #80)."""
+    return any(
+        isinstance(statement, Reformulate)
+        for statement in program.statements
+    )
 
 
 from tahoe.runtime.planning import map_results_to_targets

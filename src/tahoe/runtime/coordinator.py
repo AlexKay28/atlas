@@ -140,6 +140,7 @@ from tahoe.runtime.helpers import (  # noqa: E402,F401
     _uses_delegate,
     _uses_loop,
     _uses_try,
+    _uses_reformulate,
     _invocation_uses_kb_refs,
     _json_equal,
     evaluate_done_predicate,
@@ -313,6 +314,11 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             if entry.try_ is not None:
                 # Issue #69: a TRY block creates no task of its own —
                 # branch tasks are created lazily during execution.
+                continue
+            if entry.reformulate is not None:
+                # Issue #80: a REFORMULATE block creates no task of its
+                # own — diagnose/replan sub-tasks are created lazily
+                # during execution.
                 continue
             task = create_ledger.create_task(
                 text=self._task_text(entry),
@@ -672,6 +678,7 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             and not _uses_delegate(program)
             and not _uses_loop(program)
             and not _uses_try(program)
+            and not _uses_reformulate(program)
         )
         if concurrent_run:
             metadata["concurrent"] = True
@@ -881,6 +888,8 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
         static_positions = [
             idx for idx, entry in enumerate(plan)
             if entry.par is None and entry.loop is None and entry.try_ is None
+            if entry.par is None and entry.loop is None
+            and entry.reformulate is None
         ]
         if len(task_ids) > len(static_positions):
             # Issue #4: tasks beyond the plan's own entries are per-candidate

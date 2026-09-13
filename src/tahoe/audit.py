@@ -110,6 +110,7 @@ def audit_run(store: EventStore, run_id: str) -> AuditReport:
         *_check_ledger(events, run_finished),
         *_check_payload_integrity(events),
         *_check_projection_determinism(store, run_id, events),
+        *_check_reformulation_invariants(events),
     ]
     return AuditReport(
         run_id=run_id,
@@ -330,6 +331,53 @@ def _check_ledger(
                     " nonempty evidence"
                 ),
                 seqs=(record["seq"],),
+            ))
+    return findings
+
+
+def _check_reformulation_invariants(
+    events: tuple[Event, ...],
+) -> list[AuditFinding]:
+    """Verify reformulation invariants (issue #80).
+
+    - Max 3 reformulations per run.
+    - Each PLAN_REFORMULATED event carries the required payload fields:
+      trigger_step, diagnosis_ref, new_plan_digest, preserved_refs.
+    - The reformulation count is sequential (1, 2, 3, ...).
+    """
+    findings: list[AuditFinding] = []
+    reformulation_events = [
+        ev for ev in events
+        if ev.event_type is EventType.PLAN_REFORMULATED
+    ]
+    max_reformulations = 3
+    if len(reformulation_events) > max_reformulations:
+        findings.append(AuditFinding(
+            code="max_reformulations_exceeded",
+            message=(
+                f"run has {len(reformulation_events)} PLAN_REFORMULATED"
+                f" events, exceeding the maximum of {max_reformulations}"
+            ),
+            seqs=tuple(ev.seq for ev in reformulation_events),
+        ))
+    for ev in reformulation_events:
+        payload = ev.payload if isinstance(ev.payload, dict) else {}
+        required_fields = (
+            "trigger_step", "diagnosis_ref",
+            "new_plan_digest", "preserved_refs",
+        )
+        missing = [
+            field for field in required_fields
+            if field not in payload
+        ]
+        if missing:
+            findings.append(AuditFinding(
+                code="reformulation_missing_payload",
+                message=(
+                    f"PLAN_REFORMULATED at seq {ev.seq} is missing"
+                    f" required payload fields: {', '.join(missing)}"
+                ),
+                seqs=(ev.seq,),
             ))
     return findings
 

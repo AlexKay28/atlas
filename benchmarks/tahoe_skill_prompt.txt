@@ -1,85 +1,15 @@
-# TAHOE Thinking Skill
+Think in TAHOE — structured reasoning. Need-triggered: use structure only where it prevents errors.
 
-You think in TAHOE — a structured reasoning language. TAHOE is need-triggered:
-apply protocols only where structure reduces the chance of a wrong answer.
+Skip structure for: single-step, trivial fixes, obvious answers. Just answer.
+Use structure for: multi-step computation, constraint elimination, ordering.
 
-## When to use TAHOE (mandatory)
+Protocols:
+Compute: E.givens → P.steps (concrete numbers) → verify internally → answer
+Select: E.options → eliminate wrong → pick → answer
+Deduce: C.constraints → assign positions explicitly (1..N) → verify all constraints → read answer from positions → answer
 
-Use a protocol when ANY of these are true:
-- Multiple constraints interact (ordering, filtering, dependencies)
-- Computation has 3+ steps where an intermediate error propagates
-- Options must be eliminated, not just ranked
-- The question has plausible distractors
-- First instinct could be wrong and verification would catch it
+Refs: G.goal C.constraint E.evidence P.result V.verified D.decision OUT.answer
+Commands: define calculate search choose check decompose rank compare verify summarize report edit solve recall hypothesize prove
 
-## When to skip TAHOE (answer directly)
-
-Answer directly, no protocol, when ANY of these are true:
-- Single-step computation or single fact lookup
-- Trivial fix (wrong operator, wrong variable)
-- Search space small enough to verify by inspection
-- Answer is obvious and the cost of being wrong is low
-
-When skipping: just answer. Do not structure, do not use typed refs.
-
-## Architecture
-
-Full reference: `textbook/ARCHITECTURE.md` in the TAHOE repository.
-
-## Protocol selection
-
-```
-if task asks for a number:           → Compute
-if task has options A/B/C/D:         → Select  
-if task requires ordering/positions: → Deduce
-if task is unclear:                   → Explore
-if task has competing approaches:     → Decide
-if task needs decomposition:         → Plan
-if task has a bug/mismatch:          → Debug
-if task evaluates an artifact:        → Review
-```
-
-## Typed refs
-
-G.goal · C.constraint · E.evidence · H.hypothesis · U.unknown · O.option · K.criteria · D.decision · P.result · V.verified · OUT.answer
-
-## Protocols
-
-**Compute** (math): E.givens → P.steps with concrete numbers → V.check by reverse → OUT
-**Select** (multiple choice): E.options → P.elimination per option → D.choice → V.check → OUT
-**Deduce** (logic): C.constraints → P.positions explicit assignment → V.all_constraints → OUT
-
-Each protocol returns: OUT.result, OUT.basis, OUT.unknowns, OUT.check
-
-## Commands
-
-define · calculate · search · choose · check · decompose · rank · compare · verify · summarize · report · edit · solve · recall · hypothesize · prove · delegate
-
-## Thinking rules
-
-1. Name the outcome before the method
-2. Separate constraints (invalidate) from preferences (rank)
-3. Include only decision-shaping facts
-4. Distinguish facts (E.) from hypotheses (H.) from verified (V.)
-5. Resolve highest-value unknown first
-6. Generate 2+ alternatives before committing
-7. Define criteria before ranking
-8. Verify before returning (DONE)
-9. Prefer reversible steps under uncertainty
-10. Make causal claims testable
-
-## Token economy
-
-- Use concrete values (3 * 12 = 36), not variable names
-- Each ref = one semantic unit
-- Output the answer, not the story of finding it
-- Match rigor to consequence (Fast/Standard/Critical)
-
-## Output
-
-The protocols produce reasoning internally. Only OUT.answer is returned.
-V.check is internal verification — never include it in the output.
-
-Multiple choice: (C)
-Math: 21
-Text: one sentence
+Verify internally. Output only the answer. No reasoning in output.
+Math: number. Choice: (C). Text: one sentence. No markdown.

@@ -104,6 +104,10 @@ class EventType(str, Enum):
     TRY_BRANCH_SUCCEEDED = "try.branch_succeeded"
     TRY_BRANCH_CANCELLED = "try.branch_cancelled"
     TRY_COMPLETED = "try.completed"
+    # Issue #80: a REFORMULATE block fired — the plan was reformulated
+    # mid-execution.  Payload: {trigger_step, diagnosis_ref,
+    # revised_refs, new_plan_digest, preserved_refs}.
+    PLAN_REFORMULATED = "plan.reformulated"
     TASK_UPDATED = "task.updated"
 
 

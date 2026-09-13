@@ -118,8 +118,16 @@ class ChildEngine:
         claims: "ResourceLedger | None" = None,
         branch_workspace: str | None = None,
         branch_claim: str | None = None,
+        inherit_state: bool = False,
     ) -> dict[str, Any]:
-        """Start, resume, or read back one isolated child run (issue #24)."""
+        """Start, resume, or read back one isolated child run (issue #24).
+
+        When ``inherit_state`` is True (issue #80 REFORMULATE), the child
+        run's initial state includes all committed refs from the parent —
+        the child plan inherits the parent's state namespace rather than
+        running in isolation.  The child plan is still sealed
+        (content-addressed).
+        """
         try:
             self.store.run(child_run_id)
         except KeyError:

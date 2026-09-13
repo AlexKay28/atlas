@@ -21,6 +21,7 @@ from .model import (
     Par,
     ParBranch,
     Program,
+    Reformulate,
     Return,
     Scatter,
     Stop,
@@ -115,6 +116,22 @@ _LOOP_RE = re.compile(rf"^LOOP\s+(?P<name>{_NAME})$")
 _TRY_RE = re.compile(rf"^TRY(?:\s+MAX\s+(?P<max>\d+))?$")
 _LOOP_FIELD_RE = re.compile(
     r"^(?P<keyword>ENTRY|WHILE|PROGRESS|EXIT|MAX|EXHAUSTED)\s+(?P<value>.+)$"
+)
+# Issue #80: REFORMULATE block grammar.  The header is a bare
+# ``REFORMULATE`` keyword; the body consists of four labeled sections
+# (DIAGNOSE, REVISE, REPLAN, CONTINUE) on indented lines.
+_REFORMULATE_RE = re.compile(r"^REFORMULATE$")
+_REFORMULATE_SECTION_RE = re.compile(
+    r"^(?P<section>DIAGNOSE|REVISE|REPLAN|CONTINUE):\s*(?P<rest>.+)$"
+)
+_REFORMULATE_REVISE_RE = re.compile(
+    rf"^(?P<old>{_REF_PATTERN})\s*->\s*(?P<new>{_REF_PATTERN})$"
+)
+# Issue #80: a REFORMULATE DO section (DIAGNOSE/REPLAN) uses a simplified
+# invocation form: ``DO <command>(args) -> targets`` without a step id.
+# The step id is auto-generated from the section label.
+_REFORMULATE_DO_RE = re.compile(
+    rf"^DO\s+(?P<command>{_NAME})\((?P<args>.*)\)\s*->\s*(?P<targets>.+)$"
 )
 # Canonical join rules (issue #27 naming resolution): the draft spec's
 # all/any/ranked are canonical; the issue body's first/best are accepted
@@ -252,6 +269,8 @@ def parse_program(text: str) -> Program:
     """Parse the canonical one-line sequential MVP syntax."""
     if not isinstance(text, str):
         raise ParseError("source must be text")
+
+    _pending_lines.clear()
 
     source = []
     for number, raw in enumerate(text.splitlines(), 1):
@@ -454,6 +473,13 @@ def parse_program(text: str) -> Program:
                 1,
             )
 
+        # Issue #80: plan reformulation block.  REFORMULATE is a control
+        # construct with four labeled sections (DIAGNOSE, REVISE, REPLAN,
+        # CONTINUE) on indented lines.
+        if re.match(r"REFORMULATE\b", line):
+            statements.append(_parse_reformulate_block(line, line_no, lines))
+            continue
+
         # Issue #7: strip the optional trailing REVISE/RETIRE clause before
         # matching the invocation itself; the clause only ever follows the
         # target refs, so an unmatched clause falls through to the ordinary
@@ -555,8 +581,8 @@ def _parse_block_statement(
 ) -> object:
     """Parse one indented statement inside an IF/ELSE block body.
 
-    Supports step invocations, STOP, RETURN, and DONE (which attaches
-    to the preceding invocation in the block).
+    Supports step invocations, STOP, RETURN, DONE (which attaches
+    to the preceding invocation in the block), and REFORMULATE (issue #80).
     """
     if re.match(r"STOP\b", line):
         stop = _STOP_RE.fullmatch(line)
@@ -565,11 +591,13 @@ def _parse_block_statement(
         return Stop(stop.group("kind"), stop.group("ref"))
     if re.match(r"RETURN\b", line):
         return Return(_parse_refs(line[6:].strip(), line_no, "RETURN"))
+    if re.match(r"REFORMULATE\b", line):
+        return _parse_reformulate_block(line, line_no, lines)
     if _CONDITION_STEP_RE.match(line):
         return _parse_invocation_text(line, line_no)
     raise ParseError(
-        "IF/ELSE block statement must be STOP, RETURN, or a DO"
-        " invocation (step.<id>: DO ...)",
+        "IF/ELSE block statement must be STOP, RETURN, REFORMULATE,"
+        " or a DO invocation (step.<id>: DO ...)",
         line_no,
         1,
     )
@@ -1054,12 +1082,15 @@ def _parse_loop_body_statement(
     if re.match(r"LOOP\b", line):
         return _parse_loop_block(line, line_no, lines)
 
+    if re.match(r"REFORMULATE\b", line):
+        return _parse_reformulate_block(line, line_no, lines)
+
     if _CONDITION_STEP_RE.match(line):
         return _parse_invocation_text(line, line_no)
 
     raise ParseError(
         "LOOP body statement must be a DO invocation, IF, CALL,"
-        " SCATTER, GATHER, PAR, LOOP, STOP, or RETURN",
+        " SCATTER, GATHER, PAR, LOOP, REFORMULATE, STOP, or RETURN",
         line_no,
         1,
     )
@@ -1192,6 +1223,149 @@ def _parse_try_branch_statement(
         " SCATTER, GATHER, PAR, LOOP, STOP, or RETURN",
         line_no,
         1,
+    )
+
+
+def _parse_reformulate_do(rest: str, line_no: int, label: str) -> Invocation:
+    """Parse a REFORMULATE DO section (DIAGNOSE or REPLAN, issue #80).
+
+    The simplified form is ``DO <command>(args) -> targets`` without a
+    step id.  The step id is auto-generated as ``step.reformulate_<label>``.
+    """
+    do_match = _REFORMULATE_DO_RE.fullmatch(rest)
+    if do_match is None:
+        raise ParseError(
+            f"REFORMULATE {label.upper()} must be a DO invocation"
+            " (DO <command>(args) -> targets)",
+            line_no, 1,
+        )
+    args = tuple(
+        _parse_argument(item, line_no)
+        for item in _split_top_level(do_match.group("args"), line_no)
+    )
+    targets = _parse_refs(do_match.group("targets"), line_no, "target")
+    return Invocation(
+        step_id=f"step.reformulate_{label}",
+        command=do_match.group("command"),
+        args=args,
+        targets=targets,
+    )
+
+
+def _parse_reformulate_block(line: str, line_no: int, lines) -> Reformulate:
+    """Parse one ``REFORMULATE`` block (issue #80).
+
+    The header is a bare ``REFORMULATE`` keyword; the body consists of
+    four labeled sections on indented lines:
+
+    - ``DIAGNOSE: DO <command>(args) -> targets`` (mandatory)
+    - ``REVISE: <old_ref> -> <new_ref>`` (optional, may repeat)
+    - ``REPLAN: DO <command>(args) -> targets`` (mandatory)
+    - ``CONTINUE: <ref>`` (mandatory)
+
+    Sections may appear in any order but DIAGNOSE, REPLAN and CONTINUE
+    are mandatory; REVISE is optional.  The body is parsed by tracking
+    indentation: lines at the body-indent level belong to this block;
+    a shallower dedent pushes the line back.
+    """
+    if _REFORMULATE_RE.fullmatch(line) is None:
+        raise ParseError(
+            "malformed REFORMULATE (expected bare REFORMULATE keyword)",
+            line_no,
+            1,
+        )
+
+    diagnose: Invocation | None = None
+    revise_pairs: list[tuple[str, str]] = []
+    replan: Invocation | None = None
+    continue_ref: str | None = None
+
+    body_indent: int | None = None
+    while True:
+        if _pending_lines:
+            body_line_no, body_raw, body_line = _pending_lines.pop(0)
+        else:
+            try:
+                body_line_no, body_raw, body_line = next(lines)
+            except StopIteration:
+                break
+        if not body_raw[:1].isspace():
+            _pending_lines.append((body_line_no, body_raw, body_line))
+            break
+        current_indent = len(body_raw) - len(body_raw.lstrip())
+        if body_indent is None:
+            body_indent = current_indent
+        elif current_indent < body_indent:
+            _pending_lines.append((body_line_no, body_raw, body_line))
+            break
+
+        section_match = _REFORMULATE_SECTION_RE.fullmatch(body_line)
+        if section_match is None:
+            raise ParseError(
+                "REFORMULATE body line must start with a section label"
+                " (DIAGNOSE:, REVISE:, REPLAN:, CONTINUE:)",
+                body_line_no,
+                1,
+            )
+        section = section_match.group("section")
+        rest = section_match.group("rest").strip()
+
+        if section == "DIAGNOSE":
+            if diagnose is not None:
+                raise ParseError(
+                    "REFORMULATE DIAGNOSE section appears more than once",
+                    body_line_no, 1,
+                )
+            diagnose = _parse_reformulate_do(rest, body_line_no, "diagnose")
+        elif section == "REVISE":
+            revise_match = _REFORMULATE_REVISE_RE.fullmatch(rest)
+            if revise_match is None:
+                raise ParseError(
+                    "REFORMULATE REVISE must be '<old_ref> -> <new_ref>'",
+                    body_line_no, 1,
+                )
+            revise_pairs.append(
+                (revise_match.group("old"), revise_match.group("new"))
+            )
+        elif section == "REPLAN":
+            if replan is not None:
+                raise ParseError(
+                    "REFORMULATE REPLAN section appears more than once",
+                    body_line_no, 1,
+                )
+            replan = _parse_reformulate_do(rest, body_line_no, "replan")
+        elif section == "CONTINUE":
+            if continue_ref is not None:
+                raise ParseError(
+                    "REFORMULATE CONTINUE section appears more than once",
+                    body_line_no, 1,
+                )
+            if _REF_RE.fullmatch(rest) is None:
+                raise ParseError(
+                    "REFORMULATE CONTINUE must be a typed reference",
+                    body_line_no, 1,
+                )
+            continue_ref = rest
+
+    if diagnose is None:
+        raise ParseError(
+            "REFORMULATE requires a DIAGNOSE section", line_no, 1
+        )
+    if replan is None:
+        raise ParseError(
+            "REFORMULATE requires a REPLAN section", line_no, 1
+        )
+    if continue_ref is None:
+        raise ParseError(
+            "REFORMULATE requires a CONTINUE section", line_no, 1
+        )
+
+    return Reformulate(
+        diagnose=diagnose,
+        revise=tuple(revise_pairs),
+        replan=replan,
+        continue_ref=continue_ref,
+        line=line_no,
     )
 
 
@@ -2274,6 +2448,10 @@ def validate_program(
                         statement.line,
                         1,
                     )
+            elif isinstance(embedded, Reformulate):
+                _validate_reformulate_statement(
+                    embedded, known, available, steps
+                )
             else:
                 raise ParseError(
                     "IF statement must embed STOP, RETURN, or a DO invocation"
@@ -2322,6 +2500,10 @@ def validate_program(
                                 " (ELSE branch)",
                                 statement.line, 1,
                             )
+                    elif isinstance(else_stmt, Reformulate):
+                        _validate_reformulate_statement(
+                            else_stmt, known, available, steps
+                        )
                     else:
                         raise ParseError(
                             "ELSE branch statement must be STOP, RETURN,"
@@ -2395,6 +2577,10 @@ def validate_program(
                     elif isinstance(body_stmt, Call):
                         for target in body_stmt.targets:
                             available.add(target)
+        elif isinstance(statement, Reformulate):
+            _validate_reformulate_statement(
+                statement, known, available, steps
+            )
         else:
             raise ParseError(f"unknown statement {type(statement).__name__}")
     if pending_scatter is not None:
@@ -3089,6 +3275,83 @@ def _validate_try_statement(
                     pass
             elif isinstance(body_stmt, (Scatter, Gather, Par, Loop, Try)):
                 pass
+def _validate_reformulate_statement(
+    statement: Reformulate,
+    known: set[str] | None,
+    available: set[str],
+    steps: set[str],
+) -> None:
+    """Validate one REFORMULATE block (issue #80).
+
+    The DIAGNOSE and REPLAN invocations validate like bare invocations:
+    their argument refs must resolve against committed state at the
+    block's source position, their step ids must be unique, and their
+    commands must be known.  Their targets are conditionally committed
+    (the reformulation may not fire) but the DIAGNOSE targets become
+    available to the REPLAN step (DIAGNOSE runs before REPLAN).
+
+    Each REVISE pair's ``old_ref`` must be an existing node (declared
+    INPUT or an earlier step's target); the ``new_ref`` must be fresh
+    (not in ``available`` and not a previous REVISE target).  The
+    CONTINUE ref must be one of the REPLAN step's targets (the plan
+    produced by REPLAN is the ref the run continues from).
+    """
+    reformulate_available = set(available)
+    _validate_invocation_statement(
+        statement.diagnose,
+        known,
+        reformulate_available,
+        steps,
+        commit_targets=False,
+    )
+    # DIAGNOSE targets become available to REVISE and REPLAN because
+    # DIAGNOSE runs first (it produces the diagnosis that informs replan).
+    for target in statement.diagnose.targets:
+        reformulate_available.add(target)
+    revise_new_refs: set[str] = set()
+    for old_ref, new_ref in statement.revise:
+        if old_ref.startswith("KB."):
+            raise ParseError(
+                f"REFORMULATE REVISE old reference {old_ref} cannot address"
+                " KB.* nodes: semantic memory is durable across runs",
+                statement.line, 1,
+            )
+        if new_ref.startswith("KB."):
+            raise ParseError(
+                f"REFORMULATE REVISE new reference {new_ref} cannot address"
+                " KB.* nodes: semantic memory is durable across runs",
+                statement.line, 1,
+            )
+        if old_ref not in reformulate_available:
+            raise ParseError(
+                f"REFORMULATE REVISE old reference {old_ref} used before"
+                " definition: corrections must name an existing node"
+                " (a declared INPUT or an earlier step's target)",
+                statement.line, 1,
+            )
+        if new_ref in reformulate_available or new_ref in revise_new_refs:
+            raise ParseError(
+                f"REFORMULATE REVISE new reference {new_ref} is already"
+                " defined: new refs must be fresh names",
+                statement.line, 1,
+            )
+        revise_new_refs.add(new_ref)
+        # The new ref becomes available to REPLAN (REVISE runs before REPLAN).
+        reformulate_available.add(new_ref)
+    _validate_invocation_statement(
+        statement.replan,
+        known,
+        reformulate_available,
+        steps,
+        commit_targets=False,
+    )
+    if statement.continue_ref not in statement.replan.targets:
+        raise ParseError(
+            f"REFORMULATE CONTINUE reference {statement.continue_ref}"
+            f" must be one of the REPLAN step's targets"
+            f" ({', '.join(statement.replan.targets)})",
+            statement.line, 1,
+        )
 
 
 def _validate_call_contract(
@@ -3392,6 +3655,17 @@ def _statement_dict(statement: object) -> dict[str, Any]:
             "max": statement.max_count,
             "branches": [[_statement_dict(s) for s in branch] for branch in statement.branches],
         }
+    if isinstance(statement, Reformulate):
+        return {
+            "kind": "reformulate",
+            "diagnose": _statement_dict(statement.diagnose),
+            "revise": [
+                {"old": old, "new": new}
+                for old, new in statement.revise
+            ],
+            "replan": _statement_dict(statement.replan),
+            "continue_ref": statement.continue_ref,
+        }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 
@@ -3549,6 +3823,17 @@ def _statement_dict_v2(statement: object) -> dict[str, Any]:
             "kind": "try",
             "max": statement.max_count,
             "branches": [[_statement_dict_v2(s) for s in branch] for branch in statement.branches],
+        }
+    if isinstance(statement, Reformulate):
+        return {
+            "kind": "reformulate",
+            "diagnose": _statement_dict_v2(statement.diagnose),
+            "revise": [
+                {"old": old, "new": new}
+                for old, new in statement.revise
+            ],
+            "replan": _statement_dict_v2(statement.replan),
+            "continue_ref": statement.continue_ref,
         }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
