@@ -31,7 +31,7 @@ from tahoe.state import StateDelta
 from tahoe.syntax import is_typed_reference
 from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Try, Conditional
 from tahoe.syntax import is_typed_reference, parse_program as parse_program_text
-from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Reformulate
+from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Reformulate, Await
 
 # Re-import constants and helpers from engine modules (issue #38 extraction).
 from tahoe.runtime.delegate import (
@@ -273,6 +273,7 @@ class DriveEngine:
                 or entry.loop is not None
                 or entry.try_ is not None
                 or entry.reformulate is not None
+                or entry.await_ is not None
             ):
                 # Issue #22: the global deadline is checked before each
                 # dispatch, mirroring the other entry kinds.
@@ -350,6 +351,21 @@ class DriveEngine:
                             idx += 1
                             continue
                     result = self._execute_reformulate_entry(
+                        program,
+                        run_id,
+                        entry,
+                        idx,
+                        invocation_id,
+                        values,
+                        plan,
+                        statement_to_task,
+                        crash_hook,
+                        gate,
+                        claims,
+                        branch_root,
+                    )
+                elif entry.await_ is not None:
+                    result = self._execute_await_entry(
                         program,
                         run_id,
                         entry,
@@ -2366,6 +2382,35 @@ class DriveEngine:
         return None
 
     _TYPED_REF_CANDIDATE_RE = _planning._TYPED_REF_CANDIDATE_RE
+
+    # ------------------------------------------------------------------
+    # AWAIT execution stub (issue #77 — not yet implemented)
+    # ------------------------------------------------------------------
+
+    def _execute_await_entry(
+        self,
+        program: Program,
+        run_id: str,
+        entry: "_PlanEntry",
+        idx: int,
+        invocation_id: str,
+        values: dict[str, Any],
+        plan: list["_PlanEntry"],
+        statement_to_task: dict[int, str],
+        crash_hook: "Callable[[int], None] | None",
+        gate: "BudgetGate | None",
+        claims: "ResourceLedger | None",
+        branch_root: str | None,
+    ) -> dict[str, Any] | None:
+        """Execute one AWAIT statement (issue #77).
+
+        PARSING ONLY — the event system is not yet implemented.  This stub
+        blocks the run with an "await not yet implemented" warning.
+        """
+        return self._fail_run(
+            run_id, plan, statement_to_task, idx,
+            "AWAIT is not yet implemented",
+        )
 
     @staticmethod
     def _scan_arg_refs(value: Any) -> frozenset[str]:

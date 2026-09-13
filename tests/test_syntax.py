@@ -2798,3 +2798,113 @@ RETURN E.test
     assert isinstance(ref, Reformulate)
     assert ref.diagnose.command == "challenge"
     assert ref.continue_ref == "G.plan2"
+
+
+# --------------------------------------------------------------------------
+# Issue #77: AWAIT construct (parser-only, no runtime execution)
+# --------------------------------------------------------------------------
+
+AWAIT_PROGRAM = """\
+PROGRAM waiter VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+step.one: DO define(value = G.goal) -> E.result
+AWAIT E.result
+
+RETURN E.result
+"""
+
+AWAIT_WITH_TIMEOUT = """\
+PROGRAM timed VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+step.one: DO define(value = G.goal) -> E.result
+AWAIT E.result TIMEOUT 30s
+
+RETURN E.result
+"""
+
+
+def test_await_parses_basic():
+    from tahoe.syntax.model import Await
+    program = parse_program(AWAIT_PROGRAM)
+    await_stmt = program.statements[1]
+    assert isinstance(await_stmt, Await)
+    assert await_stmt.selector == "E.result"
+    assert await_stmt.timeout is None
+
+
+def test_await_parses_with_timeout():
+    from tahoe.syntax.model import Await
+    program = parse_program(AWAIT_WITH_TIMEOUT)
+    await_stmt = program.statements[1]
+    assert isinstance(await_stmt, Await)
+    assert await_stmt.selector == "E.result"
+    assert await_stmt.timeout == "30s"
+
+
+def test_await_requires_selector():
+    source = """\
+PROGRAM bad VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+step.one: DO define(value = G.goal) -> E.result
+AWAIT
+
+RETURN E.result
+"""
+    with pytest.raises(ParseError, match="malformed AWAIT"):
+        parse_program(source)
+
+
+def test_await_seal_digest_deterministic():
+    program1 = parse_program(AWAIT_PROGRAM)
+    program2 = parse_program(AWAIT_PROGRAM)
+    assert seal_digest(program1) == seal_digest(program2)
+
+
+def test_await_seal_digest_sensitive():
+    base = seal_digest(parse_program(AWAIT_PROGRAM))
+    changed = AWAIT_PROGRAM.replace("AWAIT E.result", "AWAIT E.other")
+    assert seal_digest(parse_program(changed)) != base
+
+
+def test_await_timeout_seal_different_from_no_timeout():
+    no_timeout = seal_digest(parse_program(AWAIT_PROGRAM))
+    with_timeout = seal_digest(parse_program(AWAIT_WITH_TIMEOUT))
+    assert no_timeout != with_timeout
+
+
+def test_await_in_canonical_json():
+    from tahoe.syntax.model import Await
+    program = parse_program(AWAIT_PROGRAM)
+    cj = canonical_json(program)
+    import json
+    payload = json.loads(cj)
+    await_stmt = payload["statements"][1]
+    assert await_stmt["kind"] == "await"
+    assert await_stmt["selector"] == "E.result"
+    assert "timeout" not in await_stmt
+
+
+def test_await_with_timeout_in_canonical_json():
+    from tahoe.syntax.model import Await
+    program = parse_program(AWAIT_WITH_TIMEOUT)
+    cj = canonical_json(program)
+    import json
+    payload = json.loads(cj)
+    await_stmt = payload["statements"][1]
+    assert await_stmt["kind"] == "await"
+    assert await_stmt["timeout"] == "30s"
+
+
+def test_await_exported_from_tahoe_syntax():
+    import tahoe.syntax as syntax_module
+    assert hasattr(syntax_module, "Await")
+    assert "Await" in syntax_module.__all__

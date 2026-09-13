@@ -11,6 +11,7 @@ from typing import Any, Iterable
 
 from .model import (
     Argument,
+    Await,
     Call,
     Conditional,
     Declaration,
@@ -76,8 +77,9 @@ _PROTOCOLS_DIR_DEFAULT = "protocols"
 # conditional.  Issue #68: LOOP is no longer reserved — it parses a bounded
 # iterative refinement block.  Issue #69: TRY is no longer reserved — it
 # parses an OR-parallelism / speculative execution block.
-# FIRST/AWAIT/APPROVE stay unsupported.
-_UNSUPPORTED = frozenset({"FIRST", "AWAIT", "APPROVE"})
+# Issue #77: AWAIT is no longer reserved — it parses an event-await block.
+# FIRST/APPROVE stay unsupported.
+_UNSUPPORTED = frozenset({"FIRST", "APPROVE"})
 # Issue #4: SCATTER/GATHER block grammar.  The SCATTER line is followed by
 # exactly one indented body step line; the GATHER line names that body step
 # and optionally a judge step, itself defined by the following indented line.
@@ -121,6 +123,11 @@ _LOOP_FIELD_RE = re.compile(
 # ``REFORMULATE`` keyword; the body consists of four labeled sections
 # (DIAGNOSE, REVISE, REPLAN, CONTINUE) on indented lines.
 _REFORMULATE_RE = re.compile(r"^REFORMULATE$")
+# Issue #77: AWAIT event-await block grammar.  The header is
+# ``AWAIT <event_selector>`` optionally followed by ``TIMEOUT <duration>``.
+_AWAIT_RE = re.compile(
+    rf"^AWAIT\s+(?P<selector>.+?)(?:\s+TIMEOUT\s+(?P<timeout>.+))?$"
+)
 _REFORMULATE_SECTION_RE = re.compile(
     r"^(?P<section>DIAGNOSE|REVISE|REPLAN|CONTINUE):\s*(?P<rest>.+)$"
 )
@@ -287,7 +294,7 @@ def parse_program(text: str) -> Program:
         raise ParseError("malformed PROGRAM header", header_line, 1)
 
     declarations: list[Declaration] = []
-    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop | Try] = []
+    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop | Try | Await] = []
     in_input = False
     terminal_seen = False
 
@@ -478,6 +485,11 @@ def parse_program(text: str) -> Program:
         # CONTINUE) on indented lines.
         if re.match(r"REFORMULATE\b", line):
             statements.append(_parse_reformulate_block(line, line_no, lines))
+            continue
+
+        # Issue #77: AWAIT event-await.  A single-line statement.
+        if re.match(r"AWAIT\b", line):
+            statements.append(_parse_await_line(line, line_no))
             continue
 
         # Issue #7: strip the optional trailing REVISE/RETIRE clause before
@@ -1224,6 +1236,32 @@ def _parse_try_branch_statement(
         line_no,
         1,
     )
+
+
+def _parse_await_line(line: str, line_no: int) -> Await:
+    """Parse one ``AWAIT <selector> [TIMEOUT <duration>]`` line (issue #77).
+
+    The selector is a raw event selector string.  The optional TIMEOUT
+    clause carries a raw duration string (e.g. ``30s``, ``5m``).
+
+    Parsing only — the coordinator skips AWAIT entries with a warning.
+    """
+    match = _AWAIT_RE.fullmatch(line)
+    if match is None:
+        raise ParseError(
+            "malformed AWAIT (expected AWAIT <selector>"
+            " [TIMEOUT <duration>])",
+            line_no, 1,
+        )
+    selector = match.group("selector").strip()
+    if not selector:
+        raise ParseError(
+            "AWAIT requires an event selector", line_no, 1,
+        )
+    timeout = match.group("timeout")
+    if timeout is not None:
+        timeout = timeout.strip()
+    return Await(selector=selector, timeout=timeout, line=line_no)
 
 
 def _parse_reformulate_do(rest: str, line_no: int, label: str) -> Invocation:
@@ -2589,6 +2627,8 @@ def validate_program(
             _validate_reformulate_statement(
                 statement, known, available, steps
             )
+        elif isinstance(statement, Await):
+            pass  # parsing only — no validation needed for AWAIT
         else:
             raise ParseError(f"unknown statement {type(statement).__name__}")
     if pending_scatter is not None:
@@ -3682,6 +3722,14 @@ def _statement_dict(statement: object) -> dict[str, Any]:
             "replan": _statement_dict(statement.replan),
             "continue_ref": statement.continue_ref,
         }
+    if isinstance(statement, Await):
+        entry: dict[str, Any] = {
+            "kind": "await",
+            "selector": statement.selector,
+        }
+        if statement.timeout is not None:
+            entry["timeout"] = statement.timeout
+        return entry
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 
@@ -3851,6 +3899,14 @@ def _statement_dict_v2(statement: object) -> dict[str, Any]:
             "replan": _statement_dict_v2(statement.replan),
             "continue_ref": statement.continue_ref,
         }
+    if isinstance(statement, Await):
+        entry: dict[str, Any] = {
+            "kind": "await",
+            "selector": statement.selector,
+        }
+        if statement.timeout is not None:
+            entry["timeout"] = statement.timeout
+        return entry
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 

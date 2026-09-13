@@ -320,6 +320,10 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
                 # own — diagnose/replan sub-tasks are created lazily
                 # during execution.
                 continue
+            if entry.await_ is not None:
+                # Issue #77: an AWAIT statement creates no task —
+                # the event system is not yet implemented.
+                continue
             task = create_ledger.create_task(
                 text=self._task_text(entry),
                 creator="coordinator",
@@ -890,6 +894,7 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             if entry.par is None and entry.loop is None and entry.try_ is None
             if entry.par is None and entry.loop is None
             and entry.reformulate is None
+            and entry.await_ is None
         ]
         if len(task_ids) > len(static_positions):
             # Issue #4: tasks beyond the plan's own entries are per-candidate
