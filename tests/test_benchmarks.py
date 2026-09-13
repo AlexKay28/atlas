@@ -6,6 +6,7 @@ The suite must stay well under its ~40s budget with these added.
 """
 
 import json
+import os
 
 import pytest
 
@@ -95,6 +96,10 @@ def test_frontier_case_speedup_exceeds_one_with_sleep_handlers():
     assert report.cases[0].speedup > 1.0
 
 
+@pytest.mark.skipif(
+    os.cpu_count() is not None and os.cpu_count() < 5,
+    reason="needs 4 free cores for 4-slot PAR parallelism",
+)
 def test_par_builtin_case_speedup_exceeds_one_with_sleep_handlers():
     par = builtin_cases(latency_seconds=0.02)[2]
     report = run_benchmark([par], repetitions=1)
@@ -104,6 +109,22 @@ def test_par_builtin_case_speedup_exceeds_one_with_sleep_handlers():
     # critical path, so the speedup is real but sub-linear.
     assert case.speedup > 1.0
     assert case.baseline.envelope_bytes == case.variant.envelope_bytes
+
+
+def test_par_builtin_case_runs_clean_on_any_machine():
+    """Functional companion: the PAR harness runs correctly regardless
+    of core count — verifies dispatches, child runs, and envelope
+    accounting without asserting wall-clock speedup."""
+    par = builtin_cases(latency_seconds=TINY_LATENCY)[2]
+    report = run_benchmark([par], repetitions=1)
+    case = report.cases[0]
+    assert case.baseline.dispatches > 0
+    assert case.variant.dispatches == case.baseline.dispatches
+    assert case.variant.child_runs == 5
+    assert case.variant.authored_plans == 1
+    assert case.variant.authored_steps == 3
+    assert case.baseline.envelope_bytes == case.variant.envelope_bytes
+    assert case.baseline.envelope_bytes > 0
 
 
 def test_scatter_case_is_width_invariant_and_not_faster():
