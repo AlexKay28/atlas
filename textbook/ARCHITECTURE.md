@@ -67,6 +67,7 @@ TAHOE
 | **Debug** | Observed ≠ expected | Q + F + E → H → V → D/X → V.regression → OUT | 03 §Debug |
 | **Review** | Evaluate an artifact | CTX + C → E + R → D/X → OUT | 03 §Review |
 | **Learn** | Transferable understanding | Q → H → E → V.recall + V.transfer → OUT | 03 §Learn |
+| **Induce** | Pattern derivation from observations | E + Q → H → V → F/U → OUT | 03 §Induce |
 
 ## Protocol selection rule
 
@@ -84,7 +85,7 @@ if task evaluates an artifact:                   → Review
 if task builds transferable knowledge:          → Learn
 ```
 
-## Command catalog (17 commands)
+## Command catalog (18 commands)
 
 | Command | Purpose | Effect class |
 |---|---|---|
@@ -105,6 +106,7 @@ if task builds transferable knowledge:          → Learn
 | `hypothesize` | Propose testable claim | pure |
 | `prove` | Establish claim from evidence | pure |
 | `delegate` | Dispatch subtask to worker | effectful |
+| `induce` | Derive general pattern from observations | pure |
 
 ## Thinking rules (15 rules, summarized)
 

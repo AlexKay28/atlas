@@ -37,6 +37,7 @@ BUILTIN_NAMES = (
     "extract",
     "fetch",
     "hypothesize",
+    "induce",
     "prove",
     "rank",
     "recall",
@@ -78,6 +79,11 @@ FORMAL_COMMANDS = (
 # Issue #25: runtime-authored child plans.
 DELEGATE_COMMANDS = (
     "delegate",
+)
+
+# Issue #79: inductive reasoning.
+INDUCE_COMMANDS = (
+    "induce",
 )
 
 CONTRACT_FIELDS = (
@@ -248,6 +254,7 @@ def test_decision_commands_extend_the_nine_originals():
         | set(EFFECTFUL_COMMANDS)
         | set(FORMAL_COMMANDS)
         | set(DELEGATE_COMMANDS)
+        | set(INDUCE_COMMANDS)
     )
 
 
@@ -732,3 +739,34 @@ def test_registry_errors_share_base_class():
     assert issubclass(UnknownCommandError, RegistryError)
     assert issubclass(ReservedNameError, RegistryError)
     assert issubclass(ContractError, RegistryError)
+
+
+# --- induce command (issue #79) -------------------------------------------------
+
+
+def test_induce_is_in_builtin_names(registry):
+    assert "induce" in registry.names()
+
+
+def test_induce_effect_class_is_pure(registry):
+    spec = registry.resolve("induce", "1.0.0")
+    assert spec.effect_class is EffectClass.PURE
+
+
+def test_induce_routing_minimum_tier_is_t2(registry):
+    spec = registry.resolve("induce", "1.0.0")
+    assert spec.routing.minimum_tier is RoutingTier.T2
+
+
+def test_induce_declares_expected_failures(registry):
+    spec = registry.resolve("induce", "1.0.0")
+    kinds = {failure.kind for failure in spec.failures}
+    assert FailureKind.INSUFFICIENT_EXAMPLES in kinds
+    assert FailureKind.NO_COMMON_PATTERN in kinds
+    assert FailureKind.ALL_RULES_FALSIFIED in kinds
+
+
+def test_induce_has_done_condition(registry):
+    spec = registry.resolve("induce", "1.0.0")
+    assert isinstance(spec.done, str) and spec.done.strip()
+    assert "falsifier" in spec.done

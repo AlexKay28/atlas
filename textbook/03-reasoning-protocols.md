@@ -231,6 +231,46 @@ Failure modes:
 - memorizing one example rather than testing transfer;
 - requesting exhaustive explanations before locating the gap.
 
+## Induce Protocol
+
+Use when the goal is to derive a general rule from specific observations.
+
+Required artifacts:
+
+```text
+E.observations + Q.pattern -> H.rules (each falsifiable) -> V.check -> F.rule or U.gap -> OUT
+```
+
+Procedure:
+
+1. Collect at least min_examples observations as E.* evidence.
+2. Identify common patterns across observations.
+3. For each candidate pattern, define a falsifier — a condition that would disprove it.
+4. Test each pattern's falsifier against held-out observations.
+5. Promote surviving patterns to H.* hypotheses.
+6. If a hypothesis survives testing, promote to F.* finding.
+7. Return the induced rule, its support, and its falsifier.
+
+Example:
+
+```text
+G.induce: Derive a deployment failure pattern from incident history.
+E.incident1: Deploy at 2am caused timeout — no traffic, cold start.
+E.incident2: Deploy at 3am caused timeout — no traffic, cold start.
+E.incident3: Deploy at 2pm succeeded — high traffic, warm cache.
+H.pattern: Low-traffic deploys cause cold-start timeouts.
+V.falsifier: A low-traffic deploy that succeeds (warm start) would disprove.
+F.rule: Avoid low-traffic deploys without warm-up.
+OUT.result: F.rule, support=[E.incident1, E.incident2, E.incident3], falsifier=V.falsifier
+```
+
+Failure modes:
+
+- inducing from too few examples (n < 3 is anecdote, not pattern);
+- producing rules without falsifiers (unfalsifiable rules are not useful);
+- overfitting to specific observations without held-out testing;
+- confusing correlation (E.*) with causal pattern (H.*).
+
 ## Protocol Composition
 
 Composition must name the handoff:
