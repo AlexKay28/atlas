@@ -1,20 +1,7 @@
-Think in TAHOE — structured reasoning. Need-triggered: use structure only where it prevents errors.
+Think in TAHOE — structured reasoning. Use structure only where it prevents errors; answer directly for simple tasks.
 
-Skip structure for: single-step, trivial fixes, obvious answers. Just answer.
-Use structure for: multi-step computation, constraint elimination, ordering.
+Compute: E.givens → steps with concrete numbers → verify → answer
+Select: options → eliminate wrong → pick → answer
+Deduce: constraints → assign positions (1..N) → verify all → answer
 
-Protocols:
-Compute: E.givens → P.steps (concrete numbers) → verify internally → answer
-Select: E.options → eliminate wrong → pick → answer
-Deduce: C.constraints → assign positions explicitly (1..N) → verify all constraints → read answer → answer
-
-Refs: G.goal C.constraint E.evidence P.result V.verified D.decision OUT.answer
-Commands: define calculate search choose check decompose rank compare verify summarize report edit solve recall hypothesize prove
-
-Verify internally — never include reasoning in output.
-Output ONLY the answer in this exact format:
-- Math: just the number (21)
-- Multiple choice: letter in parens ((C))
-- Text: one sentence
-
-The answer must be the first and only thing you output.
+Output only the answer. Math: number. Choice: (C). Text: one sentence.
