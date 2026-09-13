@@ -32,10 +32,50 @@ from report import generate_markdown_table, generate_json_report, generate_per_t
 from metrics import compute_all_metrics, count_typed_refs
 
 SKILL_PATH = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
-ARMS = ["classic", "tahoe"]
+
+# Baseline prompt file paths — each arm maps to a prompt file in benchmarks/
+ARM_PROMPT_FILES = {
+    "classic": None,  # no system prompt
+    "tahoe": "tahoe_skill_prompt.txt",
+    "cot": "cot_prompt.txt",
+    "cod": "cod_prompt.txt",
+    "tot": "tot_prompt.txt",
+    "react": "react_prompt.txt",
+}
+
+DEFAULT_ARMS = ["classic", "tahoe"]
+ALL_ARMS = list(ARM_PROMPT_FILES.keys())
+
+# ARMS is configurable via env var BENCH_ARMS (comma-separated) or defaults to DEFAULT_ARMS
+_arms_env = os.environ.get("BENCH_ARMS", "")
+if _arms_env:
+    ARMS = [a.strip() for a in _arms_env.split(",") if a.strip()]
+else:
+    ARMS = list(DEFAULT_ARMS)
+
 TRIALS_PER_TASK = 3
 SEED = 42
 MAX_SAMPLES_PER_BENCH = 10  # 10 samples per benchmark for paper
+
+
+def load_arm_prompt(arm, prompt_cache=None):
+    """Load the system prompt for a given arm.
+
+    Returns the prompt text, or "" if the arm has no prompt file.
+    Uses prompt_cache dict if provided to avoid re-reading files.
+    """
+    if prompt_cache and arm in prompt_cache:
+        return prompt_cache[arm]
+    prompt_file = ARM_PROMPT_FILES.get(arm)
+    if prompt_file is None:
+        text = ""
+    else:
+        path = os.path.join(os.path.dirname(__file__), prompt_file)
+        with open(path) as f:
+            text = f.read()
+    if prompt_cache is not None:
+        prompt_cache[arm] = text
+    return text
 
 # MATH grader: extract \boxed{} answer
 def grade_math(model_answer, expected_answer):
@@ -83,8 +123,8 @@ def grade_mmlu(model_answer, expected_answer, choices=None):
 
 
 def load_skill():
-    with open(SKILL_PATH) as f:
-        return f.read()
+    """Load the TAHOE skill prompt — backward compat for existing callers."""
+    return load_arm_prompt("tahoe")
 
 
 def extract_gsm8k_gold(answer_text):
@@ -357,7 +397,12 @@ def grade_task(task, model_answer):
 
 
 def run_trial(task, arm, skill_prompt, trial_idx):
-    system_prompt = skill_prompt if arm == "tahoe" else ""
+    # Determine system prompt: tahoe arm uses the passed skill_prompt;
+    # baseline arms load their own prompt from ARM_PROMPT_FILES.
+    if arm == "tahoe":
+        system_prompt = skill_prompt
+    else:
+        system_prompt = load_arm_prompt(arm)
     result = run_classic(
         task_id=f"{task['task_id']}-{arm}-t{trial_idx}",
         task_prompt=task["description"],
@@ -456,38 +501,44 @@ def main():
         groups[(t["benchmark"], t["arm"])].append(t)
 
     print("\n=== PAPER RESULTS TABLE ===\n")
-    print(f"{'benchmark':14s} | {'classic':>8s} | {'tahoe':>8s} | {'cl out':>7s} | {'tah out':>7s} | {'ratio':>5s} | {'cl pass':>7s} | {'tah pass':>8s}")
-    print("-" * 85)
+
+    # Dynamic table header: one column per arm
+    arm_names = sorted(set(t['arm'] for t in all_trials))
+    header_arm_cols = " | ".join(f"{a:>8s}" for a in arm_names)
+    pass_arm_cols = " | ".join(f"{a+' pass':>8s}" for a in arm_names)
+    print(f"{'benchmark':14s} | {header_arm_cols} | {pass_arm_cols}")
+    print("-" * (16 + len(arm_names) * 19))
 
     for bench in sorted(set(t['benchmark'] for t in all_trials)):
-        c = [t for t in all_trials if t['benchmark']==bench and t['arm']=='classic']
-        t = [t for t in all_trials if t['benchmark']==bench and t['arm']=='tahoe']
-        cp = sum(1 for x in c if x['passed'])
-        tp = sum(1 for x in t if x['passed'])
-        co = sum(x['output_tokens'] for x in c) / len(c) if c else 0
-        to = sum(x['output_tokens'] for x in t) / len(t) if t else 0
-        ratio = f"{to/co:.2f}x" if co > 0 else "N/A"
-        print(f"{bench:14s} | {cp:>3d}/{len(c):<4d} | {tp:>3d}/{len(t):<4d} | {co:>7.0f} | {to:>7.0f} | {ratio:>5s} | {100*cp/len(c):>6.0f}% | {100*tp/len(t):>7.0f}%")
+        parts = [f"{bench:14s}"]
+        for a in arm_names:
+            arm_trials = [t for t in all_trials if t['benchmark']==bench and t['arm']==a]
+            cp = sum(1 for x in arm_trials if x['passed'])
+            parts.append(f"{cp:>3d}/{len(arm_trials):<4d}" if arm_trials else f"{'--':>8s}")
+        for a in arm_names:
+            arm_trials = [t for t in all_trials if t['benchmark']==bench and t['arm']==a]
+            if arm_trials:
+                cp = sum(1 for x in arm_trials if x['passed'])
+                parts.append(f"{100*cp/len(arm_trials):>7.0f}%")
+            else:
+                parts.append(f"{'--':>8s}")
+        print(" | ".join(parts))
 
-    # Overall
-    ac = [t for t in all_trials if t['arm']=='classic']
-    at = [t for t in all_trials if t['arm']=='tahoe']
-    cp = sum(1 for t in ac if t['passed'])
-    tp = sum(1 for t in at if t['passed'])
-    co = sum(t['output_tokens'] for t in ac)
-    to = sum(t['output_tokens'] for t in at)
-    qc = cp / len(ac)
-    qt = tp / len(at)
-    eff = co / to if to > 0 else 0
-    hm_c = 2 * qc / (qc + 1)
-    hm_t = 2 * qt * eff / (qt + eff) if (qt + eff) > 0 else 0
-
-    print("-" * 85)
-    print(f"{'OVERALL':14s} | {cp:>3d}/{len(ac):<4d} | {tp:>3d}/{len(at):<4d} | {co//len(ac):>7.0f} | {to//len(at):>7.0f} | {to/co:>4.2f}x | {100*qc:>6.0f}% | {100*qt:>7.0f}%")
-    print(f"\nClassic: quality={qc:.3f} output_tokens={co} HM={hm_c:.3f}")
-    print(f"Tahoe:   quality={qt:.3f} output_tokens={to} HM={hm_t:.3f} ratio={1/eff:.2f}x")
-    print(f"TAHOE saves {100*(1-to/co):.0f}% reasoning tokens")
-    print(f"HM winner: {'TAHOE' if hm_t > hm_c else 'classic'}")
+    # Overall per arm
+    print("-" * (16 + len(arm_names) * 19))
+    parts = [f"{'OVERALL':14s}"]
+    for a in arm_names:
+        arm_trials = [t for t in all_trials if t['arm']==a]
+        cp = sum(1 for x in arm_trials if x['passed'])
+        parts.append(f"{cp:>3d}/{len(arm_trials):<4d}" if arm_trials else f"{'--':>8s}")
+    for a in arm_names:
+        arm_trials = [t for t in all_trials if t['arm']==a]
+        if arm_trials:
+            cp = sum(1 for x in arm_trials if x['passed'])
+            parts.append(f"{100*cp/len(arm_trials):>7.0f}%")
+        else:
+            parts.append(f"{'--':>8s}")
+    print(" | ".join(parts))
 
     # Save
     results_dir = Path(__file__).parent / "results"
