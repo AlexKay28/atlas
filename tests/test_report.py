@@ -103,12 +103,12 @@ def test_generate_markdown_table_format():
     table = generate_markdown_table(build_trials())
     lines = table.split("\n")
 
-    assert lines[0] == "| task_id | arm | trials | pass_rate | mean_quality | mean_tokens | p25 | p50 | p75 | mean_wall | tokens/success |"
-    assert lines[1] == "|---|---|---|---|---|---|---|---|---|---|---|"
+    assert lines[0] == "| task_id | arm | trials | pass_rate | mean_quality | mean_tokens | p25 | p50 | p75 | mean_wall | tokens/success | RE | RC | RR |"
+    assert lines[1] == "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     assert len(lines) == 11
 
-    assert "| t1 | classic | 5 | 0.60 | 0.44 | 300.00 | 200.00 | 300.00 | 400.00 | 12.00 | 333.33 |" in lines
-    assert "| t1 | tahoe | 5 | 0.60 | 0.52 | 310.00 | 210.00 | 310.00 | 410.00 | 12.00 | 276.67 |" in lines
+    assert "| t1 | classic | 5 | 0.60 | 0.44 | 300.00 | 200.00 | 300.00 | 400.00 | 12.00 | 333.33 | 0.0000 | 0.0000 | 0.0000 |" in lines
+    assert "| t1 | tahoe | 5 | 0.60 | 0.52 | 310.00 | 210.00 | 310.00 | 410.00 | 12.00 | 276.67 | 0.0000 | 0.0000 | 0.0000 |" in lines
 
     data_rows = lines[2:]
     assert all(row.startswith("| t") and row.endswith("|") for row in data_rows)
@@ -146,7 +146,10 @@ def test_generate_json_report_structure():
                 "mean_input_tokens", "mean_output_tokens",
                 "mean_authoring_tokens", "mean_quality",
                 "p25_quality", "p75_quality",
-                "tokens_per_success"} <= set(group)
+                "tokens_per_success",
+                "re_reasoning_efficiency",
+                "rc_reasoning_concentration",
+                "rr_redundancy_rate"} <= set(group)
 
 
 def test_generate_per_task_comparison_format():
@@ -163,7 +166,7 @@ def test_generate_per_task_comparison_format():
     assert first[1] == "|---|---|---|---|---|"
 
     metrics = [line.split("|")[2].strip() for line in first[2:]]
-    assert metrics == ["pass_rate", "mean_tokens", "p25_tokens", "p75_tokens", "mean_wall", "mean_quality", "tokens_per_success"]
+    assert metrics == ["pass_rate", "mean_tokens", "p25_tokens", "p75_tokens", "mean_wall", "mean_quality", "tokens_per_success", "re_reasoning_efficiency", "rc_reasoning_concentration", "rr_redundancy_rate"]
 
     assert "| t1 | pass_rate | 0.60 | 0.80 | 0.60 |" in first
     assert "| t1 | mean_tokens | 300.00 | 305.00 | 310.00 |" in first

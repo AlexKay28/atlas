@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner_classic import run as run_classic
 from report import generate_markdown_table, generate_json_report, generate_per_task_comparison
+from metrics import compute_all_metrics
 
 SKILL_PATH = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
 ARMS = ["classic", "tahoe"]
@@ -186,6 +187,13 @@ def run_trial(task, arm, skill_prompt, trial_idx):
         system_prompt=system_prompt,
     )
     passed, detail = grade_task(task, result.final_answer)
+
+    verified_steps = getattr(result, "verified_logical_steps", 0) or 0
+    typed_refs = getattr(result, "typed_refs_produced", 0) or 0
+    repeated_refs = getattr(result, "repeated_refs", 0) or 0
+    retired_refs = getattr(result, "retired_refs", 0) or 0
+    total_refs = getattr(result, "total_refs_produced", 0) or 0
+
     return {
         "task_id": task["task_id"],
         "benchmark": task["benchmark"],
@@ -201,6 +209,11 @@ def run_trial(task, arm, skill_prompt, trial_idx):
         "final_answer": result.final_answer,
         "quality_score": 1.0 if passed else 0.0,
         "grader_detail": detail,
+        "verified_logical_steps": verified_steps,
+        "typed_refs_produced": typed_refs,
+        "repeated_refs": repeated_refs,
+        "retired_refs": retired_refs,
+        "total_refs_produced": total_refs,
     }
 
 
@@ -243,6 +256,11 @@ def main():
                 "failure_class": "error",
                 "final_answer": f"ERROR: {e}",
                 "quality_score": 0.0,
+                "verified_logical_steps": 0,
+                "typed_refs_produced": 0,
+                "repeated_refs": 0,
+                "retired_refs": 0,
+                "total_refs_produced": 0,
             })
 
     print("\n=== RESULTS (per benchmark) ===\n")
@@ -253,14 +271,23 @@ def main():
     for t in all_trials:
         groups[(t["benchmark"], t["arm"])].append(t)
 
-    print("| benchmark | arm | trials | pass_rate | mean_tokens | mean_wall |")
-    print("|---|---|---|---|---|---|")
+    print("| benchmark | arm | trials | pass_rate | mean_tokens | mean_wall | RE | RC | RR |")
+    print("|---|---|---|---|---|---|---|---|---|")
     for (bench, arm) in sorted(groups):
         trials = groups[(bench, arm)]
         passed = sum(1 for t in trials if t["passed"])
         mean_tokens = sum(t["total_tokens"] for t in trials) / len(trials)
         mean_wall = sum(t["wall_seconds"] for t in trials) / len(trials)
-        print(f"| {bench} | {arm} | {len(trials)} | {passed}/{len(trials)} ({100*passed/len(trials):.0f}%) | {mean_tokens:.0f} | {mean_wall:.1f}s |")
+        rm = compute_all_metrics({
+            "verified_logical_steps": sum(t.get("verified_logical_steps", 0) for t in trials),
+            "total_tokens": sum(t.get("total_tokens", 0) for t in trials),
+            "typed_refs_produced": sum(t.get("typed_refs_produced", 0) for t in trials),
+            "output_tokens": sum(t.get("output_tokens", 0) for t in trials),
+            "repeated_refs": sum(t.get("repeated_refs", 0) for t in trials),
+            "retired_refs": sum(t.get("retired_refs", 0) for t in trials),
+            "total_refs_produced": sum(t.get("total_refs_produced", 0) for t in trials),
+        })
+        print(f"| {bench} | {arm} | {len(trials)} | {passed}/{len(trials)} ({100*passed/len(trials):.0f}%) | {mean_tokens:.0f} | {mean_wall:.1f}s | {rm['re_reasoning_efficiency']:.4f} | {rm['rc_reasoning_concentration']:.4f} | {rm['rr_redundancy_rate']:.4f} |")
 
     # Save
     results_dir = Path("eval/results")
