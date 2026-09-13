@@ -32,6 +32,7 @@ from tahoe.syntax import is_typed_reference
 from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Try, Conditional
 from tahoe.syntax import is_typed_reference, parse_program as parse_program_text
 from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Reformulate, First
+from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Reformulate, Await
 
 # Re-import constants and helpers from engine modules (issue #38 extraction).
 from tahoe.runtime.delegate import (
@@ -274,6 +275,7 @@ class DriveEngine:
                 or entry.try_ is not None
                 or entry.reformulate is not None
                 or entry.first is not None
+                or entry.await_ is not None
             ):
                 # Issue #22: the global deadline is checked before each
                 # dispatch, mirroring the other entry kinds.
@@ -366,6 +368,8 @@ class DriveEngine:
                     )
                 elif entry.first is not None:
                     result = self._execute_first_entry(
+                elif entry.await_ is not None:
+                    result = self._execute_await_entry(
                         program,
                         run_id,
                         entry,
@@ -2388,6 +2392,10 @@ class DriveEngine:
     # ------------------------------------------------------------------
 
     def _execute_first_entry(
+    # AWAIT execution stub (issue #77 — not yet implemented)
+    # ------------------------------------------------------------------
+
+    def _execute_await_entry(
         self,
         program: Program,
         run_id: str,
@@ -2411,6 +2419,14 @@ class DriveEngine:
         return self._fail_run(
             run_id, plan, statement_to_task, idx,
             "FIRST event-choice is not yet implemented",
+        """Execute one AWAIT statement (issue #77).
+
+        PARSING ONLY — the event system is not yet implemented.  This stub
+        blocks the run with an "await not yet implemented" warning.
+        """
+        return self._fail_run(
+            run_id, plan, statement_to_task, idx,
+            "AWAIT is not yet implemented",
         )
 
     @staticmethod

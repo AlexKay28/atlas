@@ -184,7 +184,7 @@ def main():
     print()
     print(generate_per_task_comparison(all_trials))
 
-    results_dir = Path("benchmarks/results")
+    results_dir = Path(__file__).parent / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     with open(results_dir / "trials.json", "w") as f:
         json.dump(all_trials, f, indent=2, sort_keys=True)

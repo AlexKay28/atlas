@@ -322,6 +322,8 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
                 continue
             if entry.first is not None:
                 # Issue #76: a FIRST block creates no task of its own —
+            if entry.await_ is not None:
+                # Issue #77: an AWAIT statement creates no task —
                 # the event system is not yet implemented.
                 continue
             task = create_ledger.create_task(
@@ -895,6 +897,7 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             if entry.par is None and entry.loop is None
             and entry.reformulate is None
             and entry.first is None
+            and entry.await_ is None
         ]
         if len(task_ids) > len(static_positions):
             # Issue #4: tasks beyond the plan's own entries are per-candidate

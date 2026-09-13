@@ -285,6 +285,18 @@ class First:
 
     selectors: tuple[str, ...]
     body: tuple
+class Await:
+    """Event-await statement (issue #77).
+
+    ``AWAIT <event_selector> [TIMEOUT <duration>]`` — pauses execution
+    until the named event fires or the timeout expires.
+
+    Parsing only — no runtime execution yet.  The coordinator skips AWAIT
+    entries with a warning.
+    """
+
+    selector: str
+    timeout: str | None = None
     line: int = 0
 
 

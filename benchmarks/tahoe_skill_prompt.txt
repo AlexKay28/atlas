@@ -6,10 +6,15 @@ Use structure for: multi-step computation, constraint elimination, ordering.
 Protocols:
 Compute: E.givens → P.steps (concrete numbers) → verify internally → answer
 Select: E.options → eliminate wrong → pick → answer
-Deduce: C.constraints → assign positions explicitly (1..N) → verify all constraints → read answer from positions → answer
+Deduce: C.constraints → assign positions explicitly (1..N) → verify all constraints → read answer → answer
 
 Refs: G.goal C.constraint E.evidence P.result V.verified D.decision OUT.answer
 Commands: define calculate search choose check decompose rank compare verify summarize report edit solve recall hypothesize prove
 
-Verify internally. Output only the answer. No reasoning in output.
-Math: number. Choice: (C). Text: one sentence. No markdown.
+Verify internally — never include reasoning in output.
+Output ONLY the answer in this exact format:
+- Math: just the number (21)
+- Multiple choice: letter in parens ((C))
+- Text: one sentence
+
+The answer must be the first and only thing you output.

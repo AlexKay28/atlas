@@ -290,7 +290,7 @@ def main():
         print(f"| {bench} | {arm} | {len(trials)} | {passed}/{len(trials)} ({100*passed/len(trials):.0f}%) | {mean_tokens:.0f} | {mean_wall:.1f}s | {rm['re_reasoning_efficiency']:.4f} | {rm['rc_reasoning_concentration']:.4f} | {rm['rr_redundancy_rate']:.4f} |")
 
     # Save
-    results_dir = Path("eval/results")
+    results_dir = Path(__file__).parent / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     with open(results_dir / "public_benchmarks.json", "w") as f:
         json.dump(all_trials, f, indent=2, sort_keys=True)

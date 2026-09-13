@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 from tahoe.syntax import is_typed_reference
 from tahoe.syntax.model import (
+    Await,
     Call,
     Conditional,
     Declaration,
@@ -71,6 +72,7 @@ class PlanEntry:
     try_: "Try | None" = None
     reformulate: "Reformulate | None" = None
     first: "First | None" = None
+    await_: "Await | None" = None
     task_prefix: str = ""
     binds: tuple[tuple[str, tuple, tuple], ...] = ()
     finalizes: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -137,6 +139,8 @@ def build_plan(program: Program) -> list[PlanEntry]:
                 entries.append(PlanEntry(reformulate=statement))
             elif isinstance(statement, First):
                 entries.append(PlanEntry(first=statement))
+            elif isinstance(statement, Await):
+                entries.append(PlanEntry(await_=statement))
             elif isinstance(statement, Gather):
                 entries.append(PlanEntry(gather=statement))
 
@@ -168,6 +172,8 @@ def task_text(entry: PlanEntry) -> str:
         return "REFORMULATE"
     if entry.first is not None:
         return f"FIRST ({len(entry.first.selectors)} selectors)"
+    if entry.await_ is not None:
+        return f"AWAIT {entry.await_.selector}"
     if entry.gather is not None:
         gather = entry.gather
         return (
@@ -220,6 +226,7 @@ def collect_anchors(program: Program) -> dict[int, list]:
             elif isinstance(statement, Call):
                 count += 1
             elif isinstance(statement, (Scatter, Gather, Par, Loop, Try, Reformulate, First)):
+            elif isinstance(statement, (Scatter, Gather, Par, Loop, Try, Reformulate, Await)):
                 count += 1
         return count
 
