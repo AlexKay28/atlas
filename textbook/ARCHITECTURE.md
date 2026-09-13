@@ -71,6 +71,7 @@ TAHOE
 | **Learn** | Transferable understanding | Q → H → E → V.recall + V.transfer → OUT | 03 §Learn |
 | **Bayes** | Probabilistic belief updating | H + PR.prior + E → PR.likelihood → PR.posterior → V → OUT | 07 §Bayes |
 | **Induce** | Pattern derivation from observations | E + Q → H → V → F/U → OUT | 03 §Induce |
+| **Counterfactual** | What would have happened if X had not occurred | Q + H + E → H → V → F → OUT | 09 |
 
 ## Protocol selection rule
 
