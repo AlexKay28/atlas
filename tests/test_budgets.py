@@ -583,3 +583,141 @@ def test_budget_deadline_exceeded_exception_message():
     """The typed deadline error records the standard failure reason."""
     exc = BudgetDeadlineExceeded("deadline exceeded")
     assert str(exc) == "deadline exceeded"
+
+
+# ---------------------------------------------------------------------------
+# Issue #85: token-budget and output-size enforcement
+# ---------------------------------------------------------------------------
+
+SIMPLE_PROGRAM = """\
+PROGRAM tokenbudget VERSION 1.0
+INPUT
+    G.a = "a"
+    G.b = "b"
+step.first: DO define(goal = G.a) -> OUT.a
+step.second: DO define(goal = G.b) -> OUT.b
+RETURN OUT.a, OUT.b
+"""
+
+
+def test_token_budget_blocks_dispatch_when_exceeded():
+    """A token budget cap blocks dispatch when remaining tokens are too low."""
+    gate = BudgetGate(ExecutionBudget(max_total_tokens=100))
+    # Simulate spending most of the budget
+    gate.add_tokens(95)
+    # A command needing 10 tokens should be blocked (only 5 remain)
+    assert gate.check_token_budget(10, gate.remaining_tokens(100)) is False
+    # A command needing 5 tokens should be allowed (exactly 5 remain)
+    assert gate.check_token_budget(5, gate.remaining_tokens(100)) is True
+    # A command needing 0 tokens should always be allowed
+    assert gate.check_token_budget(0, gate.remaining_tokens(100)) is True
+
+
+def test_token_usage_accumulated_across_invocations():
+    """Token usage from record_token_usage accumulates across calls."""
+    gate = BudgetGate(ExecutionBudget(max_total_tokens=1000))
+    assert gate.spent_tokens == 0
+    gate.record_token_usage(input_tokens=100, output_tokens=50)
+    assert gate.spent_tokens == 150
+    gate.record_token_usage(input_tokens=200, output_tokens=100)
+    assert gate.spent_tokens == 450
+    assert gate.remaining_tokens(1000) == 550
+
+
+def test_token_budget_blocks_run_when_exceeded(tmp_path):
+    """Token cap exhaustion is detected by the BudgetGate."""
+    gate = BudgetGate(ExecutionBudget(max_total_tokens=150))
+    gate.add_tokens(151)
+    assert gate.token_cap_exceeded()
+
+    gate2 = BudgetGate(ExecutionBudget(max_total_tokens=1000))
+    gate2.add_tokens(500)
+    assert not gate2.token_cap_exceeded()
+    gate2.add_tokens(501)
+    assert gate2.token_cap_exceeded()
+
+
+def test_pre_dispatch_token_budget_blocks_invocation(tmp_path):
+    """When max_total_tokens is too low for any single command, dispatch is blocked."""
+    def define(goal: Any = None, **_: Any) -> Any:
+        return f"defined:{goal}"
+
+    store = EventStore(str(tmp_path / "ev2.sqlite"))
+    coordinator = SequentialCoordinator(
+        store, DeterministicWorker({"define": define})
+    )
+    program = parse_program(SIMPLE_PROGRAM)
+    # define has max_tokens=2000 in the builtin registry; set total budget
+    # to 1000 — less than the command needs for even one dispatch
+    result = coordinator.execute(
+        program,
+        "tokenblocked",
+        budget=ExecutionBudget(max_total_tokens=1000),
+    )
+    assert result["status"] == "failed"
+    assert result["error"] == "insufficient_token_budget"
+
+
+def test_output_size_check_rejects_oversized_results(tmp_path):
+    """max_output_bytes rejects results whose serialized size exceeds the cap."""
+    big_payload = "x" * 200000
+
+    def define(goal: Any = None, **_: Any) -> Any:
+        return big_payload
+
+    store = EventStore(str(tmp_path / "ev3.sqlite"))
+    coordinator = SequentialCoordinator(
+        store, DeterministicWorker({"define": define})
+    )
+    program = parse_program(
+        """\
+PROGRAM bigout VERSION 1.0
+INPUT
+    G.a = "a"
+step.only: DO define(goal = G.a) -> OUT.a
+RETURN OUT.a
+"""
+    )
+    # No budget gate — the output-size check runs independently
+    result = coordinator.execute(program, "bigout")
+    assert result["status"] == "failed"
+    assert result["error"] == "output_too_large"
+
+
+def test_max_tokens_per_invocation_ceiling(tmp_path):
+    """When output tokens exceed the command's max_tokens, the run fails."""
+    def define(goal: Any = None, **_: Any) -> Any:
+        return {
+            "result": f"defined:{goal}",
+            "_receipt": {
+                "usage": {
+                    "tokens": 5000,
+                    "output_tokens": 5000,
+                    "input_tokens": 100,
+                },
+            },
+        }
+
+    store = EventStore(str(tmp_path / "ev4.sqlite"))
+    coordinator = SequentialCoordinator(
+        store, DeterministicWorker({"define": define})
+    )
+    program = parse_program(
+        """\
+PROGRAM tokenceiling VERSION 1.0
+INPUT
+    G.a = "a"
+step.only: DO define(goal = G.a) -> OUT.a
+RETURN OUT.a
+"""
+    )
+    result = coordinator.execute(program, "tokenceiling")
+    assert result["status"] == "failed"
+    assert result["error"] == "budget_exceeded"
+
+
+def test_budget_exceeded_enum_exists():
+    """FailureKind.BUDGET_EXCEEDED is a valid enum member."""
+    from tahoe.registry.enums import FailureKind
+
+    assert FailureKind.BUDGET_EXCEEDED.value == "budget_exceeded"

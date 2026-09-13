@@ -54,6 +54,8 @@ from tahoe.runtime.helpers import (
     _PAR_INVOCATION_RE,
     _effectful_commands,
     _command_max_attempts,
+    _command_max_tokens,
+    _command_max_output_bytes,
     map_results_to_targets,
     evaluate_done_predicate,
     evaluate_condition,
@@ -877,6 +879,25 @@ class DriveEngine:
                     break
                 attempt_counts[invocation_id] = prior_attempts + 1
 
+            # Issue #85: pre-dispatch token budget check.
+            cmd_max_tokens = _command_max_tokens(statement.command)
+            if (
+                gate is not None
+                and cmd_max_tokens is not None
+                and cmd_max_tokens > 0
+            ):
+                total_cap = gate.budget.max_total_tokens
+                if total_cap is not None:
+                    remaining = gate.remaining_tokens(total_cap)
+                    if not gate.check_token_budget(cmd_max_tokens, remaining):
+                        failed = True
+                        error_msg = "insufficient_token_budget"
+                        finish_failed_invocation(
+                            idx, statement.step_id, invocation_id,
+                            task_id, error_msg,
+                        )
+                        break
+
             try:
                 result = self._execute_worker_call(
                     statement.command, resolved_kwargs, gate
@@ -921,6 +942,53 @@ class DriveEngine:
                     error_msg = "token budget exceeded"
                     finish_failed_invocation(
                         idx, statement.step_id, invocation_id, task_id, error_msg
+                    )
+                    break
+
+            # Issue #85: post-result token ceiling check — if output
+            # tokens exceeded the command's max_tokens, mark BUDGET_EXCEEDED.
+            cmd_max_tokens = _command_max_tokens(statement.command)
+            if (
+                cmd_max_tokens is not None
+                and cmd_max_tokens > 0
+                and isinstance(result, dict)
+            ):
+                receipt = result.get("_receipt")
+                if isinstance(receipt, dict):
+                    usage = receipt.get("usage")
+                    if isinstance(usage, dict):
+                        out_tokens = usage.get("output_tokens")
+                        if (
+                            isinstance(out_tokens, int)
+                            and not isinstance(out_tokens, bool)
+                            and out_tokens > cmd_max_tokens
+                        ):
+                            failed = True
+                            error_msg = "budget_exceeded"
+                            finish_failed_invocation(
+                                idx, statement.step_id, invocation_id,
+                                task_id, error_msg,
+                            )
+                            break
+
+            # Issue #85: post-result output-size check — reject oversized
+            # results before commit.
+            cmd_max_bytes = _command_max_output_bytes(statement.command)
+            if cmd_max_bytes is not None and cmd_max_bytes > 0:
+                try:
+                    import json as _json
+                    payload_size = len(
+                        _json.dumps(result, ensure_ascii=False, default=str)
+                        .encode("utf-8")
+                    )
+                except Exception:
+                    payload_size = 0
+                if payload_size > cmd_max_bytes:
+                    failed = True
+                    error_msg = "output_too_large"
+                    finish_failed_invocation(
+                        idx, statement.step_id, invocation_id,
+                        task_id, error_msg,
                     )
                     break
 
@@ -2699,6 +2767,25 @@ class DriveEngine:
                     )
                 attempt_counts[invocation_id] = prior_attempts + 1
 
+            # Issue #85: pre-dispatch token budget check (concurrent path).
+            cmd_max_tokens = _command_max_tokens(statement.command)
+            if (
+                gate is not None
+                and cmd_max_tokens is not None
+                and cmd_max_tokens > 0
+            ):
+                total_cap = gate.budget.max_total_tokens
+                if total_cap is not None:
+                    remaining = gate.remaining_tokens(total_cap)
+                    if not gate.check_token_budget(cmd_max_tokens, remaining):
+                        return (
+                            "run_failed",
+                            finish_failed_invocation(
+                                idx, statement.step_id, invocation_id,
+                                task_id, "insufficient_token_budget",
+                            ),
+                        )
+
             # Issue #41: thread claims through the concurrent path.
             # Effectful dispatches claim workspace:<run_id>:<invocation_id>
             # for the handler's duration, mirroring the sequential loop.
@@ -2900,6 +2987,45 @@ class DriveEngine:
                     return finish_failed_invocation(
                         idx, statement.step_id, invocation_id, task_id,
                         "token budget exceeded",
+                    )
+
+            # Issue #85: post-result token ceiling check (concurrent path).
+            cmd_max_tokens = _command_max_tokens(statement.command)
+            if (
+                cmd_max_tokens is not None
+                and cmd_max_tokens > 0
+                and isinstance(result, dict)
+            ):
+                receipt = result.get("_receipt")
+                if isinstance(receipt, dict):
+                    usage = receipt.get("usage")
+                    if isinstance(usage, dict):
+                        out_tokens = usage.get("output_tokens")
+                        if (
+                            isinstance(out_tokens, int)
+                            and not isinstance(out_tokens, bool)
+                            and out_tokens > cmd_max_tokens
+                        ):
+                            return finish_failed_invocation(
+                                idx, statement.step_id, invocation_id,
+                                task_id, "budget_exceeded",
+                            )
+
+            # Issue #85: post-result output-size check (concurrent path).
+            cmd_max_bytes = _command_max_output_bytes(statement.command)
+            if cmd_max_bytes is not None and cmd_max_bytes > 0:
+                try:
+                    import json as _json
+                    payload_size = len(
+                        _json.dumps(result, ensure_ascii=False, default=str)
+                        .encode("utf-8")
+                    )
+                except Exception:
+                    payload_size = 0
+                if payload_size > cmd_max_bytes:
+                    return finish_failed_invocation(
+                        idx, statement.step_id, invocation_id,
+                        task_id, "output_too_large",
                     )
 
             target_values, validation_error = map_results_to_targets(
