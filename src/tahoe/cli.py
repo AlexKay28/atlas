@@ -450,6 +450,30 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_typecheck(args: argparse.Namespace) -> int:
+    from tahoe.typecheck import check_program_types
+
+    try:
+        text = _load_source(args.program)
+        program = parse_program(text)
+        validate_program(program, known_commands=_builtin_command_names())
+    except ParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    errors = check_program_types(program, builtin_registry())
+    if errors:
+        for err in errors:
+            print(f"warning: {err}", file=sys.stderr)
+        print(f"{len(errors)} type warning(s)", file=sys.stderr)
+        return 0
+    print("no type errors")
+    return 0
+
+
 def _cmd_seal(args: argparse.Namespace) -> int:
     try:
         text = _load_source(args.program)
@@ -1070,6 +1094,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_lint = sub.add_parser("lint", help="Parse and validate a program")
     p_lint.add_argument("program", help="Path to .think source file")
     p_lint.set_defaults(func=_cmd_lint)
+
+    p_tc = sub.add_parser("typecheck", help="Run the static type checker on a program")
+    p_tc.add_argument("program", help="Path to .think source file")
+    p_tc.set_defaults(func=_cmd_typecheck)
 
     p_seal = sub.add_parser("seal", help="Print the sealed sha256 digest")
     p_seal.add_argument("program", help="Path to .think source file")

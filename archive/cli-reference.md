@@ -5,7 +5,7 @@
 
 ## Overview
 
-The `tahoe` CLI provides 13 subcommands for linting, sealing, executing,
+The `tahoe` CLI provides 14 subcommands for linting, sealing, executing,
 inspecting, and auditing programs, plus external-driver and benchmark
 tooling. All subcommands use argparse and the standard library only.
 
@@ -14,6 +14,7 @@ tooling. All subcommands use argparse and the standard library only.
 | Subcommand | Required flags | Optional flags | Purpose |
 | --- | --- | --- | --- |
 | `lint` | `program` | — | Parse and validate a `.think` program file against the builtin registry |
+| `typecheck` | `program` | — | Run the static type checker with subtyping lattice on a `.think` program (advisory warnings, exit 0) |
 | `seal` | `program` | — | Print the sealed SHA-256 digest (`--v2` selects the canonical v2 digest: parsed condition AST + sorted barrier union; default v1 is byte-compatible with all historical seals) of a program |
 | `run` | `program`, `--db`, `--run-id`, `--seal` | `--workspace`, `--worker` | Execute a sealed program with deterministic or model worker |
 | `resume` | `--db`, `--run-id`, `--program`, `--seal` | `--workspace`, `--worker` | Resume an interrupted run after a crash |
