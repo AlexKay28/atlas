@@ -1,0 +1,18 @@
+task_id: hard-scheduling
+description: >
+  Schedule 5 tasks (A, B, C, D, E) into 5 time slots (1-5).
+  Constraints:
+  1. Task A must be before Task C.
+  2. Task B must be immediately before Task D (consecutive slots).
+  3. Task E cannot be in slot 1 or slot 5.
+  4. Task A must be in a slot with a number less than Task E's slot.
+  5. Task C is in slot 3.
+  
+  What slot is Task D in? Answer with just the number.
+expected_state:
+  value: 4
+grader:
+  type: numeric
+  params:
+    value: 4
+difficulty: hard

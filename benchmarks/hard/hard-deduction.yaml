@@ -1,0 +1,21 @@
+task_id: hard-deduction
+description: >
+  Seven books are arranged on a shelf from left to right (positions 1-7).
+  Constraints:
+  1. The red book is left of the green book.
+  2. The blue book is immediately right of the red book.
+  3. The yellow book is not at either end.
+  4. The black book is to the right of the green book but left of the white book.
+  5. The orange book is not adjacent to the red book.
+  6. The green book is in position 4.
+  7. The white book is at the rightmost position.
+  8. The yellow book is adjacent to the black book.
+  
+  What position is the orange book in? Answer with just the number.
+expected_state:
+  value: 1
+grader:
+  type: numeric
+  params:
+    value: 1
+difficulty: hard
