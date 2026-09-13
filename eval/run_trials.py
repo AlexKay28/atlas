@@ -55,9 +55,6 @@ def grade_trial(task, arm_result):
     grader_type = task["grader"]["type"]
     grader = make_grader(grader_type)
     answer = arm_result.get("final_answer", "")
-    # Normalize TAHOE JSON output: extract the value from common wrappers
-    if arm_result.get("arm") == "tahoe":
-        answer = _normalize_tahoe_answer(answer)
     passed, detail = grader(answer, task.get("expected_state", {}))
     quality = 1.0 if passed else 0.0
     return passed, quality, detail
@@ -159,94 +156,40 @@ def run_opencode_arm(task, trial_idx):
 
 
 def run_tahoe_arm(task, trial_idx):
-    from tahoe.syntax import parse_program
-    from tahoe.runtime import EventStore, SequentialCoordinator
-    from tahoe.worker_adapter import make_worker
+    """TAHOE arm: classic + TAHOE thinking skill as system prompt.
 
-    program_source = task.get("program_source", "")
-    if not program_source.strip():
-        return {
-            "task_id": task["task_id"],
-            "arm": "tahoe",
-            "trial": trial_idx,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-            "wall_seconds": 0.0,
-            "passed": False,
-            "failure_class": "no_program",
-            "authoring_tokens": 0,
-            "final_answer": "",
-        }
+    Q + tahoe_skill -> {thinking*tahoe} answer
+    Same single API call as classic. The only difference is the system prompt
+    that teaches the model to structure its reasoning in TAHOE.
+    """
+    skill_prompt_path = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
+    with open(skill_prompt_path) as f:
+        system_prompt = f.read()
 
-    started = time.monotonic()
-    tmpdir = tempfile.mkdtemp()
-    db_path = os.path.join(tmpdir, "events.db")
-    try:
-        program = parse_program(program_source)
-        store = EventStore(path=db_path)
-        api_base = os.environ.get("TAHOE_API_BASE", "")
-        api_key = os.environ.get("TAHOE_API_KEY", "")
-        if api_base and api_key:
-            worker = make_worker(1, api_base=api_base, api_key=api_key,
-                                 model=os.environ.get("TAHOE_MODEL", "."))
-        else:
-            from tahoe.runtime.coordinator import DeterministicWorker
-            from tahoe.registry import builtin_registry
-            reg = builtin_registry()
-            handlers = {name: reg.resolve(name) for name in reg.names()}
-            worker = DeterministicWorker(handlers=handlers)
-        coordinator = SequentialCoordinator(store=store, worker=worker)
-        run_id = f"ablation-{task['task_id']}-t{trial_idx}"
-        coordinator.execute(program, run_id=run_id)
-        events = store.events(run_id)
-        final_answer = ""
-        for ev in reversed(events):
-            if ev.event_type == "invocation.result_received":
-                final_answer = str(ev.payload.get("result", ""))
-                break
-        if not final_answer:
-            for ev in reversed(events):
-                if ev.event_type == "run.finished":
-                    final_answer = str(ev.payload.get("status", ""))
-                    break
-
-        input_tokens = getattr(worker, "total_input_tokens", 0)
-        output_tokens = getattr(worker, "total_output_tokens", 0)
-
-        run_status = "succeeded"
-        for ev in reversed(events):
-            if ev.event_type == "run.finished":
-                run_status = ev.payload.get("status", "failed")
-                break
-
-        return {
-            "task_id": task["task_id"],
-            "arm": "tahoe",
-            "trial": trial_idx,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
-            "wall_seconds": time.monotonic() - started,
-            "passed": run_status == "succeeded",
-            "failure_class": "none" if run_status == "succeeded" else "run_failed",
-            "authoring_tokens": 0,
-            "final_answer": final_answer,
-        }
-    except Exception as exc:
-        return {
-            "task_id": task["task_id"],
-            "arm": "tahoe",
-            "trial": trial_idx,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-            "wall_seconds": time.monotonic() - started,
-            "passed": False,
-            "failure_class": "error",
-            "authoring_tokens": 0,
-            "final_answer": f"ERROR: {exc}",
-        }
+    result = run_classic(
+        task_id=task["task_id"],
+        task_prompt=task["description"],
+        model=os.environ.get("TAHOE_MODEL", "."),
+        api_base=os.environ.get("TAHOE_API_BASE", ""),
+        api_key=os.environ.get("TAHOE_API_KEY", ""),
+        max_turns=1,
+        max_tokens=1024,
+        timeout_seconds=60,
+        system_prompt=system_prompt,
+    )
+    return {
+        "task_id": task["task_id"],
+        "arm": "tahoe",
+        "trial": trial_idx,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "total_tokens": result.total_tokens,
+        "wall_seconds": result.wall_seconds,
+        "passed": result.passed,
+        "failure_class": result.failure_class,
+        "authoring_tokens": 0,
+        "final_answer": result.final_answer,
+    }
 
 
 ARM_RUNNERS = {

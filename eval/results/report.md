@@ -2,87 +2,87 @@
 
 | task_id | arm | trials | pass_rate | mean_quality | mean_tokens | p25 | p50 | p75 | mean_wall | tokens/success |
 |---|---|---|---|---|---|---|---|---|---|---|
-| code-fix-01 | classic | 5 | 1.00 | 1.00 | 350.80 | 331.00 | 335.00 | 357.00 | 1.53 | 350.80 |
-| code-fix-01 | tahoe | 5 | 1.00 | 1.00 | 815.80 | 770.00 | 832.00 | 861.00 | 2.95 | 815.80 |
-| code-fix-02 | classic | 5 | 1.00 | 1.00 | 370.20 | 257.00 | 296.00 | 489.00 | 1.65 | 370.20 |
-| code-fix-02 | tahoe | 5 | 1.00 | 1.00 | 721.60 | 671.00 | 688.00 | 748.00 | 2.69 | 721.60 |
-| plan-01 | classic | 5 | 0.80 | 0.80 | 526.20 | 526.00 | 528.00 | 549.00 | 2.44 | 520.50 |
-| plan-01 | tahoe | 5 | 0.00 | 0.00 | 1099.60 | 962.00 | 993.00 | 1290.00 | 4.14 | 0.00 |
-| recover-01 | classic | 5 | 0.80 | 0.80 | 400.40 | 339.00 | 383.00 | 429.00 | 1.90 | 362.50 |
-| recover-01 | tahoe | 5 | 0.00 | 0.00 | 1084.80 | 857.00 | 952.00 | 1221.00 | 4.09 | 0.00 |
-| routing-01 | classic | 5 | 1.00 | 1.00 | 362.20 | 325.00 | 355.00 | 391.00 | 1.25 | 362.20 |
-| routing-01 | tahoe | 5 | 1.00 | 1.00 | 889.60 | 804.00 | 877.00 | 880.00 | 3.10 | 889.60 |
-| routing-02 | classic | 5 | 0.20 | 0.20 | 599.00 | 599.00 | 599.00 | 599.00 | 2.39 | 599.00 |
-| routing-02 | tahoe | 5 | 1.00 | 1.00 | 829.40 | 735.00 | 797.00 | 823.00 | 2.70 | 829.40 |
-| search-01 | classic | 5 | 1.00 | 1.00 | 211.60 | 196.00 | 199.00 | 235.00 | 0.75 | 211.60 |
-| search-01 | tahoe | 5 | 1.00 | 1.00 | 523.60 | 495.00 | 511.00 | 565.00 | 1.70 | 523.60 |
+| code-fix-01 | classic | 5 | 0.80 | 0.80 | 413.80 | 351.00 | 406.00 | 472.00 | 1.91 | 378.00 |
+| code-fix-01 | tahoe | 5 | 1.00 | 1.00 | 547.00 | 510.00 | 521.00 | 559.00 | 1.37 | 547.00 |
+| code-fix-02 | classic | 5 | 1.00 | 1.00 | 274.60 | 208.00 | 295.00 | 337.00 | 2.74 | 274.60 |
+| code-fix-02 | tahoe | 5 | 1.00 | 1.00 | 447.20 | 398.00 | 410.00 | 496.00 | 0.78 | 447.20 |
+| plan-01 | classic | 5 | 0.20 | 0.20 | 549.00 | 549.00 | 549.00 | 549.00 | 2.54 | 549.00 |
+| plan-01 | tahoe | 5 | 0.80 | 0.80 | 760.80 | 744.00 | 770.00 | 777.00 | 2.59 | 784.75 |
+| recover-01 | classic | 5 | 0.80 | 0.80 | 404.60 | 358.00 | 393.00 | 445.00 | 2.21 | 367.75 |
+| recover-01 | tahoe | 5 | 1.00 | 1.00 | 536.40 | 560.00 | 571.00 | 576.00 | 1.33 | 536.40 |
+| routing-01 | classic | 5 | 1.00 | 1.00 | 326.60 | 308.00 | 320.00 | 335.00 | 1.11 | 326.60 |
+| routing-01 | tahoe | 5 | 1.00 | 1.00 | 527.40 | 517.00 | 531.00 | 535.00 | 1.09 | 527.40 |
+| routing-02 | classic | 5 | 0.20 | 0.20 | 599.00 | 599.00 | 599.00 | 599.00 | 2.63 | 599.00 |
+| routing-02 | tahoe | 5 | 1.00 | 1.00 | 1044.20 | 975.00 | 976.00 | 1146.00 | 2.95 | 1044.20 |
+| search-01 | classic | 5 | 1.00 | 1.00 | 208.40 | 203.00 | 206.00 | 207.00 | 0.76 | 208.40 |
+| search-01 | tahoe | 5 | 1.00 | 1.00 | 515.20 | 462.00 | 476.00 | 581.00 | 1.25 | 515.20 |
 
 | task_id | metric | classic | tahoe |
 |---|---|---|---|
-| code-fix-01 | pass_rate | 1.00 | 1.00 |
-| code-fix-01 | mean_tokens | 350.80 | 815.80 |
-| code-fix-01 | p25_tokens | 331.00 | 770.00 |
-| code-fix-01 | p75_tokens | 357.00 | 861.00 |
-| code-fix-01 | mean_wall | 1.53 | 2.95 |
-| code-fix-01 | mean_quality | 1.00 | 1.00 |
-| code-fix-01 | tokens_per_success | 350.80 | 815.80 |
+| code-fix-01 | pass_rate | 0.80 | 1.00 |
+| code-fix-01 | mean_tokens | 413.80 | 547.00 |
+| code-fix-01 | p25_tokens | 351.00 | 510.00 |
+| code-fix-01 | p75_tokens | 472.00 | 559.00 |
+| code-fix-01 | mean_wall | 1.91 | 1.37 |
+| code-fix-01 | mean_quality | 0.80 | 1.00 |
+| code-fix-01 | tokens_per_success | 378.00 | 547.00 |
 
 | task_id | metric | classic | tahoe |
 |---|---|---|---|
 | code-fix-02 | pass_rate | 1.00 | 1.00 |
-| code-fix-02 | mean_tokens | 370.20 | 721.60 |
-| code-fix-02 | p25_tokens | 257.00 | 671.00 |
-| code-fix-02 | p75_tokens | 489.00 | 748.00 |
-| code-fix-02 | mean_wall | 1.65 | 2.69 |
+| code-fix-02 | mean_tokens | 274.60 | 447.20 |
+| code-fix-02 | p25_tokens | 208.00 | 398.00 |
+| code-fix-02 | p75_tokens | 337.00 | 496.00 |
+| code-fix-02 | mean_wall | 2.74 | 0.78 |
 | code-fix-02 | mean_quality | 1.00 | 1.00 |
-| code-fix-02 | tokens_per_success | 370.20 | 721.60 |
+| code-fix-02 | tokens_per_success | 274.60 | 447.20 |
 
 | task_id | metric | classic | tahoe |
 |---|---|---|---|
-| plan-01 | pass_rate | 0.80 | 0.00 |
-| plan-01 | mean_tokens | 526.20 | 1099.60 |
-| plan-01 | p25_tokens | 526.00 | 962.00 |
-| plan-01 | p75_tokens | 549.00 | 1290.00 |
-| plan-01 | mean_wall | 2.44 | 4.14 |
-| plan-01 | mean_quality | 0.80 | 0.00 |
-| plan-01 | tokens_per_success | 520.50 | 0.00 |
+| plan-01 | pass_rate | 0.20 | 0.80 |
+| plan-01 | mean_tokens | 549.00 | 760.80 |
+| plan-01 | p25_tokens | 549.00 | 744.00 |
+| plan-01 | p75_tokens | 549.00 | 777.00 |
+| plan-01 | mean_wall | 2.54 | 2.59 |
+| plan-01 | mean_quality | 0.20 | 0.80 |
+| plan-01 | tokens_per_success | 549.00 | 784.75 |
 
 | task_id | metric | classic | tahoe |
 |---|---|---|---|
-| recover-01 | pass_rate | 0.80 | 0.00 |
-| recover-01 | mean_tokens | 400.40 | 1084.80 |
-| recover-01 | p25_tokens | 339.00 | 857.00 |
-| recover-01 | p75_tokens | 429.00 | 1221.00 |
-| recover-01 | mean_wall | 1.90 | 4.09 |
-| recover-01 | mean_quality | 0.80 | 0.00 |
-| recover-01 | tokens_per_success | 362.50 | 0.00 |
+| recover-01 | pass_rate | 0.80 | 1.00 |
+| recover-01 | mean_tokens | 404.60 | 536.40 |
+| recover-01 | p25_tokens | 358.00 | 560.00 |
+| recover-01 | p75_tokens | 445.00 | 576.00 |
+| recover-01 | mean_wall | 2.21 | 1.33 |
+| recover-01 | mean_quality | 0.80 | 1.00 |
+| recover-01 | tokens_per_success | 367.75 | 536.40 |
 
 | task_id | metric | classic | tahoe |
 |---|---|---|---|
 | routing-01 | pass_rate | 1.00 | 1.00 |
-| routing-01 | mean_tokens | 362.20 | 889.60 |
-| routing-01 | p25_tokens | 325.00 | 804.00 |
-| routing-01 | p75_tokens | 391.00 | 880.00 |
-| routing-01 | mean_wall | 1.25 | 3.10 |
+| routing-01 | mean_tokens | 326.60 | 527.40 |
+| routing-01 | p25_tokens | 308.00 | 517.00 |
+| routing-01 | p75_tokens | 335.00 | 535.00 |
+| routing-01 | mean_wall | 1.11 | 1.09 |
 | routing-01 | mean_quality | 1.00 | 1.00 |
-| routing-01 | tokens_per_success | 362.20 | 889.60 |
+| routing-01 | tokens_per_success | 326.60 | 527.40 |
 
 | task_id | metric | classic | tahoe |
 |---|---|---|---|
 | routing-02 | pass_rate | 0.20 | 1.00 |
-| routing-02 | mean_tokens | 599.00 | 829.40 |
-| routing-02 | p25_tokens | 599.00 | 735.00 |
-| routing-02 | p75_tokens | 599.00 | 823.00 |
-| routing-02 | mean_wall | 2.39 | 2.70 |
+| routing-02 | mean_tokens | 599.00 | 1044.20 |
+| routing-02 | p25_tokens | 599.00 | 975.00 |
+| routing-02 | p75_tokens | 599.00 | 1146.00 |
+| routing-02 | mean_wall | 2.63 | 2.95 |
 | routing-02 | mean_quality | 0.20 | 1.00 |
-| routing-02 | tokens_per_success | 599.00 | 829.40 |
+| routing-02 | tokens_per_success | 599.00 | 1044.20 |
 
 | task_id | metric | classic | tahoe |
 |---|---|---|---|
 | search-01 | pass_rate | 1.00 | 1.00 |
-| search-01 | mean_tokens | 211.60 | 523.60 |
-| search-01 | p25_tokens | 196.00 | 495.00 |
-| search-01 | p75_tokens | 235.00 | 565.00 |
-| search-01 | mean_wall | 0.75 | 1.70 |
+| search-01 | mean_tokens | 208.40 | 515.20 |
+| search-01 | p25_tokens | 203.00 | 462.00 |
+| search-01 | p75_tokens | 207.00 | 581.00 |
+| search-01 | mean_wall | 0.76 | 1.25 |
 | search-01 | mean_quality | 1.00 | 1.00 |
-| search-01 | tokens_per_success | 211.60 | 523.60 |
+| search-01 | tokens_per_success | 208.40 | 515.20 |

@@ -71,6 +71,7 @@ def run(
     timeout_seconds: int = 120,
     tools: list[dict] | None = None,
     tool_implementations: dict[str, Callable[..., Any]] | None = None,
+    system_prompt: str = "",
 ) -> ClassicResult:
     """Run one task through a plain chat-completions loop and return a ClassicResult."""
     resolved_key = api_key or os.environ.get(ENV_API_KEY, "")
@@ -91,7 +92,10 @@ def run(
     }
     client = openai.OpenAI(**client_kwargs)
 
-    messages: list[dict[str, Any]] = [{"role": "user", "content": task_prompt}]
+    messages: list[dict[str, Any]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": task_prompt})
     request_kwargs: dict[str, Any] = {
         "model": model,
         "messages": messages,
