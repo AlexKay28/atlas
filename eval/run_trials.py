@@ -72,7 +72,11 @@ def _normalize_tahoe_answer(answer):
     try:
         data = json.loads(answer)
     except (json.JSONDecodeError, ValueError):
-        # Not JSON — return as-is
+        # Not JSON — try extracting a number from prose like "Committed refs: 16"
+        import re
+        nums = re.findall(r'\b(\d+)\b', answer)
+        if nums:
+            return nums[-1]  # last number is usually the answer
         return answer
     # Common wrapper patterns
     if isinstance(data, dict):
@@ -82,7 +86,6 @@ def _normalize_tahoe_answer(answer):
                 if isinstance(val, (str, int, float)):
                     return str(val)
                 if isinstance(val, dict):
-                    # Try one more level
                     for k2 in ("answer", "result", "value"):
                         if k2 in val:
                             return str(val[k2])
@@ -91,8 +94,17 @@ def _normalize_tahoe_answer(answer):
         if len(data) == 1:
             val = list(data.values())[0]
             return str(val) if not isinstance(val, (dict, list)) else json.dumps(val)
+        # Look for any numeric value in the dict
+        for k, v in data.items():
+            if isinstance(v, (int, float)):
+                return str(v)
     if isinstance(data, (int, float)):
         return str(data)
+    # Fallback: extract last number from string
+    import re
+    nums = re.findall(r'\b(\d+)\b', answer)
+    if nums:
+        return nums[-1]
     return answer
 
 

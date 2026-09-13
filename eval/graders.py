@@ -19,6 +19,7 @@ __all__ = [
     "JSONFieldGrader",
     "TestPassGrader",
     "CompositeGrader",
+    "NumericGrader",
     "make_grader",
 ]
 
@@ -150,12 +151,36 @@ class CompositeGrader:
                 raise ValueError(f"invalid sub-grader spec: {spec!r}")
 
 
+class NumericGrader:
+    """Extracts the first number from the answer and compares to expected.
+
+    Handles markdown tables, sentences, JSON wrappers, and TAHOE metadata.
+    """
+
+    def __init__(self):
+        import re
+        self._re = re.compile(r"(?<!\d)(\d+)(?!\d)")
+
+    def __call__(self, result, expected_state: dict) -> tuple[bool, str]:
+        expected = expected_state.get("value")
+        if expected is None:
+            return False, "expected_state is missing 'value'"
+        text = result if isinstance(result, str) else str(result)
+        numbers = self._re.findall(text)
+        if not numbers:
+            return False, f"no number found in result: {text[:100]!r}"
+        if str(expected) in numbers:
+            return True, f"found expected number {expected}"
+        return False, f"expected {expected}, found numbers: {numbers}"
+
+
 _GRADER_TYPES = {
     "exact_match": ExactMatchGrader,
     "contains": ContainsGrader,
     "json_field": JSONFieldGrader,
     "test_pass": TestPassGrader,
     "composite": CompositeGrader,
+    "numeric": NumericGrader,
 }
 
 
