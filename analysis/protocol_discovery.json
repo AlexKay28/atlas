@@ -1,0 +1,282 @@
+{
+  "total_trials": 300,
+  "passed": 267,
+  "failed": 33,
+  "pass_rate": 0.89,
+  "all_refs_found": [],
+  "emergent_refs": [],
+  "vocab_refs_found": [],
+  "clusters": [
+    {
+      "name": "no_refs|no_patterns",
+      "size": 275,
+      "pass_rate": 0.8945,
+      "mean_score": 0.2851,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "mmlu_math": 22,
+        "mmlu_acct": 28,
+        "race": 30,
+        "mmlu_logic": 27,
+        "gsm8k": 27,
+        "arc": 30,
+        "bbh_arith": 30,
+        "lsat": 30,
+        "bbh_track": 26,
+        "bbh": 25
+      }
+    },
+    {
+      "name": "bench:race|no_patterns",
+      "size": 30,
+      "pass_rate": 0.8,
+      "mean_score": 0.27,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "race": 30
+      }
+    },
+    {
+      "name": "bench:arc|no_patterns",
+      "size": 30,
+      "pass_rate": 0.8667,
+      "mean_score": 0.28,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "arc": 30
+      }
+    },
+    {
+      "name": "bench:bbh_arith|no_patterns",
+      "size": 30,
+      "pass_rate": 1.0,
+      "mean_score": 0.3,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "bbh_arith": 30
+      }
+    },
+    {
+      "name": "bench:lsat|no_patterns",
+      "size": 30,
+      "pass_rate": 1.0,
+      "mean_score": 0.3,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "lsat": 30
+      }
+    },
+    {
+      "name": "bench:mmlu_acct|no_patterns",
+      "size": 28,
+      "pass_rate": 1.0,
+      "mean_score": 0.3,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "mmlu_acct": 28
+      }
+    },
+    {
+      "name": "bench:mmlu_logic|no_patterns",
+      "size": 27,
+      "pass_rate": 1.0,
+      "mean_score": 0.3,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "mmlu_logic": 27
+      }
+    },
+    {
+      "name": "bench:gsm8k|no_patterns",
+      "size": 27,
+      "pass_rate": 0.8519,
+      "mean_score": 0.2856,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "gsm8k": 27
+      }
+    },
+    {
+      "name": "bench:bbh_track|no_patterns",
+      "size": 26,
+      "pass_rate": 0.6923,
+      "mean_score": 0.2538,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "bbh_track": 26
+      }
+    },
+    {
+      "name": "bench:bbh|no_patterns",
+      "size": 25,
+      "pass_rate": 0.8,
+      "mean_score": 0.2713,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "bbh": 25
+      }
+    },
+    {
+      "name": "bench:mmlu_math|no_patterns",
+      "size": 22,
+      "pass_rate": 0.9091,
+      "mean_score": 0.2864,
+      "common_refs": [],
+      "common_patterns": [],
+      "benchmark_distribution": {
+        "mmlu_math": 22
+      }
+    },
+    {
+      "name": "no_refs|sequence",
+      "size": 3,
+      "pass_rate": 1.0,
+      "mean_score": 0.34,
+      "common_refs": [],
+      "common_patterns": [
+        "sequence"
+      ],
+      "benchmark_distribution": {
+        "bbh": 1,
+        "mmlu_math": 1,
+        "gsm8k": 1
+      }
+    },
+    {
+      "name": "no_refs|assumption",
+      "size": 3,
+      "pass_rate": 1.0,
+      "mean_score": 0.3095,
+      "common_refs": [],
+      "common_patterns": [
+        "assumption"
+      ],
+      "benchmark_distribution": {
+        "mmlu_acct": 2,
+        "mmlu_logic": 1
+      }
+    },
+    {
+      "name": "no_refs|compute",
+      "size": 3,
+      "pass_rate": 0.3333,
+      "mean_score": 0.339,
+      "common_refs": [],
+      "common_patterns": [
+        "compute"
+      ],
+      "benchmark_distribution": {
+        "gsm8k": 2,
+        "mmlu_math": 1
+      }
+    },
+    {
+      "name": "no_refs|ordering+sequence",
+      "size": 2,
+      "pass_rate": 1.0,
+      "mean_score": 0.35,
+      "common_refs": [],
+      "common_patterns": [
+        "sequence",
+        "ordering"
+      ],
+      "benchmark_distribution": {
+        "bbh": 2
+      }
+    },
+    {
+      "name": "bench:mmlu_acct|assumption",
+      "size": 2,
+      "pass_rate": 1.0,
+      "mean_score": 0.3143,
+      "common_refs": [],
+      "common_patterns": [
+        "assumption"
+      ],
+      "benchmark_distribution": {
+        "mmlu_acct": 2
+      }
+    },
+    {
+      "name": "bench:gsm8k|compute",
+      "size": 2,
+      "pass_rate": 0.0,
+      "mean_score": 0.3586,
+      "common_refs": [],
+      "common_patterns": [
+        "compute"
+      ],
+      "benchmark_distribution": {
+        "gsm8k": 2
+      }
+    },
+    {
+      "name": "bench:bbh|ordering+sequence",
+      "size": 2,
+      "pass_rate": 1.0,
+      "mean_score": 0.35,
+      "common_refs": [],
+      "common_patterns": [
+        "sequence",
+        "ordering"
+      ],
+      "benchmark_distribution": {
+        "bbh": 2
+      }
+    }
+  ],
+  "protocol_sequences": [],
+  "emergent_sequences": [],
+  "pattern_pass_rate": {
+    "assumption": 1.0,
+    "ordering": 1.0,
+    "tracking": 1.0,
+    "verification": 1.0,
+    "no_patterns": 0.8945454545454545,
+    "sequence": 0.8888888888888888,
+    "table": 0.8,
+    "compute": 0.75,
+    "deduction": 0.7142857142857143,
+    "formula": 0.5
+  },
+  "score_correlation": {
+    "trajectory_overall": 0.1259,
+    "trajectory_protocol_match": -0.0138,
+    "trajectory_ref_usage": 0.0,
+    "trajectory_verification": -0.0159,
+    "trajectory_token_efficiency": 0.0,
+    "trajectory_completeness": 0.0,
+    "trajectory_answer_correct": 0.8788
+  },
+  "benchmark_pass_rates": {
+    "mmlu_math": 0.9,
+    "mmlu_acct": 1.0,
+    "race": 0.8,
+    "bbh": 0.8,
+    "mmlu_logic": 1.0,
+    "gsm8k": 0.8,
+    "arc": 0.8667,
+    "bbh_arith": 1.0,
+    "lsat": 1.0,
+    "bbh_track": 0.7333
+  },
+  "answer_format_distribution": {
+    "letter_paren": 156,
+    "letter_plain": 75,
+    "number": 40,
+    "dollar": 4,
+    "letter_bold": 6,
+    "short_text": 15,
+    "extended_reasoning": 4
+  }
+}
