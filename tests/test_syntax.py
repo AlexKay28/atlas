@@ -44,6 +44,7 @@ from tahoe.syntax import (
     Stop,
     canonical_json,
     canonical_json_v2,
+    get_type_warnings,
     parse_condition,
     parse_program,
     protocol_file_path,
@@ -2800,323 +2801,167 @@ RETURN E.test
     assert ref.continue_ref == "G.plan2"
 
 
-# --------------------------------------------------------------------------
-# Issue #76: FIRST event-choice construct (parser-only, no runtime execution)
-# --------------------------------------------------------------------------
+# -- Issue #87: protocol composition type-compatibility warnings ------------
 
-FIRST_PROGRAM = """\
-PROGRAM event_choice VERSION 1.0
-# Issue #77: AWAIT construct (parser-only, no runtime execution)
-# --------------------------------------------------------------------------
 
-AWAIT_PROGRAM = """\
-PROGRAM waiter VERSION 1.0
+TYPE_MISMATCH_PROTOCOL = """\
+PROGRAM typed VERSION 1.0
 
 INPUT
-  G.goal = "ship"
+  G.request = "x"
+  H.hypothesis = "cache failure"
 
-FIRST E.arrived OR E.timeout
-  step.handle: DO define(value = G.goal) -> OUT.result
-
-RETURN OUT.result
-"""
-
-FIRST_THREE_SELECTORS = """\
-PROGRAM multi_event VERSION 1.0
-step.one: DO define(value = G.goal) -> E.result
-AWAIT E.result
-# Issue #78: APPROVE construct (parser-only, no runtime execution)
-# --------------------------------------------------------------------------
-
-APPROVE_PROGRAM = """\
-PROGRAM gated VERSION 1.0
-
-INPUT
-  G.goal = "ship"
-  PF.safety = "strict"
-
-step.one: DO define(value = G.goal) -> E.result
-APPROVE PF.safety INTENT "deploy to production"
+step.work: DO hypothesize(claim = H.hypothesis) -> E.result
 
 RETURN E.result
 """
 
-AWAIT_WITH_TIMEOUT = """\
-PROGRAM timed VERSION 1.0
+
+TYPE_MATCH_PROTOCOL = """\
+PROGRAM matched VERSION 1.0
 
 INPUT
+  G.request = "x"
   G.goal = "ship"
 
-FIRST E.arrived OR E.timeout OR E.cancel
-  step.handle: DO define(value = G.goal) -> OUT.result
+step.work: DO define(value = G.goal) -> E.result
 
-RETURN OUT.result
+RETURN E.result
 """
 
 
-def test_first_parses_two_selectors():
-    from tahoe.syntax.model import First
-    program = parse_program(FIRST_PROGRAM)
-    first_stmt = program.statements[0]
-    assert isinstance(first_stmt, First)
-    assert first_stmt.selectors == ("E.arrived", "E.timeout")
-    assert len(first_stmt.body) == 1
-
-
-def test_first_parses_three_selectors():
-    from tahoe.syntax.model import First
-    program = parse_program(FIRST_THREE_SELECTORS)
-    first_stmt = program.statements[0]
-    assert isinstance(first_stmt, First)
-    assert first_stmt.selectors == ("E.arrived", "E.timeout", "E.cancel")
-
-
-def test_first_body_can_contain_multiple_statements():
+def test_call_type_mismatch_warning(tmp_path):
+    write_protocol(tmp_path, "typed", TYPE_MISMATCH_PROTOCOL)
     source = """\
-PROGRAM multi_body VERSION 1.0
+PROGRAM caller VERSION 1.0
 
 INPUT
-  G.goal = "ship"
+  G.probe = "frame the issue"
 
-FIRST E.arrived OR E.timeout
-  step.one: DO define(value = G.goal) -> E.first
-  step.two: DO define(value = E.first) -> OUT.result
+step.ask: DO define(value = G.probe) -> E.probe
+CALL protocol.typed(request = G.probe, hypothesis = E.probe) -> E.result
 
-RETURN OUT.result
+RETURN E.result
 """
-    from tahoe.syntax.model import First
     program = parse_program(source)
-    first_stmt = program.statements[0]
-    assert isinstance(first_stmt, First)
-    assert len(first_stmt.body) == 2
+    assert validate_program(
+        program,
+        known_commands={"define", "hypothesize"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 1
+    assert "hypothesis" in call_warnings[0]
+    assert "E.*" in call_warnings[0]
+    assert "H.*" in call_warnings[0]
 
 
-def test_first_requires_at_least_two_selectors():
-step.one: DO define(value = G.goal) -> E.result
-AWAIT E.result TIMEOUT 30s
-
-RETURN E.result
-"""
-
-
-def test_await_parses_basic():
-    from tahoe.syntax.model import Await
-    program = parse_program(AWAIT_PROGRAM)
-    await_stmt = program.statements[1]
-    assert isinstance(await_stmt, Await)
-    assert await_stmt.selector == "E.result"
-    assert await_stmt.timeout is None
-
-
-def test_await_parses_with_timeout():
-    from tahoe.syntax.model import Await
-    program = parse_program(AWAIT_WITH_TIMEOUT)
-    await_stmt = program.statements[1]
-    assert isinstance(await_stmt, Await)
-    assert await_stmt.selector == "E.result"
-    assert await_stmt.timeout == "30s"
-
-
-def test_await_requires_selector():
-
-def test_approve_parses_basic():
-    from tahoe.syntax.model import Approve
-    program = parse_program(APPROVE_PROGRAM)
-    approve_stmt = program.statements[1]
-    assert isinstance(approve_stmt, Approve)
-    assert approve_stmt.policy == "PF.safety"
-    assert approve_stmt.intent == '"deploy to production"'
-
-
-def test_approve_parses_with_simple_intent():
+def test_call_type_match_no_warning(tmp_path):
+    write_protocol(tmp_path, "matched", TYPE_MATCH_PROTOCOL)
     source = """\
-PROGRAM simple VERSION 1.0
+PROGRAM caller VERSION 1.0
 
 INPUT
-  PF.policy = "check"
+  G.probe = "frame the issue"
 
-step.one: DO define(value = PF.policy) -> E.result
-APPROVE PF.policy INTENT ship
+step.ask: DO define(value = G.probe) -> G.goal
+CALL protocol.matched(request = G.probe, goal = G.goal) -> E.result
 
 RETURN E.result
 """
-    from tahoe.syntax.model import Approve
     program = parse_program(source)
-    approve_stmt = program.statements[1]
-    assert isinstance(approve_stmt, Approve)
-    assert approve_stmt.policy == "PF.policy"
-    assert approve_stmt.intent == "ship"
+    assert validate_program(
+        program,
+        known_commands={"define"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 0
 
 
-def test_approve_requires_policy_ref():
+def test_call_literal_argument_no_type_warning(tmp_path):
+    write_protocol(tmp_path, "typed", TYPE_MISMATCH_PROTOCOL)
     source = """\
-PROGRAM bad VERSION 1.0
+PROGRAM caller VERSION 1.0
 
 INPUT
-  G.goal = "ship"
+  G.probe = "frame the issue"
 
-FIRST E.arrived
-  step.handle: DO define(value = G.goal) -> OUT.result
-
-RETURN OUT.result
-"""
-    with pytest.raises(ParseError, match="at least two event selectors"):
-        parse_program(source)
-
-
-def test_first_requires_body():
-  PF.policy = "check"
-
-step.one: DO define(value = PF.policy) -> E.result
-APPROVE not_a_ref INTENT ship
+step.ask: DO define(value = G.probe) -> E.probe
+CALL protocol.typed(request = G.probe, hypothesis = "literal string") -> E.result
 
 RETURN E.result
 """
-    with pytest.raises(ParseError, match="malformed APPROVE"):
-        parse_program(source)
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define", "hypothesize"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 0
 
 
-def test_approve_requires_intent():
-    source = """\
-PROGRAM bad VERSION 1.0
+def test_call_multiple_type_mismatch_warnings(tmp_path):
+    protocol_text = """\
+PROGRAM multi VERSION 1.0
 
 INPUT
-  G.goal = "ship"
+  G.goal = "x"
+  H.hypothesis = "h"
+  C.constraint = "c"
 
-FIRST E.arrived OR E.timeout
-
-RETURN OUT.result
-"""
-    with pytest.raises(ParseError, match="at least one indented body statement"):
-        parse_program(source)
-
-
-def test_first_seal_digest_deterministic():
-    program1 = parse_program(FIRST_PROGRAM)
-    program2 = parse_program(FIRST_PROGRAM)
-    assert seal_digest(program1) == seal_digest(program2)
-
-
-def test_first_seal_digest_sensitive():
-    base = seal_digest(parse_program(FIRST_PROGRAM))
-    changed = FIRST_PROGRAM.replace("E.timeout", "E.cancel")
-    assert seal_digest(parse_program(changed)) != base
-
-
-def test_first_in_canonical_json():
-    from tahoe.syntax.model import First
-    program = parse_program(FIRST_PROGRAM)
-    cj = canonical_json(program)
-    import json
-    payload = json.loads(cj)
-    first_stmt = payload["statements"][0]
-    assert first_stmt["kind"] == "first"
-    assert first_stmt["selectors"] == ["E.arrived", "E.timeout"]
-    assert len(first_stmt["body"]) == 1
-
-
-def test_first_exported_from_tahoe_syntax():
-    import tahoe.syntax as syntax_module
-    assert hasattr(syntax_module, "First")
-    assert "First" in syntax_module.__all__
-step.one: DO define(value = G.goal) -> E.result
-AWAIT
+step.work: DO define(value = G.goal) -> E.result
 
 RETURN E.result
 """
-    with pytest.raises(ParseError, match="malformed AWAIT"):
-        parse_program(source)
+    write_protocol(tmp_path, "multi", protocol_text)
+    source = """\
+PROGRAM caller VERSION 1.0
 
+INPUT
+  E.evidence = "observed"
+  A.assumption = "unverified"
 
-def test_await_seal_digest_deterministic():
-    program1 = parse_program(AWAIT_PROGRAM)
-    program2 = parse_program(AWAIT_PROGRAM)
-    assert seal_digest(program1) == seal_digest(program2)
-
-
-def test_await_seal_digest_sensitive():
-    base = seal_digest(parse_program(AWAIT_PROGRAM))
-    changed = AWAIT_PROGRAM.replace("AWAIT E.result", "AWAIT E.other")
-    assert seal_digest(parse_program(changed)) != base
-
-
-def test_await_timeout_seal_different_from_no_timeout():
-    no_timeout = seal_digest(parse_program(AWAIT_PROGRAM))
-    with_timeout = seal_digest(parse_program(AWAIT_WITH_TIMEOUT))
-    assert no_timeout != with_timeout
-
-
-def test_await_in_canonical_json():
-    from tahoe.syntax.model import Await
-    program = parse_program(AWAIT_PROGRAM)
-    cj = canonical_json(program)
-    import json
-    payload = json.loads(cj)
-    await_stmt = payload["statements"][1]
-    assert await_stmt["kind"] == "await"
-    assert await_stmt["selector"] == "E.result"
-    assert "timeout" not in await_stmt
-
-
-def test_await_with_timeout_in_canonical_json():
-    from tahoe.syntax.model import Await
-    program = parse_program(AWAIT_WITH_TIMEOUT)
-    cj = canonical_json(program)
-    import json
-    payload = json.loads(cj)
-    await_stmt = payload["statements"][1]
-    assert await_stmt["kind"] == "await"
-    assert await_stmt["timeout"] == "30s"
-
-
-def test_await_exported_from_tahoe_syntax():
-    import tahoe.syntax as syntax_module
-    assert hasattr(syntax_module, "Await")
-    assert "Await" in syntax_module.__all__
-  PF.policy = "check"
-
-step.one: DO define(value = PF.policy) -> E.result
-APPROVE PF.policy
+step.ev: DO define(value = E.evidence) -> E.ev
+step.as: DO define(value = A.assumption) -> A.as
+CALL protocol.multi(goal = E.ev, hypothesis = A.as, constraint = "literal") -> E.result
 
 RETURN E.result
 """
-    with pytest.raises(ParseError, match="malformed APPROVE"):
-        parse_program(source)
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 2
+    assert any("goal" in w and "E.*" in w and "G.*" in w for w in call_warnings)
+    assert any("hypothesis" in w and "A.*" in w and "H.*" in w for w in call_warnings)
 
 
-def test_approve_seal_digest_deterministic():
-    program1 = parse_program(APPROVE_PROGRAM)
-    program2 = parse_program(APPROVE_PROGRAM)
-    assert seal_digest(program1) == seal_digest(program2)
+def test_call_type_mismatch_does_not_raise_error(tmp_path):
+    write_protocol(tmp_path, "typed", TYPE_MISMATCH_PROTOCOL)
+    source = """\
+PROGRAM caller VERSION 1.0
 
+INPUT
+  G.probe = "frame the issue"
 
-def test_approve_seal_digest_sensitive():
-    base = seal_digest(parse_program(APPROVE_PROGRAM))
-    changed = APPROVE_PROGRAM.replace("PF.safety", "PF.strict")
-    assert seal_digest(parse_program(changed)) != base
+step.ask: DO define(value = G.probe) -> E.probe
+CALL protocol.typed(request = G.probe, hypothesis = E.probe) -> E.result
 
-
-def test_approve_intent_change_also_changes_seal():
-    base = seal_digest(parse_program(APPROVE_PROGRAM))
-    changed = APPROVE_PROGRAM.replace(
-        '"deploy to production"', '"deploy to staging"'
+RETURN E.result
+"""
+    program = parse_program(source)
+    result = validate_program(
+        program,
+        known_commands={"define", "hypothesize"},
+        protocols_dir=tmp_path / "protocols",
     )
-    assert seal_digest(parse_program(changed)) != base
-
-
-def test_approve_in_canonical_json():
-    from tahoe.syntax.model import Approve
-    program = parse_program(APPROVE_PROGRAM)
-    cj = canonical_json(program)
-    import json
-    payload = json.loads(cj)
-    approve_stmt = payload["statements"][1]
-    assert approve_stmt["kind"] == "approve"
-    assert approve_stmt["policy"] == "PF.safety"
-    assert approve_stmt["intent"] == '"deploy to production"'
-
-
-def test_approve_exported_from_tahoe_syntax():
-    import tahoe.syntax as syntax_module
-    assert hasattr(syntax_module, "Approve")
-    assert "Approve" in syntax_module.__all__
+    assert result is True

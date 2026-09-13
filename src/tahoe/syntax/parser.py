@@ -2456,6 +2456,7 @@ def _split_top_level(text: str, line_no: int = 0) -> tuple[str, ...]:
 
 
 _type_warnings: list[str] = []
+_call_type_warnings: list[str] = []
 
 
 def get_type_warnings() -> list[str]:
@@ -2813,6 +2814,8 @@ def validate_program(
     if not terminal:
         raise ParseError("program requires a terminal RETURN or STOP")
     _type_warnings.clear()
+    _type_warnings.extend(_call_type_warnings)
+    _call_type_warnings.clear()
     from ..typecheck import check_program_types
     try:
         from ..registry import builtin_registry
@@ -3759,6 +3762,36 @@ def _validate_call_contract(
             f" RETURN refs ({', '.join(return_statement.refs)}):"
             f" uncovered {', '.join(uncovered)}"
         )
+
+    # Issue #87: type-compatibility warnings for CALL arguments.  When a
+    # CALL argument value is a typed reference whose prefix differs from the
+    # protocol INPUT declaration's prefix, emit a warning (not an error) so
+    # the author can catch obvious type mismatches (e.g. passing E.* where
+    # the protocol expects H.*).  Warnings go to _type_warnings.
+    _prefix_re = re.compile(rf"^({_PREFIX})\.")
+    for argument in call.args:
+        if not isinstance(argument.value, str):
+            continue
+        if not _REF_RE.fullmatch(argument.value):
+            continue
+        caller_prefix_match = _prefix_re.match(argument.value)
+        if caller_prefix_match is None:
+            continue
+        for declaration in protocol.declarations:
+            if declaration.ref.split(".")[-1] != argument.name:
+                continue
+            decl_prefix_match = _prefix_re.match(declaration.ref)
+            if decl_prefix_match is None:
+                continue
+            caller_prefix = caller_prefix_match.group(1)
+            decl_prefix = decl_prefix_match.group(1)
+            if caller_prefix != decl_prefix:
+                _call_type_warnings.append(
+                    f"CALL {call.protocol} argument '{argument.name}'"
+                    f" passes {argument.value} ({caller_prefix}.*)"
+                    f" but protocol INPUT expects {declaration.ref}"
+                    f" ({decl_prefix}.*) — type mismatch warning"
+                )
 
 
 def protocol_file_path(
