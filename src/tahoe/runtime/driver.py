@@ -28,7 +28,7 @@ from tahoe.runtime.events import EventType, _Record
 from tahoe.runtime.tasks import TaskStatus
 from tahoe.state import StateDelta
 from tahoe.syntax import is_typed_reference
-from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation
+from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Try, Conditional
 
 # Re-import constants and helpers from engine modules (issue #38 extraction).
 from tahoe.runtime.delegate import (
@@ -265,6 +265,7 @@ class DriveEngine:
                 or entry.gather is not None
                 or entry.par is not None
                 or entry.loop is not None
+                or entry.try_ is not None
             ):
                 # Issue #22: the global deadline is checked before each
                 # dispatch, mirroring the other entry kinds.
@@ -308,6 +309,21 @@ class DriveEngine:
                     )
                 elif entry.loop is not None:
                     result = self._execute_loop_entry(
+                        program,
+                        run_id,
+                        entry,
+                        idx,
+                        invocation_id,
+                        values,
+                        plan,
+                        statement_to_task,
+                        crash_hook,
+                        gate,
+                        claims,
+                        branch_root,
+                    )
+                elif entry.try_ is not None:
+                    result = self._execute_try_entry(
                         program,
                         run_id,
                         entry,
@@ -1521,6 +1537,267 @@ class DriveEngine:
             return None
 
         return None
+
+    # ------------------------------------------------------------------
+    # TRY execution (issue #69)
+    # ------------------------------------------------------------------
+
+    def _execute_try_entry(
+        self,
+        program: Program,
+        run_id: str,
+        entry: "_PlanEntry",
+        idx: int,
+        invocation_id: str,
+        values: dict[str, Any],
+        plan: list["_PlanEntry"],
+        statement_to_task: dict[int, str],
+        crash_hook: "Callable[[int], None] | None",
+        gate: "BudgetGate | None",
+        claims: "ResourceLedger | None",
+        branch_root: str | None,
+    ) -> dict[str, Any] | None:
+        """Execute one TRY plan entry (issue #69): speculative dispatch.
+
+        All branches dispatch concurrently (bounded by ``max_count``);
+        the first branch to reach SUCCEEDED wins.  Other branches are
+        cancelled.  If all branches fail, the TRY fails with a composite
+        failure.  The winning branch's committed nodes are adopted into
+        the parent run's state.
+
+        Each branch executes as an isolated child run (like PAR branches)
+        via ``_execute_program_child``.  The branch's DO invocations run
+        in a synthetic child program whose INPUT declarations carry the
+        parent state refs the branch reads.
+        """
+        try_block = entry.try_
+        assert try_block is not None
+        instruction_id = f"try.inv-{idx + 1}"
+        branch_count = len(try_block.branches)
+        max_at_once = try_block.max_count or branch_count
+        max_at_once = max(1, min(max_at_once, branch_count))
+
+        self.store.append(
+            run_id,
+            EventType.TRY_STARTED,
+            invocation_id=invocation_id,
+            payload={
+                "branches": branch_count,
+                "max": try_block.max_count,
+            },
+        )
+
+        # Collect all targets across all branches (for adoption)
+        all_branch_targets: list[tuple[str, ...]] = []
+        for branch_body in try_block.branches:
+            branch_targets: list[str] = []
+            for stmt in branch_body:
+                if isinstance(stmt, Invocation):
+                    branch_targets.extend(stmt.targets)
+                elif hasattr(stmt, 'targets') and isinstance(stmt.targets, tuple):
+                    branch_targets.extend(stmt.targets)
+            all_branch_targets.append(tuple(branch_targets))
+
+        # Build synthetic child programs and seed values for each branch
+        branch_programs: list[Program] = []
+        branch_child_values: list[dict[str, Any]] = []
+        for i, branch_body in enumerate(try_block.branches):
+            child_prog, child_vals = self._build_try_branch_program(
+                branch_body, values, f"try_branch_{i}"
+            )
+            branch_programs.append(child_prog)
+            branch_child_values.append(child_vals)
+
+        # Dispatch branches concurrently
+        base = branch_root if branch_root is not None else self.workspace_root
+        import concurrent.futures
+
+        in_flight: dict[int, concurrent.futures.Future] = {}
+        branch_results: dict[int, dict[str, Any]] = {}
+        branch_statuses: dict[int, str] = {}
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_at_once
+        ) as pool:
+            for i, child_prog in enumerate(branch_programs):
+                child_run_id = f"{run_id}:{invocation_id}.try{i + 1}"
+                if gate is not None and gate.depth_exceeded(child_run_id):
+                    return self._fail_run(
+                        run_id, plan, statement_to_task, idx,
+                        f"TRY branch {i + 1} depth exceeds budget",
+                    )
+                future = pool.submit(
+                    self._execute_program_child,
+                    child_prog,
+                    child_run_id,
+                    run_id,
+                    f"try:{invocation_id}.try{i + 1}",
+                    branch_child_values[i],
+                    gate,
+                    claims,
+                    base,
+                    None,
+                )
+                in_flight[i] = future
+
+            # Wait for first SUCCEEDED or all FAILED
+            winner: int | None = None
+            while in_flight:
+                owner = {f: i for i, f in in_flight.items()}
+                done, _ = concurrent.futures.wait(
+                    list(in_flight.values()),
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in done:
+                    i = owner[future]
+                    del in_flight[i]
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        result = {
+                            "status": "failed",
+                            "error": str(exc),
+                            "outputs": {},
+                        }
+                    child_status = result.get("status", "unknown")
+                    branch_results[i] = result
+                    branch_statuses[i] = child_status
+                    if child_status == "succeeded" and winner is None:
+                        winner = i
+                        self.store.append(
+                            run_id,
+                            EventType.TRY_BRANCH_SUCCEEDED,
+                            invocation_id=invocation_id,
+                            payload={"branch": i + 1},
+                        )
+                if winner is not None:
+                    break
+
+        # Cancel remaining branches
+        for i in range(branch_count):
+            if i == winner:
+                continue
+            if i in in_flight:
+                in_flight[i].cancel()
+            self.store.append(
+                run_id,
+                EventType.TRY_BRANCH_CANCELLED,
+                invocation_id=invocation_id,
+                payload={"branch": i + 1, "status": branch_statuses.get(i, "cancelled")},
+            )
+
+        if winner is None:
+            # All branches failed
+            errors = [
+                f"branch {i + 1}: {branch_results.get(i, {}).get('error', 'unknown')}"
+                for i in range(branch_count)
+            ]
+            composite_error = "; ".join(errors)
+            self.store.append(
+                run_id,
+                EventType.TRY_COMPLETED,
+                invocation_id=invocation_id,
+                payload={"status": "failed", "branches": branch_statuses},
+            )
+            return self._fail_run(
+                run_id, plan, statement_to_task, idx,
+                f"TRY failed: all {branch_count} branches failed:"
+                f" {composite_error}",
+            )
+
+        # Adopt the winner's outputs from committed child state
+        winner_run_id = f"{run_id}:{invocation_id}.try{winner + 1}"
+        winner_targets = all_branch_targets[winner]
+        child_values_dict: dict[str, Any] = {}
+        adopted_nodes, _ = self._adopt_branch_nodes(
+            winner_run_id, child_values_dict, winner_targets,
+        )
+        for node in adopted_nodes:
+            values[node["id"]] = node["value"]
+
+        self.store.append(
+            run_id,
+            EventType.TRY_COMPLETED,
+            invocation_id=invocation_id,
+            payload={
+                "status": "succeeded",
+                "winner": winner + 1,
+                "branches": branch_statuses,
+            },
+        )
+
+        expected_sv = self.store._current_state_version(run_id)
+        delta = StateDelta(add_nodes=tuple(adopted_nodes))
+        self.store.append_batch(run_id, [
+            _Record(
+                event_type=EventType.SUCCEEDED,
+                instruction_id=instruction_id,
+                invocation_id=invocation_id,
+                expected_state_version=expected_sv,
+                payload={"delta": delta},
+                store=self.store,
+            ),
+        ])
+        return None
+
+    def _build_try_branch_program(
+        self,
+        branch_body: tuple,
+        values: dict[str, Any],
+        name: str,
+    ) -> tuple[Program, dict[str, Any]]:
+        """Build a synthetic child program for one TRY branch (issue #69).
+
+        Each branch body is a tuple of statements (invocations, conditionals,
+        calls, stops, returns).  We build a minimal Program wrapping them
+        with INPUT declarations seeded from the parent state refs the branch
+        reads, and RETURN of all targets produced by the branch's invocations.
+
+        Returns ``(program, child_values)`` where ``child_values`` is the
+        initial state mapping for the child run.
+        """
+        from tahoe.syntax.model import Declaration
+
+        # Collect all targets from invocations in the branch
+        targets: list[str] = []
+        for stmt in branch_body:
+            if isinstance(stmt, Invocation):
+                targets.extend(stmt.targets)
+
+        # Collect all refs the branch reads (from invocation args)
+        from tahoe.runtime.planning import scan_arg_refs
+        read_refs: set[str] = set()
+        for stmt in branch_body:
+            if isinstance(stmt, Invocation):
+                for arg in stmt.args:
+                    read_refs |= scan_arg_refs(arg.value)
+            elif isinstance(stmt, Conditional):
+                from tahoe.runtime.planning import condition_refs
+                read_refs |= condition_refs(stmt.condition)
+
+        # Build INPUT declarations for refs that exist in parent state
+        declarations: list[Declaration] = []
+        child_values: dict[str, Any] = {}
+        for ref in sorted(read_refs):
+            if ref in values:
+                declarations.append(Declaration(ref, values[ref]))
+                child_values[ref] = values[ref]
+
+        # Check for explicit RETURN/STOP in the branch
+        has_terminal = any(
+            isinstance(stmt, (Return, Stop)) for stmt in branch_body
+        )
+
+        statements: list = list(branch_body)
+        if not has_terminal and targets:
+            statements.append(Return(tuple(targets)))
+
+        return Program(
+            name=name,
+            version="1.0",
+            declarations=tuple(declarations),
+            statements=tuple(statements),
+        ), child_values
 
     # ------------------------------------------------------------------
     # Concurrent execution frontier (issue #21)

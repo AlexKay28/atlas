@@ -19,6 +19,7 @@ from tahoe.syntax.model import (
     Loop,
     Par,
     Scatter,
+    Try,
 )
 
 DELEGATE_COMMAND = "delegate"
@@ -136,6 +137,11 @@ def _uses_par(program: Program) -> bool:
 def _uses_loop(program: "Program") -> bool:
     """Whether the program contains LOOP blocks (issue #68)."""
     return any(isinstance(statement, Loop) for statement in program.statements)
+
+
+def _uses_try(program: "Program") -> bool:
+    """Whether the program contains TRY blocks (issue #69)."""
+    return any(isinstance(statement, Try) for statement in program.statements)
 
 
 def _uses_delegate(program: Program) -> bool:

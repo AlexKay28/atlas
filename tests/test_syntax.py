@@ -2410,3 +2410,163 @@ RETURN PR.stability.posterior
     assert step.targets == ("PR.stability.posterior",)
     assert step.done.ref == "PR.stability.posterior"
     assert step.done.value == 0.9
+
+
+# ------------------------------------------------------------------
+# Issue #69: TRY/OR blocks for OR-parallelism / speculative execution
+# ------------------------------------------------------------------
+
+TRY_TWO_BRANCHES = """\
+PROGRAM speculate VERSION 1.0
+
+INPUT
+  G.goal = "solve"
+  C.rules = "constraints"
+
+TRY
+  step.deduce: DO define(value = G.goal) -> OUT.answer
+OR
+  step.abduct: DO define(value = C.rules) -> OUT.answer
+RETURN OUT.answer
+"""
+
+TRY_THREE_BRANCHES = """\
+PROGRAM multi VERSION 1.0
+
+INPUT
+  G.goal = "test"
+
+TRY
+  step.first: DO define(value = G.goal) -> OUT.result
+OR
+  step.second: DO define(value = G.goal) -> OUT.result
+OR
+  step.third: DO define(value = G.goal) -> OUT.result
+RETURN OUT.result
+"""
+
+TRY_WITH_MAX = """\
+PROGRAM bounded VERSION 1.0
+
+INPUT
+  G.goal = "test"
+
+TRY MAX 2
+  step.first: DO define(value = G.goal) -> OUT.result
+OR
+  step.second: DO define(value = G.goal) -> OUT.result
+OR
+  step.third: DO define(value = G.goal) -> OUT.result
+RETURN OUT.result
+"""
+
+TRY_WITH_IF = """\
+PROGRAM conditional VERSION 1.0
+
+INPUT
+  G.goal = "test"
+  E.facts = "evidence"
+
+TRY
+  step.deduce: DO define(value = G.goal) -> OUT.answer
+OR
+  step.abduct: DO define(value = E.facts) -> H.guess
+  step.verify: DO define(value = H.guess) -> V.check
+  IF V.check == "test"
+    RETURN H.guess
+RETURN OUT.answer
+"""
+
+TRY_ONE_BRANCH = """\
+PROGRAM single VERSION 1.0
+
+INPUT
+  G.goal = "test"
+
+TRY
+  step.only: DO define(value = G.goal) -> OUT.result
+RETURN OUT.result
+"""
+
+
+def test_try_parses_two_branches():
+    from tahoe.syntax.model import Try
+    program = parse_program(TRY_TWO_BRANCHES)
+    try_stmt = program.statements[0]
+    assert isinstance(try_stmt, Try)
+    assert len(try_stmt.branches) == 2
+    assert try_stmt.max_count == 0
+    assert isinstance(try_stmt.branches[0][0], Invocation)
+    assert try_stmt.branches[0][0].step_id == "step.deduce"
+    assert try_stmt.branches[1][0].step_id == "step.abduct"
+
+def test_try_parses_three_branches():
+    from tahoe.syntax.model import Try
+    program = parse_program(TRY_THREE_BRANCHES)
+    try_stmt = program.statements[0]
+    assert isinstance(try_stmt, Try)
+    assert len(try_stmt.branches) == 3
+
+
+def test_try_parses_with_max():
+    from tahoe.syntax.model import Try
+    program = parse_program(TRY_WITH_MAX)
+    try_stmt = program.statements[0]
+    assert isinstance(try_stmt, Try)
+    assert try_stmt.max_count == 2
+
+
+def test_try_rejects_single_branch():
+    program = parse_program(TRY_ONE_BRANCH)
+    with pytest.raises(ParseError, match="at least two branches"):
+        validate_program(program, known_commands={"define"})
+
+
+def test_try_body_can_contain_if():
+    from tahoe.syntax.model import Try, Conditional, Invocation, Return
+    program = parse_program(TRY_WITH_IF)
+    try_stmt = program.statements[0]
+    assert isinstance(try_stmt, Try)
+    # Second branch has DO, DO, IF-RETURN
+    branch = try_stmt.branches[1]
+    assert isinstance(branch[0], Invocation)
+    assert isinstance(branch[1], Invocation)
+    assert isinstance(branch[2], Conditional)
+    assert isinstance(branch[2].statement, Return)
+
+
+def test_try_seal_digest_deterministic():
+    program1 = parse_program(TRY_TWO_BRANCHES)
+    program2 = parse_program(TRY_TWO_BRANCHES)
+    assert seal_digest(program1) == seal_digest(program2)
+
+
+def test_try_validates():
+    program = parse_program(TRY_TWO_BRANCHES)
+    assert validate_program(program, known_commands={"define"}) is True
+
+
+def test_try_validates_with_if():
+    program = parse_program(TRY_WITH_IF)
+    assert validate_program(program, known_commands={"define"}) is True
+
+
+def test_try_validates_three_branches():
+    program = parse_program(TRY_THREE_BRANCHES)
+    assert validate_program(program, known_commands={"define"}) is True
+
+
+def test_try_or_outside_try_rejected():
+    source = """\
+PROGRAM bad VERSION 1.0
+
+INPUT
+  G.goal = "test"
+
+step.one: DO define(value = G.goal) -> OUT.result
+OR
+  step.two: DO define(value = G.goal) -> OUT.other
+RETURN OUT.result
+"""
+    with pytest.raises(ParseError):
+        parse_program(source)

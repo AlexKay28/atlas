@@ -24,6 +24,7 @@ from .model import (
     Return,
     Scatter,
     Stop,
+    Try,
 )
 
 _NAME = r"[a-z][a-z0-9_]*"
@@ -72,8 +73,10 @@ _MAX_PROTOCOL_DEPTH = 8
 _PROTOCOLS_DIR_DEFAULT = "protocols"
 # Issue #3: IF is no longer reserved — it parses a single-line deterministic
 # conditional.  Issue #68: LOOP is no longer reserved — it parses a bounded
-# iterative refinement block.  FIRST/TRY/AWAIT/APPROVE stay unsupported.
-_UNSUPPORTED = frozenset({"FIRST", "TRY", "AWAIT", "APPROVE"})
+# iterative refinement block.  Issue #69: TRY is no longer reserved — it
+# parses an OR-parallelism / speculative execution block.
+# FIRST/AWAIT/APPROVE stay unsupported.
+_UNSUPPORTED = frozenset({"FIRST", "AWAIT", "APPROVE"})
 # Issue #4: SCATTER/GATHER block grammar.  The SCATTER line is followed by
 # exactly one indented body step line; the GATHER line names that body step
 # and optionally a judge step, itself defined by the following indented line.
@@ -106,6 +109,10 @@ _BARRIER_RE = re.compile(
 # EXIT <expr> EXHAUSTED <terminal>
 # The body is an indented block of statements (like IF block bodies).
 _LOOP_RE = re.compile(rf"^LOOP\s+(?P<name>{_NAME})$")
+# Issue #69: TRY block grammar.  The header is ``TRY`` optionally followed
+# by ``MAX <int>``.  Branch bodies are indented blocks separated by ``OR``
+# lines at the same indent level as ``TRY``.
+_TRY_RE = re.compile(rf"^TRY(?:\s+MAX\s+(?P<max>\d+))?$")
 _LOOP_FIELD_RE = re.compile(
     r"^(?P<keyword>ENTRY|WHILE|PROGRESS|EXIT|MAX|EXHAUSTED)\s+(?P<value>.+)$"
 )
@@ -261,7 +268,7 @@ def parse_program(text: str) -> Program:
         raise ParseError("malformed PROGRAM header", header_line, 1)
 
     declarations: list[Declaration] = []
-    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop] = []
+    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop | Try] = []
     in_input = False
     terminal_seen = False
 
@@ -432,6 +439,20 @@ def parse_program(text: str) -> Program:
         if re.match(r"LOOP\b", line):
             statements.append(_parse_loop_block(line, line_no, lines))
             continue
+
+        # Issue #69: OR-parallelism / speculative execution block.  The TRY
+        # header is followed by indented branch bodies separated by OR lines
+        # at the same indent level as TRY.
+        if re.match(r"TRY\b", line):
+            statements.append(_parse_try_block(line, line_no, lines))
+            continue
+
+        if re.match(r"OR\b", line):
+            raise ParseError(
+                "OR is only valid as a branch separator inside a TRY block",
+                line_no,
+                1,
+            )
 
         # Issue #7: strip the optional trailing REVISE/RETIRE clause before
         # matching the invocation itself; the clause only ever follows the
@@ -1038,6 +1059,136 @@ def _parse_loop_body_statement(
 
     raise ParseError(
         "LOOP body statement must be a DO invocation, IF, CALL,"
+        " SCATTER, GATHER, PAR, LOOP, STOP, or RETURN",
+        line_no,
+        1,
+    )
+
+
+def _parse_try_block(line: str, line_no: int, lines) -> Try:
+    """Parse one ``TRY [MAX <n>] ... OR ...`` block (issue #69).
+
+    The header is ``TRY`` optionally followed by ``MAX <int>``.  Then one
+    or more indented branch bodies follow, separated by ``OR`` lines at
+    the same indent level as ``TRY``.  Each branch body is a list of
+    statements parsed like LOOP body statements (DO invocations, IF
+    conditionals, CALL, STOP, RETURN).  At least two branches are
+    required (validated in validate_program).
+    """
+    match = _TRY_RE.fullmatch(line)
+    if match is None:
+        raise ParseError(
+            "malformed TRY (expected TRY or TRY MAX <int>)", line_no, 1
+        )
+    max_count = 0
+    if match.group("max") is not None:
+        max_count = int(match.group("max"))
+        if max_count < 1:
+            raise ParseError(
+                "TRY MAX must be a positive integer", line_no, 1
+            )
+
+    branches: list[tuple] = []
+
+    def parse_branch_body() -> tuple:
+        """Consume indented lines as one branch body."""
+        body: list = []
+        body_indent: int | None = None
+        while True:
+            if _pending_lines:
+                body_line_no, body_raw, body_line = _pending_lines.pop(0)
+            else:
+                try:
+                    body_line_no, body_raw, body_line = next(lines)
+                except StopIteration:
+                    break
+            if not body_raw[:1].isspace():
+                _pending_lines.append((body_line_no, body_raw, body_line))
+                break
+            current_indent = len(body_raw) - len(body_raw.lstrip())
+            if body_indent is None:
+                body_indent = current_indent
+            elif current_indent < body_indent:
+                _pending_lines.append((body_line_no, body_raw, body_line))
+                break
+            body.append(
+                _parse_try_branch_statement(
+                    body_line, body_line_no, lines, body_raw
+                )
+            )
+        if not body:
+            raise ParseError(
+                "TRY branch requires at least one indented statement",
+                line_no, 1,
+            )
+        return tuple(body)
+
+    # Parse the first branch
+    branches.append(parse_branch_body())
+
+    # Parse OR-separated branches
+    while True:
+        if _pending_lines:
+            or_line_no, or_raw, or_line = _pending_lines.pop(0)
+        else:
+            try:
+                or_line_no, or_raw, or_line = next(lines)
+            except StopIteration:
+                break
+        if or_line.strip() == "OR":
+            branches.append(parse_branch_body())
+        else:
+            _pending_lines.append((or_line_no, or_raw, or_line))
+            break
+
+    return Try(tuple(branches), max_count, line_no)
+
+
+def _parse_try_branch_statement(
+    line: str, line_no: int, lines, raw: str
+) -> object:
+    """Parse one statement inside a TRY branch body (issue #69).
+
+    Supports the same statement types as LOOP body: DO invocations, IF
+    conditionals, CALL, STOP, RETURN, and nested SCATTER/GATHER/PAR/LOOP.
+    """
+    if re.match(r"IF\b", line):
+        return _parse_if(line, line_no, lines, raw)
+
+    if re.match(r"STOP\b", line):
+        stop = _STOP_RE.fullmatch(line)
+        if stop is None:
+            raise ParseError("malformed STOP in TRY branch", line_no, 1)
+        return Stop(stop.group("kind"), stop.group("ref"))
+
+    if re.match(r"RETURN\b", line):
+        return Return(_parse_refs(line[6:].strip(), line_no, "RETURN"))
+
+    if re.match(r"CALL\b", line):
+        call = _CALL_RE.fullmatch(line)
+        if call is None:
+            raise ParseError("malformed CALL in TRY branch", line_no, 1)
+        args = tuple(_parse_argument(item, line_no) for item in _split_top_level(call.group("args"), line_no))
+        targets = _parse_refs(call.group("targets"), line_no, "target")
+        return Call(call.group("protocol"), args, targets, line_no)
+
+    if re.match(r"SCATTER\b", line):
+        return _parse_scatter_block(line, line_no, lines)
+
+    if re.match(r"GATHER\b", line):
+        return _parse_gather_line(line, line_no, lines)
+
+    if re.match(r"PAR\b", line):
+        return _parse_par_block(line, line_no, lines)
+
+    if re.match(r"LOOP\b", line):
+        return _parse_loop_block(line, line_no, lines)
+
+    if _CONDITION_STEP_RE.match(line):
+        return _parse_invocation_text(line, line_no)
+
+    raise ParseError(
+        "TRY branch statement must be a DO invocation, IF, CALL,"
         " SCATTER, GATHER, PAR, LOOP, STOP, or RETURN",
         line_no,
         1,
@@ -2218,6 +2369,32 @@ def validate_program(
             # program still needs a RETURN or STOP after the loop (or
             # the loop body itself may contain a terminal, but that is
             # a conditional exit, not a guaranteed one).
+        elif isinstance(statement, Try):
+            if conditional_invocation_seen:
+                raise ParseError(
+                    "TRY block appears after an IF ... DO conditional: a"
+                    " conditional DO invocation must come after every"
+                    " unconditional invocation line"
+                )
+            if pending_scatter is not None:
+                raise ParseError(
+                    "TRY block appears between a SCATTER and its GATHER:"
+                    " a SCATTER block must be directly followed by its GATHER"
+                )
+            _validate_try_statement(
+                statement, known, available, steps, protocols_dir,
+                _protocol_stack,
+            )
+            # The winning branch's targets commit at the TRY's completion;
+            # after the block, later statements may read them (like PAR).
+            for branch_body in statement.branches:
+                for body_stmt in branch_body:
+                    if isinstance(body_stmt, Invocation):
+                        for target in body_stmt.targets:
+                            available.add(target)
+                    elif isinstance(body_stmt, Call):
+                        for target in body_stmt.targets:
+                            available.add(target)
         else:
             raise ParseError(f"unknown statement {type(statement).__name__}")
     if pending_scatter is not None:
@@ -2818,6 +2995,102 @@ def _validate_loop_body_invocation(
                     )
 
 
+def _validate_try_statement(
+    statement: Try,
+    known: set[str] | None,
+    available: set[str],
+    steps: set[str],
+    protocols_dir: str | Path | None,
+    stack: tuple[str, ...],
+) -> None:
+    """Validate one TRY block (issue #69).
+
+    Requires at least 2 branches.  Each branch body validates like a
+    LOOP body over the same ``available`` namespace.  Within a branch,
+    targets from earlier steps in the same branch are available to
+    later steps (like LOOP body statements).  Branch targets are
+    conditionally committed (the branch may not win) and never added
+    to the outer ``available`` set during validation.  Only pure and
+    read-only commands are allowed in speculative branches (no
+    irreversible_write commands).
+    """
+    if len(statement.branches) < 2:
+        raise ParseError(
+            "TRY block requires at least two branches (TRY ... OR ...)",
+            statement.line, 1,
+        )
+    if statement.max_count < 0:
+        raise ParseError(
+            "TRY MAX must be a non-negative integer", statement.line, 1,
+        )
+    for branch_idx, branch_body in enumerate(statement.branches):
+        branch_available = set(available)
+        branch_targets: set[str] = set()
+        for body_stmt in branch_body:
+            if isinstance(body_stmt, Invocation):
+                _validate_invocation_statement(
+                    body_stmt, known, branch_available, steps,
+                    commit_targets=False,
+                )
+                if body_stmt.revisions or body_stmt.retirements:
+                    raise ParseError(
+                        f"TRY branch invocation {body_stmt.step_id} cannot"
+                        " use REVISE/RETIRE: corrections are undefined for"
+                        " speculative execution"
+                    )
+                for target in body_stmt.targets:
+                    if target in branch_targets:
+                        raise ParseError(
+                            f"duplicate target {target} within a TRY branch"
+                        )
+                    branch_targets.add(target)
+                    branch_available.add(target)
+            elif isinstance(body_stmt, Call):
+                for argument in body_stmt.args:
+                    for ref in _references_in(argument.value):
+                        if ref.startswith("KB."):
+                            continue
+                        if ref not in branch_available:
+                            raise ParseError(
+                                f"reference {ref} used before definition"
+                                f" (TRY branch {branch_idx + 1})",
+                                argument.line, 1,
+                            )
+                _validate_call_contract(
+                    body_stmt, known, protocols_dir, stack
+                )
+                for target in body_stmt.targets:
+                    if target in branch_targets:
+                        raise ParseError(
+                            f"duplicate target {target} within a TRY branch"
+                        )
+                    branch_targets.add(target)
+                    branch_available.add(target)
+            elif isinstance(body_stmt, (Stop, Return)):
+                pass
+            elif isinstance(body_stmt, Conditional):
+                cond_ast = parse_condition(
+                    body_stmt.condition, body_stmt.line
+                )
+                for ref in _condition_refs(cond_ast):
+                    if not _condition_ref_resolvable(ref, branch_available):
+                        raise ParseError(
+                            f"TRY branch IF condition reference {ref}"
+                            " used before definition",
+                            body_stmt.line, 1,
+                        )
+                embedded = body_stmt.statement
+                if isinstance(embedded, Invocation):
+                    _validate_invocation_statement(
+                        embedded, known, branch_available, steps,
+                        commit_targets=False,
+                    )
+                elif isinstance(embedded, (Stop, Return)):
+                    pass
+            elif isinstance(body_stmt, (Scatter, Gather, Par, Loop, Try)):
+                pass
+
+
 def _validate_call_contract(
     call: Call,
     known_commands: Iterable[str] | None,
@@ -3113,6 +3386,12 @@ def _statement_dict(statement: object) -> dict[str, Any]:
             ),
             "body": [_statement_dict(s) for s in statement.body],
         }
+    if isinstance(statement, Try):
+        return {
+            "kind": "try",
+            "max": statement.max_count,
+            "branches": [[_statement_dict(s) for s in branch] for branch in statement.branches],
+        }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 
@@ -3264,6 +3543,12 @@ def _statement_dict_v2(statement: object) -> dict[str, Any]:
                 else statement.exhausted
             ),
             "body": [_statement_dict_v2(s) for s in statement.body],
+        }
+    if isinstance(statement, Try):
+        return {
+            "kind": "try",
+            "max": statement.max_count,
+            "branches": [[_statement_dict_v2(s) for s in branch] for branch in statement.branches],
         }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 

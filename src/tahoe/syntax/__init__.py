@@ -15,6 +15,7 @@ from .model import (
     Return,
     Scatter,
     Stop,
+    Try,
 )
 from .parser import (
     ParseError,
@@ -44,6 +45,7 @@ __all__ = [
     "Return",
     "Scatter",
     "Stop",
+    "Try",
     "ParseError",
     "parse_program",
     "parse_condition",

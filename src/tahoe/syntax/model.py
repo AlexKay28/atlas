@@ -251,6 +251,27 @@ class Loop:
 
 
 @dataclass(frozen=True)
+class Try:
+    """OR-parallelism / speculative execution block (issue #69).
+
+    ``TRY [MAX n]`` followed by two or more indented branch bodies separated
+    by ``OR`` lines at the same indent level as ``TRY``.  All branches
+    dispatch concurrently (bounded by ``max_count``); the first branch to
+    reach SUCCEEDED wins and all others are cancelled.  If all branches
+    fail, the TRY block fails with a composite failure.  Only pure and
+    read-only commands are allowed in speculative branches (no writes).
+
+    ``branches`` is a list of branch bodies, each a tuple of statements
+    (invocations, conditionals, calls, returns, stops).  ``max_count`` is
+    0 when no limit is declared (dispatch all branches).
+    """
+
+    branches: tuple
+    max_count: int = 0
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Program:
     name: str
     version: str
