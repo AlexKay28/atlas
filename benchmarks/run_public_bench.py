@@ -4,12 +4,16 @@
 Same ablation design: classic (Q -> answer) vs tahoe (Q + skill -> answer).
 Single API call per trial. Numeric/exact graders.
 
+EVALUATION INVARIANT: The grader and answer extraction logic must be IDENTICAL
+for both arms. The ONLY difference between arms is the system prompt (TAHOE
+thinking skill vs nothing). Never branch grading logic on arm identity.
+
 Usage:
   export TAHOE_API_BASE="https://your-api-endpoint/v1"
   export TAHOE_API_KEY="your-api-key"
   export TAHOE_MODEL="."
   # export SSL_CERT_FILE if your endpoint uses a custom CA
-  PYTHONPATH=src python3 eval/run_public_bench.py
+  PYTHONPATH=src python3 benchmarks/run_public_bench.py
 """
 
 import json
@@ -38,70 +42,71 @@ def load_skill():
         return f.read()
 
 
-def extract_gsm8k_answer(text):
-    """Extract the final number from a GSM8K answer."""
-    # GSM8K answers end with #### <number>
-    match = re.search(r'####\s*([\d,]+)', text)
-    if match:
-        return match.group(1).replace(',', '')
-    # Fallback: last number in text
-    nums = re.findall(r'-?\d+', text)
-    return nums[-1] if nums else ""
+def extract_gsm8k_gold(answer_text):
+    """GSM8K official: extract the number after #### in the gold answer."""
+    match = re.search(r'####\s*([\d,]+)', answer_text)
+    return match.group(1).replace(',', '') if match else ""
 
 
 def extract_model_number(text):
-    """Extract a number from model output."""
+    """Extract a number from model output — same for both arms.
+
+    Strategy (frozen, matches common eval harnesses for GSM8K):
+    1. Look for #### N pattern
+    2. Look for 'answer is N' / 'total: N' / 'N.' at start of short answer
+    3. Fallback: last number in the text
+    """
     text = text.strip()
-    # Try to find #### pattern first
     match = re.search(r'####\s*([\d,]+)', text)
     if match:
         return match.group(1).replace(',', '')
-    # Try "answer is X"
-    match = re.search(r'(?:answer|result)\s*(?:is|=)\s*([\d,]+)', text, re.I)
+    if len(text) < 60:
+        match = re.match(r'^\$?([\d,]+\.?\d*)', text)
+        if match:
+            return match.group(1).replace(',', '')
+    match = re.search(r'(?:answer|result|total)\s*(?:is|=|:)\s*\$?([\d,]+)', text, re.I)
     if match:
         return match.group(1).replace(',', '')
-    # Last number
     nums = re.findall(r'-?\d+', text)
     return nums[-1] if nums else text
 
 
 def grade_gsm8k(model_answer, expected_answer):
+    """GSM8K: extract number from model output, compare to gold number."""
     model_num = extract_model_number(model_answer)
-    expected_num = extract_gsm8k_answer(expected_answer)
+    expected_num = extract_gsm8k_gold(expected_answer)
     return model_num == expected_num, f"expected={expected_num}, got={model_num}"
 
 
 def grade_arc(model_answer, expected_answer):
-    """ARC: answer is a letter (A/B/C/D)."""
-    model_answer = re.sub(r'\*+', '', model_answer.strip()).upper()
+    """ARC: match answerKey (A/B/C/D). Official eval = exact letter match."""
+    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
     expected = expected_answer.strip().upper()
-    # Extract first letter if model gives a longer answer
-    if len(model_answer) > 1:
-        match = re.search(r'\b([A-D])\b', model_answer)
+    if len(model_letter) > 1:
+        match = re.search(r'\b([A-D])\b', model_letter)
         if match:
-            model_answer = match.group(1)
-    return model_answer == expected, f"expected={expected}, got={model_answer}"
+            model_letter = match.group(1)
+    return model_letter == expected, f"expected={expected}, got={model_letter}"
 
 
 def grade_bbh(model_answer, expected_answer):
-    """BBH: answer is like (D) or a word."""
-    model_answer = model_answer.strip()
-    expected = expected_answer.strip()
-    # Strip markdown bold/italic
-    model_answer = re.sub(r'\*+', '', model_answer)
-    # Extract letter from (X) format
-    match = re.search(r'\(([A-Z])\)', model_answer)
-    if match:
-        model_answer = match.group(1)
-    else:
-        # Try bare letter at start
-        match = re.match(r'^([A-Z])\b', model_answer)
-        if match:
-            model_answer = match.group(1)
-    match = re.search(r'\(([A-Z])\)', expected)
-    if match:
-        expected = match.group(1)
-    return model_answer.upper() == expected.upper(), f"expected={expected}, got={model_answer}"
+    """BBH: exact match of target string. Official eval = string equality.
+
+    Target format is '(X)'. Extract letter from both, compare.
+    """
+    model_clean = re.sub(r'\*+', '', model_answer.strip())
+    expected_clean = expected_answer.strip()
+    model_match = re.search(r'\(([A-Z])\)', model_clean)
+    expected_match = re.search(r'\(([A-Z])\)', expected_clean)
+    if model_match and expected_match:
+        return model_match.group(1) == expected_match.group(1), (
+            f"expected={expected_match.group(1)}, got={model_match.group(1)}"
+        )
+    if model_match:
+        return model_match.group(1) == expected_clean, (
+            f"expected={expected_clean}, got={model_match.group(1)}"
+        )
+    return model_clean == expected_clean, f"expected={expected_clean}, got={model_clean[:50]}"
 
 
 def load_tasks():

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Run the ablation trials: 7 tasks x 3 arms x 5 trials = 105 runs.
+"""Run the ablation trials: 7 tasks x 2 arms x 5 trials = 70 runs.
+
+EVALUATION INVARIANT: The grader and answer extraction logic must be IDENTICAL
+for both arms. The ONLY difference between arms is the system prompt (TAHOE
+thinking skill vs nothing). Never branch grading logic on arm identity.
 
 Usage:
   export TAHOE_API_BASE="https://your-api-endpoint/v1"
   export TAHOE_API_KEY="your-api-key"
   export TAHOE_MODEL="."
   # export SSL_CERT_FILE if your endpoint uses a custom CA
-  PYTHONPATH=src python3 eval/run_trials.py
+  PYTHONPATH=src python3 benchmarks/run_trials.py
 """
 
 import json
@@ -22,7 +26,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner_classic import run as run_classic
-from runner_opencode import run as run_opencode
 from graders import make_grader
 from report import generate_markdown_table, generate_json_report, generate_per_task_comparison
 
@@ -52,57 +55,13 @@ def load_tasks():
 
 
 def grade_trial(task, arm_result):
+    """Grade a trial. Same logic for both arms — no arm-dependent behavior."""
     grader_type = task["grader"]["type"]
     grader = make_grader(grader_type)
     answer = arm_result.get("final_answer", "")
     passed, detail = grader(answer, task.get("expected_state", {}))
     quality = 1.0 if passed else 0.0
     return passed, quality, detail
-
-
-def _normalize_tahoe_answer(answer):
-    """Extract the actual answer value from TAHOE's JSON wrapper."""
-    if not answer:
-        return ""
-    answer = answer.strip()
-    # Try parsing as JSON
-    try:
-        data = json.loads(answer)
-    except (json.JSONDecodeError, ValueError):
-        # Not JSON — try extracting a number from prose like "Committed refs: 16"
-        import re
-        nums = re.findall(r'\b(\d+)\b', answer)
-        if nums:
-            return nums[-1]  # last number is usually the answer
-        return answer
-    # Common wrapper patterns
-    if isinstance(data, dict):
-        for key in ("answer", "result", "value", "output", "report"):
-            if key in data:
-                val = data[key]
-                if isinstance(val, (str, int, float)):
-                    return str(val)
-                if isinstance(val, dict):
-                    for k2 in ("answer", "result", "value"):
-                        if k2 in val:
-                            return str(val[k2])
-                    return json.dumps(val)
-        # If it has only one key, return that value
-        if len(data) == 1:
-            val = list(data.values())[0]
-            return str(val) if not isinstance(val, (dict, list)) else json.dumps(val)
-        # Look for any numeric value in the dict
-        for k, v in data.items():
-            if isinstance(v, (int, float)):
-                return str(v)
-    if isinstance(data, (int, float)):
-        return str(data)
-    # Fallback: extract last number from string
-    import re
-    nums = re.findall(r'\b(\d+)\b', answer)
-    if nums:
-        return nums[-1]
-    return answer
 
 
 def run_classic_arm(task, trial_idx):
@@ -112,8 +71,8 @@ def run_classic_arm(task, trial_idx):
         model=os.environ.get("TAHOE_MODEL", "."),
         api_base=os.environ.get("TAHOE_API_BASE", ""),
         api_key=os.environ.get("TAHOE_API_KEY", ""),
-        max_turns=5,
-        max_tokens=512,
+        max_turns=1,
+        max_tokens=1024,
         timeout_seconds=60,
     )
     return {
@@ -131,36 +90,12 @@ def run_classic_arm(task, trial_idx):
     }
 
 
-def run_opencode_arm(task, trial_idx):
-    result = run_opencode(
-        task_id=task["task_id"],
-        task_prompt=task["description"],
-        model=os.environ.get("TAHOE_MODEL", "GLM-5.3-Flash_alexkay28/."),
-        agent="build",
-        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        timeout_seconds=120,
-    )
-    return {
-        "task_id": task["task_id"],
-        "arm": "opencode",
-        "trial": trial_idx,
-        "input_tokens": result.input_tokens,
-        "output_tokens": result.output_tokens,
-        "total_tokens": result.total_tokens,
-        "wall_seconds": result.wall_seconds,
-        "passed": result.passed,
-        "failure_class": result.failure_class,
-        "authoring_tokens": 0,
-        "final_answer": result.final_answer,
-    }
-
-
 def run_tahoe_arm(task, trial_idx):
     """TAHOE arm: classic + TAHOE thinking skill as system prompt.
 
     Q + tahoe_skill -> {thinking*tahoe} answer
-    Same single API call as classic. The only difference is the system prompt
-    that teaches the model to structure its reasoning in TAHOE.
+    Same single API call, same parameters as classic. The ONLY difference
+    is the system prompt that teaches the model to structure its reasoning.
     """
     skill_prompt_path = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
     with open(skill_prompt_path) as f:
@@ -194,7 +129,6 @@ def run_tahoe_arm(task, trial_idx):
 
 ARM_RUNNERS = {
     "classic": run_classic_arm,
-    "opencode": run_opencode_arm,
     "tahoe": run_tahoe_arm,
 }
 
