@@ -271,10 +271,26 @@ class Try:
     line: int = 0
 
 
+@dataclass(frozen=True)
+class First:
+    """Event-choice block (issue #76).
+
+    ``FIRST event_selector OR event_selector+`` followed by an indented
+    body of statements.  The first event selector to fire triggers the
+    body; remaining selectors are cancelled.
+
+    Parsing only — no runtime execution yet.  The coordinator skips FIRST
+    entries with a "not yet executed" warning.
+    """
+
+    selectors: tuple[str, ...]
+    body: tuple
+    line: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class Reformulate:
     """Plan reformulation at runtime (issue #80).
-
     Triggered inside an IF block (or standalone after a failed step) when
     a plan fails mid-execution.  The model can detect the failure,
     diagnose what went wrong, revise invalidated refs, author a new

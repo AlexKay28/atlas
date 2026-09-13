@@ -2798,3 +2798,130 @@ RETURN E.test
     assert isinstance(ref, Reformulate)
     assert ref.diagnose.command == "challenge"
     assert ref.continue_ref == "G.plan2"
+
+
+# --------------------------------------------------------------------------
+# Issue #76: FIRST event-choice construct (parser-only, no runtime execution)
+# --------------------------------------------------------------------------
+
+FIRST_PROGRAM = """\
+PROGRAM event_choice VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+FIRST E.arrived OR E.timeout
+  step.handle: DO define(value = G.goal) -> OUT.result
+
+RETURN OUT.result
+"""
+
+FIRST_THREE_SELECTORS = """\
+PROGRAM multi_event VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+FIRST E.arrived OR E.timeout OR E.cancel
+  step.handle: DO define(value = G.goal) -> OUT.result
+
+RETURN OUT.result
+"""
+
+
+def test_first_parses_two_selectors():
+    from tahoe.syntax.model import First
+    program = parse_program(FIRST_PROGRAM)
+    first_stmt = program.statements[0]
+    assert isinstance(first_stmt, First)
+    assert first_stmt.selectors == ("E.arrived", "E.timeout")
+    assert len(first_stmt.body) == 1
+
+
+def test_first_parses_three_selectors():
+    from tahoe.syntax.model import First
+    program = parse_program(FIRST_THREE_SELECTORS)
+    first_stmt = program.statements[0]
+    assert isinstance(first_stmt, First)
+    assert first_stmt.selectors == ("E.arrived", "E.timeout", "E.cancel")
+
+
+def test_first_body_can_contain_multiple_statements():
+    source = """\
+PROGRAM multi_body VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+FIRST E.arrived OR E.timeout
+  step.one: DO define(value = G.goal) -> E.first
+  step.two: DO define(value = E.first) -> OUT.result
+
+RETURN OUT.result
+"""
+    from tahoe.syntax.model import First
+    program = parse_program(source)
+    first_stmt = program.statements[0]
+    assert isinstance(first_stmt, First)
+    assert len(first_stmt.body) == 2
+
+
+def test_first_requires_at_least_two_selectors():
+    source = """\
+PROGRAM bad VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+FIRST E.arrived
+  step.handle: DO define(value = G.goal) -> OUT.result
+
+RETURN OUT.result
+"""
+    with pytest.raises(ParseError, match="at least two event selectors"):
+        parse_program(source)
+
+
+def test_first_requires_body():
+    source = """\
+PROGRAM bad VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+
+FIRST E.arrived OR E.timeout
+
+RETURN OUT.result
+"""
+    with pytest.raises(ParseError, match="at least one indented body statement"):
+        parse_program(source)
+
+
+def test_first_seal_digest_deterministic():
+    program1 = parse_program(FIRST_PROGRAM)
+    program2 = parse_program(FIRST_PROGRAM)
+    assert seal_digest(program1) == seal_digest(program2)
+
+
+def test_first_seal_digest_sensitive():
+    base = seal_digest(parse_program(FIRST_PROGRAM))
+    changed = FIRST_PROGRAM.replace("E.timeout", "E.cancel")
+    assert seal_digest(parse_program(changed)) != base
+
+
+def test_first_in_canonical_json():
+    from tahoe.syntax.model import First
+    program = parse_program(FIRST_PROGRAM)
+    cj = canonical_json(program)
+    import json
+    payload = json.loads(cj)
+    first_stmt = payload["statements"][0]
+    assert first_stmt["kind"] == "first"
+    assert first_stmt["selectors"] == ["E.arrived", "E.timeout"]
+    assert len(first_stmt["body"]) == 1
+
+
+def test_first_exported_from_tahoe_syntax():
+    import tahoe.syntax as syntax_module
+    assert hasattr(syntax_module, "First")
+    assert "First" in syntax_module.__all__

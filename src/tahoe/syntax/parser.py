@@ -15,6 +15,7 @@ from .model import (
     Conditional,
     Declaration,
     DonePredicate,
+    First,
     Gather,
     Invocation,
     Loop,
@@ -76,8 +77,9 @@ _PROTOCOLS_DIR_DEFAULT = "protocols"
 # conditional.  Issue #68: LOOP is no longer reserved — it parses a bounded
 # iterative refinement block.  Issue #69: TRY is no longer reserved — it
 # parses an OR-parallelism / speculative execution block.
-# FIRST/AWAIT/APPROVE stay unsupported.
-_UNSUPPORTED = frozenset({"FIRST", "AWAIT", "APPROVE"})
+# Issue #76: FIRST is no longer reserved — it parses an event-choice block.
+# AWAIT/APPROVE stay unsupported.
+_UNSUPPORTED = frozenset({"AWAIT", "APPROVE"})
 # Issue #4: SCATTER/GATHER block grammar.  The SCATTER line is followed by
 # exactly one indented body step line; the GATHER line names that body step
 # and optionally a judge step, itself defined by the following indented line.
@@ -121,6 +123,9 @@ _LOOP_FIELD_RE = re.compile(
 # ``REFORMULATE`` keyword; the body consists of four labeled sections
 # (DIAGNOSE, REVISE, REPLAN, CONTINUE) on indented lines.
 _REFORMULATE_RE = re.compile(r"^REFORMULATE$")
+# Issue #76: FIRST event-choice block grammar.  The header is
+# ``FIRST <selector> OR <selector>+`` followed by an indented control block.
+_FIRST_RE = re.compile(rf"^FIRST\s+(?P<selectors>.+)$")
 _REFORMULATE_SECTION_RE = re.compile(
     r"^(?P<section>DIAGNOSE|REVISE|REPLAN|CONTINUE):\s*(?P<rest>.+)$"
 )
@@ -287,7 +292,7 @@ def parse_program(text: str) -> Program:
         raise ParseError("malformed PROGRAM header", header_line, 1)
 
     declarations: list[Declaration] = []
-    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop | Try] = []
+    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop | Try | First] = []
     in_input = False
     terminal_seen = False
 
@@ -478,6 +483,12 @@ def parse_program(text: str) -> Program:
         # CONTINUE) on indented lines.
         if re.match(r"REFORMULATE\b", line):
             statements.append(_parse_reformulate_block(line, line_no, lines))
+            continue
+
+        # Issue #76: FIRST event-choice block.  The header spans one line
+        # (FIRST <selector> OR <selector>+), followed by an indented body.
+        if re.match(r"FIRST\b", line):
+            statements.append(_parse_first_block(line, line_no, lines))
             continue
 
         # Issue #7: strip the optional trailing REVISE/RETIRE clause before
@@ -1221,6 +1232,130 @@ def _parse_try_branch_statement(
     raise ParseError(
         "TRY branch statement must be a DO invocation, IF, CALL,"
         " SCATTER, GATHER, PAR, LOOP, STOP, or RETURN",
+        line_no,
+        1,
+    )
+
+
+def _parse_first_block(line: str, line_no: int, lines) -> First:
+    """Parse one ``FIRST event_selector OR event_selector+ ...`` block (issue #76).
+
+    The header line is ``FIRST <selector> OR <selector> [OR <selector> ...]``
+    where each selector is a raw event selector string.  The body is an
+    indented block of statements (like LOOP/IF block bodies).
+
+    Parsing only — the coordinator skips FIRST entries with a warning.
+    """
+    match = _FIRST_RE.fullmatch(line)
+    if match is None:
+        raise ParseError(
+            "malformed FIRST (expected FIRST <selector> OR <selector>...)",
+            line_no, 1,
+        )
+    raw_selectors = match.group("selectors")
+    parts = [s.strip() for s in raw_selectors.split(" OR ")]
+    if len(parts) < 2:
+        raise ParseError(
+            "FIRST requires at least two event selectors separated by OR",
+            line_no, 1,
+        )
+    selectors = [p for p in parts if p]
+    if len(selectors) != len(parts):
+        raise ParseError(
+            "FIRST event selectors must not be empty", line_no, 1,
+        )
+
+    body: list = []
+    body_indent: int | None = None
+    while True:
+        if _pending_lines:
+            body_line_no, body_raw, body_line = _pending_lines.pop(0)
+        else:
+            try:
+                body_line_no, body_raw, body_line = next(lines)
+            except StopIteration:
+                break
+        if not body_raw[:1].isspace():
+            _pending_lines.append((body_line_no, body_raw, body_line))
+            break
+        current_indent = len(body_raw) - len(body_raw.lstrip())
+        if body_indent is None:
+            body_indent = current_indent
+        elif current_indent < body_indent:
+            _pending_lines.append((body_line_no, body_raw, body_line))
+            break
+        body.append(
+            _parse_first_body_statement(body_line, body_line_no, lines, body_raw)
+        )
+
+    if not body:
+        raise ParseError(
+            "FIRST block requires at least one indented body statement",
+            line_no, 1,
+        )
+
+    return First(
+        selectors=tuple(selectors),
+        body=tuple(body),
+        line=line_no,
+    )
+
+
+def _parse_first_body_statement(
+    line: str, line_no: int, lines, raw: str
+) -> object:
+    """Parse one statement inside a FIRST body (issue #76).
+
+    Supports the same statement types as the top-level parser: DO
+    invocations, IF conditionals, CALL, STOP, RETURN, SCATTER/GATHER,
+    PAR/BARRIER, LOOP, TRY, REFORMULATE.
+    """
+    keyword = line.split(None, 1)[0]
+
+    if re.match(r"IF\b", line):
+        return _parse_if(line, line_no, lines, raw)
+
+    if re.match(r"STOP\b", line):
+        stop = _STOP_RE.fullmatch(line)
+        if stop is None:
+            raise ParseError("malformed STOP in FIRST body", line_no, 1)
+        return Stop(stop.group("kind"), stop.group("ref"))
+
+    if re.match(r"RETURN\b", line):
+        return Return(_parse_refs(line[6:].strip(), line_no, "RETURN"))
+
+    if re.match(r"CALL\b", line):
+        call = _CALL_RE.fullmatch(line)
+        if call is None:
+            raise ParseError("malformed CALL in FIRST body", line_no, 1)
+        args = tuple(_parse_argument(item, line_no) for item in _split_top_level(call.group("args"), line_no))
+        targets = _parse_refs(call.group("targets"), line_no, "target")
+        return Call(call.group("protocol"), args, targets, line_no)
+
+    if re.match(r"SCATTER\b", line):
+        return _parse_scatter_block(line, line_no, lines)
+
+    if re.match(r"GATHER\b", line):
+        return _parse_gather_line(line, line_no, lines)
+
+    if re.match(r"PAR\b", line):
+        return _parse_par_block(line, line_no, lines)
+
+    if re.match(r"LOOP\b", line):
+        return _parse_loop_block(line, line_no, lines)
+
+    if re.match(r"TRY\b", line):
+        return _parse_try_block(line, line_no, lines)
+
+    if re.match(r"REFORMULATE\b", line):
+        return _parse_reformulate_block(line, line_no, lines)
+
+    if _CONDITION_STEP_RE.match(line):
+        return _parse_invocation_text(line, line_no)
+
+    raise ParseError(
+        "FIRST body statement must be a DO invocation, IF, CALL,"
+        " SCATTER, GATHER, PAR, LOOP, TRY, REFORMULATE, STOP, or RETURN",
         line_no,
         1,
     )
@@ -2589,6 +2724,10 @@ def validate_program(
             _validate_reformulate_statement(
                 statement, known, available, steps
             )
+        elif isinstance(statement, First):
+            _validate_first_statement(
+                statement, known, available, steps
+            )
         else:
             raise ParseError(f"unknown statement {type(statement).__name__}")
     if pending_scatter is not None:
@@ -3370,6 +3509,85 @@ def _validate_reformulate_statement(
         )
 
 
+def _validate_first_statement(
+    statement: First,
+    known: set[str] | None,
+    available: set[str],
+    steps: set[str],
+) -> None:
+    """Validate one FIRST block (issue #76).
+
+    The body statements validate like LOOP body statements over the same
+    ``available`` namespace.  Body targets are conditionally committed
+    (the FIRST block may not fire) and never added to ``available``.
+    """
+    if len(statement.selectors) < 2:
+        raise ParseError(
+            "FIRST requires at least two event selectors",
+            statement.line, 1,
+        )
+    first_available = set(available)
+    first_targets: set[str] = set()
+    for body_stmt in statement.body:
+        if isinstance(body_stmt, Invocation):
+            if body_stmt.step_id in steps:
+                raise ParseError(f"duplicate step {body_stmt.step_id}")
+            steps.add(body_stmt.step_id)
+            if known is not None and body_stmt.command not in known:
+                raise ParseError(f"unknown command {body_stmt.command}")
+            for argument in body_stmt.args:
+                for ref in _references_in(argument.value):
+                    if ref.startswith("KB."):
+                        continue
+                    if ref not in first_available:
+                        raise ParseError(
+                            f"reference {ref} used before definition"
+                            f" (FIRST body)",
+                            argument.line, 1,
+                        )
+            for target in body_stmt.targets:
+                if target.startswith("KB."):
+                    raise ParseError(
+                        f"KB reference {target} cannot be an invocation target"
+                    )
+                if target in first_targets:
+                    raise ParseError(
+                        f"duplicate target {target} in FIRST body"
+                    )
+                first_targets.add(target)
+                first_available.add(target)
+        elif isinstance(body_stmt, (Stop, Return)):
+            pass
+        elif isinstance(body_stmt, Conditional):
+            cond_ast = parse_condition(body_stmt.condition, body_stmt.line)
+            for ref in _condition_refs(cond_ast):
+                if not _condition_ref_resolvable(ref, first_available):
+                    raise ParseError(
+                        f"FIRST body IF condition reference {ref}"
+                        " used before definition",
+                        body_stmt.line, 1,
+                    )
+            embedded = body_stmt.statement
+            if isinstance(embedded, Invocation):
+                if embedded.step_id in steps:
+                    raise ParseError(f"duplicate step {embedded.step_id}")
+                steps.add(embedded.step_id)
+                if known is not None and embedded.command not in known:
+                    raise ParseError(f"unknown command {embedded.command}")
+                for argument in embedded.args:
+                    for ref in _references_in(argument.value):
+                        if ref.startswith("KB."):
+                            continue
+                        if ref not in first_available:
+                            raise ParseError(
+                                f"reference {ref} used before definition"
+                                f" (FIRST body IF)",
+                                argument.line, 1,
+                            )
+            elif isinstance(embedded, (Stop, Return)):
+                pass
+
+
 def _validate_call_contract(
     call: Call,
     known_commands: Iterable[str] | None,
@@ -3682,6 +3900,12 @@ def _statement_dict(statement: object) -> dict[str, Any]:
             "replan": _statement_dict(statement.replan),
             "continue_ref": statement.continue_ref,
         }
+    if isinstance(statement, First):
+        return {
+            "kind": "first",
+            "selectors": list(statement.selectors),
+            "body": [_statement_dict(s) for s in statement.body],
+        }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 
@@ -3850,6 +4074,12 @@ def _statement_dict_v2(statement: object) -> dict[str, Any]:
             ],
             "replan": _statement_dict_v2(statement.replan),
             "continue_ref": statement.continue_ref,
+        }
+    if isinstance(statement, First):
+        return {
+            "kind": "first",
+            "selectors": list(statement.selectors),
+            "body": [_statement_dict_v2(s) for s in statement.body],
         }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
