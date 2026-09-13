@@ -44,6 +44,7 @@ from tahoe.syntax import (
     Stop,
     canonical_json,
     canonical_json_v2,
+    get_type_warnings,
     parse_condition,
     parse_program,
     protocol_file_path,
@@ -2798,3 +2799,169 @@ RETURN E.test
     assert isinstance(ref, Reformulate)
     assert ref.diagnose.command == "challenge"
     assert ref.continue_ref == "G.plan2"
+
+
+# -- Issue #87: protocol composition type-compatibility warnings ------------
+
+
+TYPE_MISMATCH_PROTOCOL = """\
+PROGRAM typed VERSION 1.0
+
+INPUT
+  G.request = "x"
+  H.hypothesis = "cache failure"
+
+step.work: DO hypothesize(claim = H.hypothesis) -> E.result
+
+RETURN E.result
+"""
+
+
+TYPE_MATCH_PROTOCOL = """\
+PROGRAM matched VERSION 1.0
+
+INPUT
+  G.request = "x"
+  G.goal = "ship"
+
+step.work: DO define(value = G.goal) -> E.result
+
+RETURN E.result
+"""
+
+
+def test_call_type_mismatch_warning(tmp_path):
+    write_protocol(tmp_path, "typed", TYPE_MISMATCH_PROTOCOL)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.probe = "frame the issue"
+
+step.ask: DO define(value = G.probe) -> E.probe
+CALL protocol.typed(request = G.probe, hypothesis = E.probe) -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define", "hypothesize"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 1
+    assert "hypothesis" in call_warnings[0]
+    assert "E.*" in call_warnings[0]
+    assert "H.*" in call_warnings[0]
+
+
+def test_call_type_match_no_warning(tmp_path):
+    write_protocol(tmp_path, "matched", TYPE_MATCH_PROTOCOL)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.probe = "frame the issue"
+
+step.ask: DO define(value = G.probe) -> G.goal
+CALL protocol.matched(request = G.probe, goal = G.goal) -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 0
+
+
+def test_call_literal_argument_no_type_warning(tmp_path):
+    write_protocol(tmp_path, "typed", TYPE_MISMATCH_PROTOCOL)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.probe = "frame the issue"
+
+step.ask: DO define(value = G.probe) -> E.probe
+CALL protocol.typed(request = G.probe, hypothesis = "literal string") -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define", "hypothesize"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 0
+
+
+def test_call_multiple_type_mismatch_warnings(tmp_path):
+    protocol_text = """\
+PROGRAM multi VERSION 1.0
+
+INPUT
+  G.goal = "x"
+  H.hypothesis = "h"
+  C.constraint = "c"
+
+step.work: DO define(value = G.goal) -> E.result
+
+RETURN E.result
+"""
+    write_protocol(tmp_path, "multi", protocol_text)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  E.evidence = "observed"
+  A.assumption = "unverified"
+
+step.ev: DO define(value = E.evidence) -> E.ev
+step.as: DO define(value = A.assumption) -> A.as
+CALL protocol.multi(goal = E.ev, hypothesis = A.as, constraint = "literal") -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 2
+    assert any("goal" in w and "E.*" in w and "G.*" in w for w in call_warnings)
+    assert any("hypothesis" in w and "A.*" in w and "H.*" in w for w in call_warnings)
+
+
+def test_call_type_mismatch_does_not_raise_error(tmp_path):
+    write_protocol(tmp_path, "typed", TYPE_MISMATCH_PROTOCOL)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.probe = "frame the issue"
+
+step.ask: DO define(value = G.probe) -> E.probe
+CALL protocol.typed(request = G.probe, hypothesis = E.probe) -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    result = validate_program(
+        program,
+        known_commands={"define", "hypothesize"},
+        protocols_dir=tmp_path / "protocols",
+    )
+    assert result is True
