@@ -12,6 +12,7 @@ from benchmarks.metrics import (
     compute_reasoning_concentration,
     compute_reasoning_efficiency,
     compute_redundancy_rate,
+    count_typed_refs,
 )
 
 
@@ -150,3 +151,138 @@ def test_all_zero_inputs():
         "rc_reasoning_concentration": 0.0,
         "rr_redundancy_rate": 0.0,
     }
+
+
+# -- count_typed_refs ---------------------------------------------------
+
+
+def test_ref_count_empty_string():
+    result = count_typed_refs("")
+    assert result["typed_refs_produced"] == 0
+    assert result["total_refs_produced"] == 0
+    assert result["verified_logical_steps"] == 0
+    assert result["repeated_refs"] == 0
+    assert result["retired_refs"] == 0
+
+
+def test_ref_count_none():
+    result = count_typed_refs(None)
+    assert result["typed_refs_produced"] == 0
+    assert result["total_refs_produced"] == 0
+
+
+def test_ref_count_single_ref():
+    text = "G.goal: solve the problem"
+    result = count_typed_refs(text)
+    assert result["typed_refs_produced"] == 1
+    assert result["total_refs_produced"] == 1
+    assert result["verified_logical_steps"] == 0
+    assert result["repeated_refs"] == 0
+    assert result["retired_refs"] == 0
+
+
+def test_ref_count_multiple_distinct_refs():
+    text = """G.goal: solve the problem
+C.constraint: must be fast
+E.evidence: the answer is 42
+P.step_1: do something
+H.thesis: the result is correct
+V.verify: check the answer
+D.decision: pick option C"""
+    result = count_typed_refs(text)
+    assert result["typed_refs_produced"] == 7
+    assert result["total_refs_produced"] == 7
+    assert result["verified_logical_steps"] == 1
+    assert result["repeated_refs"] == 0
+    assert result["retired_refs"] == 0
+
+
+def test_ref_count_repeated_refs():
+    text = """G.goal: solve the problem
+G.goal: try again differently
+E.evidence: found the answer
+E.evidence: confirmed
+P.step_1: first step"""
+    result = count_typed_refs(text)
+    assert result["typed_refs_produced"] == 3
+    assert result["total_refs_produced"] == 5
+    assert result["verified_logical_steps"] == 0
+    assert result["repeated_refs"] == 2
+    assert result["retired_refs"] == 0
+
+
+def test_ref_count_verified_steps():
+    text = """G.goal: solve it
+V.verify: checked step 1
+V.verify: checked step 2
+V.confirmed: all good"""
+    result = count_typed_refs(text)
+    assert result["verified_logical_steps"] == 3
+    assert result["typed_refs_produced"] == 3
+    assert result["total_refs_produced"] == 4
+    assert result["repeated_refs"] == 1
+
+
+def test_ref_count_mixed_verified_and_repeated():
+    text = """G.goal: solve it
+P.step_1: do something
+P.step_1: redo it
+V.verify: checked
+V.verify: double checked"""
+    result = count_typed_refs(text)
+    assert result["typed_refs_produced"] == 3
+    assert result["total_refs_produced"] == 5
+    assert result["verified_logical_steps"] == 2
+    assert result["repeated_refs"] == 2
+
+
+def test_ref_count_no_typed_refs_in_plain_text():
+    text = """The answer is 42.
+This is a plain chain-of-thought without any typed refs.
+Just regular reasoning text."""
+    result = count_typed_refs(text)
+    assert result["typed_refs_produced"] == 0
+    assert result["total_refs_produced"] == 0
+    assert result["verified_logical_steps"] == 0
+
+
+def test_ref_count_tahoe_skill_output():
+    text = """G.goal: Which process causes Europa's surface cracks?
+E.options: A) volcanic B) tectonic C) impacts D) flares
+P.eliminate_A: No active volcanoes — eliminate
+P.eliminate_C: Impact cracks would be radial — eliminate
+P.eliminate_D: Solar flares don't affect ice — eliminate
+D.choice: B"""
+    result = count_typed_refs(text)
+    assert result["typed_refs_produced"] == 6
+    assert result["total_refs_produced"] == 6
+    assert result["verified_logical_steps"] == 0
+    assert result["repeated_refs"] == 0
+
+
+def test_ref_count_underscore_in_name():
+    text = "P.step_1: first\nP.step_2: second\nP.step_10: tenth"
+    result = count_typed_refs(text)
+    assert result["typed_refs_produced"] == 3
+    assert result["total_refs_produced"] == 3
+
+
+def test_ref_count_case_sensitive():
+    text = "G.goal: upper case\ng.goal: lower case should not match"
+    result = count_typed_refs(text)
+    assert result["typed_refs_produced"] == 1
+    assert result["total_refs_produced"] == 1
+
+
+def test_ref_count_metrics_integration():
+    """count_typed_refs output feeds directly into compute_all_metrics."""
+    text = """G.goal: solve it
+P.step_1: do something
+V.verify: checked
+E.evidence: done"""
+    ref_counts = count_typed_refs(text)
+    summary = {**ref_counts, "total_tokens": 1000, "output_tokens": 500}
+    metrics = compute_all_metrics(summary)
+    assert metrics["re_reasoning_efficiency"] == pytest.approx(1 / 1000)
+    assert metrics["rc_reasoning_concentration"] == pytest.approx(4 / 500)
+    assert metrics["rr_redundancy_rate"] == 0.0

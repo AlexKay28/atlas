@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner_classic import run as run_classic
 from report import generate_markdown_table, generate_json_report, generate_per_task_comparison
-from metrics import compute_all_metrics
+from metrics import compute_all_metrics, count_typed_refs
 
 SKILL_PATH = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
 ARMS = ["classic", "tahoe"]
@@ -371,11 +371,12 @@ def run_trial(task, arm, skill_prompt, trial_idx):
     )
     passed, detail = grade_task(task, result.final_answer)
 
-    verified_steps = getattr(result, "verified_logical_steps", 0) or 0
-    typed_refs = getattr(result, "typed_refs_produced", 0) or 0
-    repeated_refs = getattr(result, "repeated_refs", 0) or 0
-    retired_refs = getattr(result, "retired_refs", 0) or 0
-    total_refs = getattr(result, "total_refs_produced", 0) or 0
+    ref_counts = count_typed_refs(result.final_answer)
+    verified_steps = ref_counts["verified_logical_steps"]
+    typed_refs = ref_counts["typed_refs_produced"]
+    repeated_refs = ref_counts["repeated_refs"]
+    retired_refs = ref_counts["retired_refs"]
+    total_refs = ref_counts["total_refs_produced"]
 
     return {
         "task_id": task["task_id"],

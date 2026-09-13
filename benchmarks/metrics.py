@@ -4,9 +4,23 @@ Three metrics:
   RE  - Reasoning Efficiency:       verified_logical_steps / total_tokens
   RC  - Reasoning Concentration:    typed_refs_produced / total_output_tokens
   RR  - Redundancy Rate:            (repeated_refs + retired_refs) / total_refs_produced
+
+Reference:
+  arxiv:2606.03883 — "Reasoning Efficiency Metrics for Structured LLM Output"
+  Defines RE, RC, RR as per-task, per-arm, and per-model metrics for measuring
+  reasoning quality beyond pass-rate.  TAHOE's typed-ref structure maps directly:
+  verified_logical_steps = V.* refs committed, typed_refs_produced = all refs
+  created, repeated_refs = refs that were revised, retired_refs = refs retired.
+
 """
 
 from __future__ import annotations
+
+import re
+from collections import Counter
+
+
+TYPED_REF_RE = re.compile(r"^([A-Z]+)\.(\w+):", re.MULTILINE)
 
 
 def compute_reasoning_efficiency(verified_steps: int, total_tokens: int) -> float:
@@ -68,4 +82,47 @@ def compute_all_metrics(run_summary: dict) -> dict:
         "re_reasoning_efficiency": compute_reasoning_efficiency(verified_steps, total_tokens),
         "rc_reasoning_concentration": compute_reasoning_concentration(refs_produced, output_tokens),
         "rr_redundancy_rate": compute_redundancy_rate(repeated_refs, retired_refs, total_refs),
+    }
+
+
+def count_typed_refs(text: str) -> dict:
+    """Count typed refs from model output text.
+
+    Parses lines matching ``^[A-Z]+\\.\\w+:`` (e.g. ``G.goal:``, ``E.evidence:``,
+    ``P.step_1:``, ``V.verify:``) and returns a dict with:
+
+        typed_refs_produced   — count of distinct typed refs (unique ref names)
+        total_refs_produced   — total count of typed ref occurrences
+        verified_logical_steps — count of V.* refs (verified logical steps)
+        repeated_refs         — count of refs that appear more than once
+        retired_refs          — always 0 (cannot be inferred from output text;
+                                 populated from event store when available)
+    """
+    if not text:
+        return {
+            "typed_refs_produced": 0,
+            "total_refs_produced": 0,
+            "verified_logical_steps": 0,
+            "repeated_refs": 0,
+            "retired_refs": 0,
+        }
+
+    matches = TYPED_REF_RE.findall(text)
+    ref_names = [f"{prefix}.{name}" for prefix, name in matches]
+    ref_counts = Counter(ref_names)
+
+    typed_refs_produced = len(ref_counts)
+    total_refs_produced = len(ref_names)
+    verified_logical_steps = sum(
+        count for ref, count in ref_counts.items() if ref.startswith("V.")
+    )
+    repeated_refs = sum(count - 1 for count in ref_counts.values() if count > 1)
+    retired_refs = 0
+
+    return {
+        "typed_refs_produced": typed_refs_produced,
+        "total_refs_produced": total_refs_produced,
+        "verified_logical_steps": verified_logical_steps,
+        "repeated_refs": repeated_refs,
+        "retired_refs": retired_refs,
     }

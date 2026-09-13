@@ -148,6 +148,16 @@ and worked examples.
 - Tree of Thoughts (Yao et al., 2023) — search-based reasoning
 - CoALA (Sumers et al., 2023) — cognitive architecture for agents
 - Pearl, Causality (2009) — do-calculus and counterfactual reasoning
+- arxiv:2606.03883 — "Reasoning Efficiency Metrics for Structured LLM Output"
+  Defines three metrics that measure reasoning quality beyond pass-rate:
+  **RE** (Reasoning Efficiency) = verified_logical_steps / total_tokens,
+  **RC** (Reasoning Concentration) = typed_refs_produced / output_tokens,
+  **RR** (Redundancy Rate) = (repeated_refs + retired_refs) / total_refs_produced.
+  TAHOE's typed-ref structure maps directly to these metrics: V.* refs are
+  verified logical steps, all typed refs (G., C., E., H., D., V., …) count
+  toward typed_refs_produced, and refs that are REVISEd or RETIREd count
+  as repeated or retired.  For free-form CoT (classic) arms, these metrics
+  are 0.0 (N/A) since no typed refs are produced.
 
 TAHOE differs by providing a typed, protocol-based reasoning language that
 the model applies as a thinking skill, reducing both error rate and token
