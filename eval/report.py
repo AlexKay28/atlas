@@ -1,4 +1,4 @@
-"""Token distribution report generator for the ablation study."""
+"""Token distribution and solution quality report for the ablation study."""
 
 import json
 import statistics
@@ -14,6 +14,10 @@ STAT_FIELDS = (
     "mean_input_tokens",
     "mean_output_tokens",
     "mean_authoring_tokens",
+    "mean_quality",
+    "p25_quality",
+    "p75_quality",
+    "tokens_per_success",
 )
 
 COMPARISON_METRICS = (
@@ -22,6 +26,8 @@ COMPARISON_METRICS = (
     "p25_tokens",
     "p75_tokens",
     "mean_wall",
+    "mean_quality",
+    "tokens_per_success",
 )
 
 
@@ -58,6 +64,25 @@ def compute_stats(trials):
     authoring = [trial.get("authoring_tokens") or 0 for trial in trials]
     p25, p50, p75 = _percentiles(totals)
     passed = sum(1 for trial in trials if trial["passed"])
+
+    qualities = [
+        trial.get("quality_score") for trial in trials
+        if trial.get("quality_score") is not None
+    ]
+    if qualities:
+        q_p25, q_p50, q_p75 = _percentiles(qualities)
+        mean_quality = statistics.fmean(qualities)
+    else:
+        q_p25 = q_p50 = q_p75 = 0.0
+        mean_quality = 0.0
+
+    success_tokens = [
+        trial["total_tokens"] for trial in trials if trial["passed"]
+    ]
+    tokens_per_success = (
+        statistics.fmean(success_tokens) if success_tokens else 0.0
+    )
+
     return {
         "pass_rate": passed / len(trials),
         "mean_tokens": statistics.fmean(totals),
@@ -68,29 +93,35 @@ def compute_stats(trials):
         "mean_input_tokens": statistics.fmean(inputs),
         "mean_output_tokens": statistics.fmean(outputs),
         "mean_authoring_tokens": statistics.fmean(authoring),
+        "mean_quality": mean_quality,
+        "p25_quality": q_p25,
+        "p75_quality": q_p75,
+        "tokens_per_success": tokens_per_success,
     }
 
 
 def generate_markdown_table(trials):
     groups = group_trials(trials)
     lines = [
-        "| task_id | arm | trials | pass_rate | mean_tokens | p25 | p50 | p75 | mean_wall |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| task_id | arm | trials | pass_rate | mean_quality | mean_tokens | p25 | p50 | p75 | mean_wall | tokens/success |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for task_id, arm in sorted(groups):
         group = groups[(task_id, arm)]
         stats = compute_stats(group)
         lines.append(
-            "| {task} | {arm} | {n} | {pr} | {mt} | {p25} | {p50} | {p75} | {mw} |".format(
+            "| {task} | {arm} | {n} | {pr} | {mq} | {mt} | {p25} | {p50} | {p75} | {mw} | {tps} |".format(
                 task=task_id,
                 arm=arm,
                 n=len(group),
                 pr=_fmt(stats["pass_rate"]),
+                mq=_fmt(stats["mean_quality"]),
                 mt=_fmt(stats["mean_tokens"]),
                 p25=_fmt(stats["p25_tokens"]),
                 p50=_fmt(stats["p50_tokens"]),
                 p75=_fmt(stats["p75_tokens"]),
                 mw=_fmt(stats["mean_wall"]),
+                tps=_fmt(stats["tokens_per_success"]),
             )
         )
     return "\n".join(lines)
