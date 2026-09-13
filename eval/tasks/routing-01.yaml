@@ -8,11 +8,11 @@ grader:
   params:
     answer: "Route 3, total cost: 16"
 program_source: |
-  PROGRAM routing_01_min_cost_route VERSION 1.0
+  PROGRAM routing_01 VERSION 1.0
   INPUT
       G.goal = "Given 4 delivery routes with distances [12, 25, 8, 17] km and costs [3, 7, 2, 5] units/km, find the route with minimum total cost. Report the route number and total cost."
-  step.calculate_totals: DO calculate(expression = "total cost per route as distance * cost for routes 1-4") -> P.totals
-  step.choose_best: DO choose(criterion = "the route with the minimum total cost from P.totals") -> P.best
-  step.report: DO report(committed_refs = P.best, format = "json") -> OUT.answer
+  step.compute: DO calculate(expression = "12*3, 25*7, 8*2, 17*5") -> P.totals
+  step.pick: DO choose(criterion = "minimum", options = P.totals) -> P.best
+  step.report: DO report(committed_refs = P.best, format = "text") -> OUT.answer
   RETURN OUT.answer
 authoring_attempts_expected: 1

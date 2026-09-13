@@ -10,11 +10,11 @@ grader:
     field: "subtask_count"
     value: 5
 program_source: |
-  PROGRAM plan_01_deploy_web_app VERSION 1.0
+  PROGRAM plan_01 VERSION 1.0
   INPUT
       G.goal = "Decompose the goal 'Deploy a web app to production' into ordered subtasks. Return the number of subtasks."
-  step.decompose: DO decompose(goal = "the goal 'Deploy a web app to production' into 5 ordered subtasks") -> P.subtasks
-  step.rank: DO rank(items = "P.subtasks into execution order") -> P.ordered
-  step.report: DO report(committed_refs = P.ordered, format = "json") -> OUT.answer
+  step.decompose: DO decompose(goal = "Deploy a web app to production") -> P.subtasks
+  step.count: DO calculate(expression = "number of subtasks", data = P.subtasks) -> P.subtask_count
+  step.report: DO report(committed_refs = P.subtask_count, format = "json") -> OUT.answer
   RETURN OUT.answer
 authoring_attempts_expected: 1

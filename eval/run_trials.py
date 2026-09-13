@@ -55,9 +55,45 @@ def grade_trial(task, arm_result):
     grader_type = task["grader"]["type"]
     grader = make_grader(grader_type)
     answer = arm_result.get("final_answer", "")
+    # Normalize TAHOE JSON output: extract the value from common wrappers
+    if arm_result.get("arm") == "tahoe":
+        answer = _normalize_tahoe_answer(answer)
     passed, detail = grader(answer, task.get("expected_state", {}))
     quality = 1.0 if passed else 0.0
     return passed, quality, detail
+
+
+def _normalize_tahoe_answer(answer):
+    """Extract the actual answer value from TAHOE's JSON wrapper."""
+    if not answer:
+        return ""
+    answer = answer.strip()
+    # Try parsing as JSON
+    try:
+        data = json.loads(answer)
+    except (json.JSONDecodeError, ValueError):
+        # Not JSON — return as-is
+        return answer
+    # Common wrapper patterns
+    if isinstance(data, dict):
+        for key in ("answer", "result", "value", "output", "report"):
+            if key in data:
+                val = data[key]
+                if isinstance(val, (str, int, float)):
+                    return str(val)
+                if isinstance(val, dict):
+                    # Try one more level
+                    for k2 in ("answer", "result", "value"):
+                        if k2 in val:
+                            return str(val[k2])
+                    return json.dumps(val)
+        # If it has only one key, return that value
+        if len(data) == 1:
+            val = list(data.values())[0]
+            return str(val) if not isinstance(val, (dict, list)) else json.dumps(val)
+    if isinstance(data, (int, float)):
+        return str(data)
+    return answer
 
 
 def run_classic_arm(task, trial_idx):

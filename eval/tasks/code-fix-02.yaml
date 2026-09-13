@@ -8,11 +8,10 @@ grader:
   params:
     substring: "y = x * c"
 program_source: |
-  PROGRAM code_fix_02_file_b_multiply VERSION 1.0
+  PROGRAM code_fix_02 VERSION 1.0
   INPUT
       G.goal = "Two files have a logic bug. File A computes x = a * b. File B computes y = x + c but should use y = x * c. Return the corrected line for File B."
-  step.check_file_a: DO check(condition = "File A line x = a * b matches the specification") -> P.file_a_ok
-  step.edit: DO edit(instruction = "replace 'y = x + c' with 'y = x * c' in File B") -> P.fixed_b
-  step.report: DO report(committed_refs = P.fixed_b, format = "json") -> OUT.answer
+  step.fix: DO edit(instruction = "replace 'y = x + c' with 'y = x * c' in File B") -> P.fixed
+  step.report: DO report(committed_refs = P.fixed, format = "text") -> OUT.answer
   RETURN OUT.answer
 authoring_attempts_expected: 1

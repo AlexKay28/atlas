@@ -8,11 +8,11 @@ grader:
   params:
     substring: "Resume"
 program_source: |
-  PROGRAM recover_01_resume_after_crash VERSION 1.0
+  PROGRAM recover_01 VERSION 1.0
   INPUT
       G.goal = "A task runner crashed mid-execution after completing 3 of 5 steps. Describe the recovery procedure in one sentence starting with 'Resume'."
-  step.recall: DO recall(query = "the 3 completed steps and the 2 remaining steps from the run log") -> E.state
-  step.check: DO check(condition = "steps 1-3 are complete and steps 4-5 are pending") -> P.gaps
-  step.report: DO report(committed_refs = P.gaps, format = "json") -> OUT.answer
+      G.scenario = "task runner crashed after completing steps 1-3 of 5; steps 4-5 are pending"
+  step.recall: DO recall(query = "recovery procedure after crash", data = G.scenario) -> E.state
+  step.report: DO report(committed_refs = E.state, format = "text") -> OUT.answer
   RETURN OUT.answer
 authoring_attempts_expected: 1

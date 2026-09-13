@@ -8,11 +8,11 @@ grader:
   params:
     answer: "3 routes satisfy the constraint"
 program_source: |
-  PROGRAM routing_02_constraint_count VERSION 1.0
+  PROGRAM routing_02 VERSION 1.0
   INPUT
       G.goal = "Given 6 delivery routes with distances [12, 25, 8, 17, 30, 5] km and costs [3, 7, 2, 5, 9, 1] units/km, and a constraint that total cost must be under 50 units, find all routes that satisfy the constraint and report the count."
-  step.calculate_totals: DO calculate(expression = "total cost per route as distance * cost for routes 1-6") -> P.totals
-  step.check_constraint: DO check(condition = "each total in P.totals satisfies the constraint total cost under 50 units") -> P.eligible
-  step.report: DO report(committed_refs = P.eligible, format = "json") -> OUT.answer
+  step.compute: DO calculate(expression = "12*3, 25*7, 8*2, 17*5, 30*9, 5*1") -> P.totals
+  step.check: DO check(condition = "count of totals under 50 units", data = P.totals) -> P.count
+  step.report: DO report(committed_refs = P.count, format = "text") -> OUT.answer
   RETURN OUT.answer
 authoring_attempts_expected: 1

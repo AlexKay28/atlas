@@ -639,14 +639,18 @@ def _build_step_prompt(
     target_refs = tuple(targets) if targets is not None else ()
     lines = [
         "You are the model worker executing one step of a TAHOE program.",
+        "Execute the command using the provided arguments.",
+        "COMPUTE the actual result — do not describe what should happen.",
+        "Return the concrete answer, not a plan or explanation.",
         "",
         f"Command: {command}",
-        "Resolved arguments (JSON):",
+        "Arguments:",
         json.dumps(
             dict(resolved_kwargs or {}),
             ensure_ascii=False,
             sort_keys=True,
             default=str,
+            indent=2,
         ),
         "",
     ]
@@ -659,8 +663,8 @@ def _build_step_prompt(
         )
     else:
         lines.append(
-            "Reply with ONLY a JSON object and nothing else — no prose,"
-            " no explanation."
+            "Reply with ONLY the result value — a JSON object, a number,"
+            " or a short string. No prose, no explanation."
         )
     return "\n".join(lines)
 
