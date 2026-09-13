@@ -259,6 +259,13 @@ The state σ is not modified; only the terminal event is appended.
 
 ## 3. Type System
 
+> **Implementation.** The subtyping lattice, the `is_subtype` relation, and
+> the static type checker are implemented in `src/tahoe/typecheck.py` (issue
+> #71). The type checker runs at lint/seal time via `validate_program` in
+> `src/tahoe/syntax/parser.py`; type mismatches are emitted as warnings (not
+> hard errors) so existing programs continue to parse and seal. The lattice
+> edges in code (`SUBLATTICE` dictionary) correspond to the axioms below.
+
 ### 3.1 Subtyping Lattice
 
 The node types form a subtyping lattice under the relation ⊑ (read "is a subtype of"). The lattice captures epistemic strength: a stronger type can be used where a weaker type is expected, because it carries more epistemic warrant.

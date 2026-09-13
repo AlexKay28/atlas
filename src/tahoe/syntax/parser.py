@@ -1924,6 +1924,14 @@ def _split_top_level(text: str, line_no: int = 0) -> tuple[str, ...]:
     return tuple(parts)
 
 
+_type_warnings: list[str] = []
+
+
+def get_type_warnings() -> list[str]:
+    """Return type warnings collected by the last ``validate_program`` call."""
+    return list(_type_warnings)
+
+
 def validate_program(
     program: Program,
     known_commands: Iterable[str] | None = None,
@@ -2227,6 +2235,14 @@ def validate_program(
         )
     if not terminal:
         raise ParseError("program requires a terminal RETURN or STOP")
+    _type_warnings.clear()
+    from ..typecheck import check_program_types
+    try:
+        from ..registry import builtin_registry
+        registry = builtin_registry()
+    except Exception:
+        registry = None
+    _type_warnings.extend(check_program_types(program, registry))
     return True
 
 

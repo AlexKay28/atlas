@@ -20,6 +20,7 @@ from .parser import (
     ParseError,
     canonical_json,
     canonical_json_v2,
+    get_type_warnings,
     is_typed_reference,
     load_protocol,
     parse_condition,
@@ -54,4 +55,5 @@ __all__ = [
     "canonical_json_v2",
     "seal_digest",
     "is_typed_reference",
+    "get_type_warnings",
 ]
