@@ -35,7 +35,19 @@ SKILL_PATH = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
 ARMS = ["classic", "tahoe"]
 TRIALS_PER_TASK = 3
 SEED = 42
-MAX_SAMPLES_PER_BENCH = 10  # 10 samples per benchmark for pilot
+MAX_SAMPLES_PER_BENCH = 5  # 5 samples per benchmark for pilot
+
+# MMLU grader: answer is index (0-3), choices are A-D
+def grade_mmlu(model_answer, expected_answer, choices=None):
+    """MMLU: answer is an index 0-3, model outputs a letter."""
+    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
+    if len(model_letter) > 1:
+        match = re.search(r'\b([A-D])\b', model_letter)
+        if match:
+            model_letter = match.group(1)
+    expected_idx = int(expected_answer)
+    expected_letter = chr(ord("A") + expected_idx)
+    return model_letter == expected_letter, f"expected={expected_letter}, got={model_letter}"
 
 
 def load_skill():
@@ -110,6 +122,24 @@ def grade_bbh(model_answer, expected_answer):
     return model_clean == expected_clean, f"expected={expected_clean}, got={model_clean[:50]}"
 
 
+def grade_bbh_arith(model_answer, expected_answer):
+    """BBH multistep arithmetic: compare final number."""
+    model_num = extract_model_number(model_answer)
+    expected_num = extract_model_number(expected_answer)
+    return model_num == expected_num, f"expected={expected_num}, got={model_num}"
+
+
+def grade_lsat(model_answer, expected_answer):
+    """LSAT: answer is a letter (A-E)."""
+    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
+    expected = expected_answer.strip().upper()
+    if len(model_letter) > 1:
+        match = re.search(r'\b([A-E])\b', model_letter)
+        if match:
+            model_letter = match.group(1)
+    return model_letter == expected, f"expected={expected}, got={model_letter}"
+
+
 def load_tasks():
     """Load tasks from 3 public benchmarks."""
     from datasets import load_dataset
@@ -145,7 +175,7 @@ def load_tasks():
             "difficulty": "hard",
         })
 
-    # BBH — logical deduction
+    # BBH — logical deduction 7 objects (hard)
     bbh = load_dataset('lukaemon/bbh', 'logical_deduction_seven_objects', split='test')
     indices = rng.sample(range(len(bbh)), MAX_SAMPLES_PER_BENCH)
     for i in indices:
@@ -156,6 +186,99 @@ def load_tasks():
             "description": f"{ex['input']}\n\nAnswer with the letter of the correct option.",
             "expected": ex["target"],
             "grader": "bbh",
+            "difficulty": "hard",
+        })
+
+    # BBH — tracking shuffled objects 7 (hard — state tracking across shuffles)
+    bbh_track = load_dataset('lukaemon/bbh', 'tracking_shuffled_objects_seven_objects', split='test')
+    indices = rng.sample(range(len(bbh_track)), MAX_SAMPLES_PER_BENCH)
+    for i in indices:
+        ex = bbh_track[i]
+        tasks.append({
+            "task_id": f"bbh-track-{i:04d}",
+            "benchmark": "bbh_track",
+            "description": f"{ex['input']}\n\nAnswer with the letter of the correct option.",
+            "expected": ex["target"],
+            "grader": "bbh",
+            "difficulty": "hard",
+        })
+
+    # BBH — multistep arithmetic (hard — 3+ step computation)
+    bbh_arith = load_dataset('lukaemon/bbh', 'multistep_arithmetic_two', split='test')
+    indices = rng.sample(range(len(bbh_arith)), MAX_SAMPLES_PER_BENCH)
+    for i in indices:
+        ex = bbh_arith[i]
+        tasks.append({
+            "task_id": f"bbh-arith-{i:04d}",
+            "benchmark": "bbh_arith",
+            "description": f"{ex['input']}\n\nAnswer with just the number.",
+            "expected": ex["target"],
+            "grader": "bbh_arith",
+            "difficulty": "hard",
+        })
+
+    # MMLU — college mathematics (hard — university-level math)
+    mmlu_math = load_dataset('hails/mmlu_no_train', 'college_mathematics', split='test')
+    indices = rng.sample(range(len(mmlu_math)), MAX_SAMPLES_PER_BENCH)
+    for i in indices:
+        ex = mmlu_math[i]
+        choices = "\n".join(f"({chr(ord('A')+j)}) {c}" for j, c in enumerate(ex["choices"]))
+        tasks.append({
+            "task_id": f"mmlu-math-{i:04d}",
+            "benchmark": "mmlu_math",
+            "description": f"{ex['question']}\n\n{choices}\n\nAnswer with just the letter (A, B, C, or D).",
+            "expected": str(ex["answer"]),
+            "choices": ex["choices"],
+            "grader": "mmlu",
+            "difficulty": "hard",
+        })
+
+    # MMLU — formal logic (hard — logical reasoning)
+    mmlu_logic = load_dataset('hails/mmlu_no_train', 'formal_logic', split='test')
+    indices = rng.sample(range(len(mmlu_logic)), MAX_SAMPLES_PER_BENCH)
+    for i in indices:
+        ex = mmlu_logic[i]
+        choices = "\n".join(f"({chr(ord('A')+j)}) {c}" for j, c in enumerate(ex["choices"]))
+        tasks.append({
+            "task_id": f"mmlu-logic-{i:04d}",
+            "benchmark": "mmlu_logic",
+            "description": f"{ex['question']}\n\n{choices}\n\nAnswer with just the letter (A, B, C, or D).",
+            "expected": str(ex["answer"]),
+            "choices": ex["choices"],
+            "grader": "mmlu",
+            "difficulty": "hard",
+        })
+
+    # MMLU — professional accounting (hard — finance reasoning)
+    mmlu_acct = load_dataset('hails/mmlu_no_train', 'professional_accounting', split='test')
+    indices = rng.sample(range(len(mmlu_acct)), MAX_SAMPLES_PER_BENCH)
+    for i in indices:
+        ex = mmlu_acct[i]
+        choices = "\n".join(f"({chr(ord('A')+j)}) {c}" for j, c in enumerate(ex["choices"]))
+        tasks.append({
+            "task_id": f"mmlu-acct-{i:04d}",
+            "benchmark": "mmlu_acct",
+            "description": f"{ex['question']}\n\n{choices}\n\nAnswer with just the letter (A, B, C, or D).",
+            "expected": str(ex["answer"]),
+            "choices": ex["choices"],
+            "grader": "mmlu",
+            "difficulty": "hard",
+        })
+
+    # LSAT-LR — logical reasoning (hard — law school)
+    lsat = load_dataset('hails/agieval-lsat-lr', split="test")
+    indices = rng.sample(range(len(lsat)), MAX_SAMPLES_PER_BENCH)
+    for i in indices:
+        ex = lsat[i]
+        choices = "\n".join(ex["choices"])
+        gold_idx = ex["gold"][0] if isinstance(ex["gold"], list) else ex["gold"]
+        gold_letter = chr(ord("A") + gold_idx)
+        tasks.append({
+            "task_id": f"lsat-{i:04d}",
+            "benchmark": "lsat",
+            "description": f"{ex['query']}\n\n{choices}\n\nAnswer with just the letter (A, B, C, D, or E).",
+            "expected": gold_letter,
+            "grader": "lsat",
             "difficulty": "hard",
         })
 
@@ -170,6 +293,12 @@ def grade_task(task, model_answer):
         return grade_arc(model_answer, task["expected"])
     elif grader == "bbh":
         return grade_bbh(model_answer, task["expected"])
+    elif grader == "bbh_arith":
+        return grade_bbh_arith(model_answer, task["expected"])
+    elif grader == "lsat":
+        return grade_lsat(model_answer, task["expected"])
+    elif grader == "mmlu":
+        return grade_mmlu(model_answer, task["expected"], task.get("choices"))
     return False, "unknown grader"
 
 
