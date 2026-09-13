@@ -2924,11 +2924,11 @@ PROGRAM caller VERSION 1.0
 
 INPUT
   E.evidence = "observed"
-  A.assumption = "unverified"
+  D.data = "unverified"
 
 step.ev: DO define(value = E.evidence) -> E.ev
-step.as: DO define(value = A.assumption) -> A.as
-CALL protocol.multi(goal = E.ev, hypothesis = A.as, constraint = "literal") -> E.result
+step.as: DO define(value = D.data) -> D.as
+CALL protocol.multi(goal = E.ev, hypothesis = D.as, constraint = "literal") -> E.result
 
 RETURN E.result
 """
@@ -2942,7 +2942,7 @@ RETURN E.result
     call_warnings = [w for w in warnings if w.startswith("CALL ")]
     assert len(call_warnings) == 2
     assert any("goal" in w and "E.*" in w and "G.*" in w for w in call_warnings)
-    assert any("hypothesis" in w and "A.*" in w and "H.*" in w for w in call_warnings)
+    assert any("hypothesis" in w and "D.*" in w and "H.*" in w for w in call_warnings)
 
 
 def test_call_type_mismatch_does_not_raise_error(tmp_path):
@@ -2965,3 +2965,204 @@ RETURN E.result
         protocols_dir=tmp_path / "protocols",
     )
     assert result is True
+
+
+# -- Issue #87: subtype-aware handoff and cross-CALL chain checks ----------
+
+
+SUBTYPE_PROTOCOL = """\
+PROGRAM subtest VERSION 1.0
+
+INPUT
+  F.request = "x"
+
+step.work: DO define(value = F.request) -> E.result
+
+RETURN E.result
+"""
+
+
+def test_call_subtype_no_warning(tmp_path):
+    """E.* passed where F.* expected: E ⊑ F, so no warning."""
+    write_protocol(tmp_path, "subtest", SUBTYPE_PROTOCOL)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.goal = "frame the issue"
+
+step.ask: DO define(value = G.goal) -> E.probe
+CALL protocol.subtest(request = E.probe) -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 0
+
+
+INCOMPATIBLE_PROTOCOL = """\
+PROGRAM incompat VERSION 1.0
+
+INPUT
+  H.hypothesis = "cache failure"
+
+step.work: DO hypothesize(claim = H.hypothesis) -> E.result
+
+RETURN E.result
+"""
+
+
+def test_call_incompatible_type_warning(tmp_path):
+    """D.* passed where H.* expected: D and H are orthogonal, so warn."""
+    write_protocol(tmp_path, "incompat", INCOMPATIBLE_PROTOCOL)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.goal = "frame the issue"
+
+step.ask: DO define(value = G.goal) -> D.data
+CALL protocol.incompat(hypothesis = D.data) -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define", "hypothesize"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 1
+    assert "hypothesis" in call_warnings[0]
+    assert "D.*" in call_warnings[0]
+    assert "H.*" in call_warnings[0]
+
+
+CHAIN_PROTOCOL_A = """\
+PROGRAM chain_a VERSION 1.0
+
+INPUT
+  G.request = "x"
+
+step.work: DO define(value = G.request) -> D.result
+
+RETURN D.result
+"""
+
+CHAIN_PROTOCOL_B = """\
+PROGRAM chain_b VERSION 1.0
+
+INPUT
+  H.hypothesis = "h"
+
+step.work: DO hypothesize(claim = H.hypothesis) -> E.result
+
+RETURN E.result
+"""
+
+
+def test_cross_call_chain_handoff_warning(tmp_path):
+    """CALL-1 commits D.result, CALL-2 passes D.result where H.* expected."""
+    write_protocol(tmp_path, "chain_a", CHAIN_PROTOCOL_A)
+    write_protocol(tmp_path, "chain_b", CHAIN_PROTOCOL_B)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.goal = "frame the issue"
+
+CALL protocol.chain_a(request = G.goal) -> D.result
+CALL protocol.chain_b(hypothesis = D.result) -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define", "hypothesize"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    chain_warnings = [w for w in warnings if "chain handoff" in w]
+    assert len(chain_warnings) == 1
+    assert "D.*" in chain_warnings[0]
+    assert "H.*" in chain_warnings[0]
+
+
+def test_cross_call_chain_handoff_compatible_no_warning(tmp_path):
+    """CALL-1 commits E.result, CALL-2 passes E.result where F.* expected: E ⊑ F."""
+    chain_compat_a = """\
+PROGRAM chain_ca VERSION 1.0
+
+INPUT
+  G.request = "x"
+
+step.work: DO define(value = G.request) -> E.result
+
+RETURN E.result
+"""
+    chain_compat_b = """\
+PROGRAM chain_cb VERSION 1.0
+
+INPUT
+  F.data = "d"
+
+step.work: DO define(value = F.data) -> V.result
+
+RETURN V.result
+"""
+    write_protocol(tmp_path, "chain_ca", chain_compat_a)
+    write_protocol(tmp_path, "chain_cb", chain_compat_b)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.goal = "frame the issue"
+
+CALL protocol.chain_ca(request = G.goal) -> E.result
+CALL protocol.chain_cb(data = E.result) -> V.result
+
+RETURN V.result
+"""
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    chain_warnings = [w for w in warnings if "chain handoff" in w]
+    assert len(chain_warnings) == 0
+
+
+def test_get_type_warnings_returns_expected_after_validate(tmp_path):
+    """get_type_warnings() returns the right warnings after validate_program."""
+    write_protocol(tmp_path, "incompat", INCOMPATIBLE_PROTOCOL)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.goal = "frame the issue"
+
+step.ask: DO define(value = G.goal) -> D.data
+CALL protocol.incompat(hypothesis = D.data) -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    validate_program(
+        program,
+        known_commands={"define", "hypothesize"},
+        protocols_dir=tmp_path / "protocols",
+    )
+    warnings = get_type_warnings()
+    assert any("CALL " in w and "D.*" in w and "H.*" in w for w in warnings)
