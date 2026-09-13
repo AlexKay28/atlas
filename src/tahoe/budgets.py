@@ -186,6 +186,24 @@ class BudgetGate:
         with self._lock:
             self._spent_tokens += count
 
+    def record_token_usage(self, input_tokens: int, output_tokens: int) -> None:
+        """Record input and output tokens from a worker result receipt."""
+        with self._lock:
+            self._spent_tokens += int(input_tokens) + int(output_tokens)
+
+    def remaining_tokens(self, total_budget: int) -> int:
+        """Tokens remaining under the given total budget."""
+        with self._lock:
+            return max(0, total_budget - self._spent_tokens)
+
+    def check_token_budget(self, command_max_tokens: int, remaining: int) -> bool:
+        """Whether dispatching a command with *command_max_tokens* is allowed.
+
+        Returns ``False`` if the command's per-invocation ``max_tokens``
+        exceeds the *remaining* token budget.
+        """
+        return command_max_tokens <= remaining
+
     @property
     def spent_tokens(self) -> int:
         with self._lock:

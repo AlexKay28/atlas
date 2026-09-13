@@ -89,6 +89,51 @@ def _command_max_attempts(command: str) -> int | None:
     return _COMMAND_MAX_ATTEMPTS.get(command)
 
 
+_COMMAND_BUDGETS: dict[str, tuple[int, int]] | None = None
+
+
+def _command_max_tokens(command: str) -> int | None:
+    """The registry's ``contract.budget.max_tokens`` for *command*.
+
+    Returns ``None`` for commands unknown to the builtin registry
+    (custom worker handlers), so the token cap is never enforced
+    on commands the registry does not govern (issue #85).
+    """
+    global _COMMAND_BUDGETS
+    if _COMMAND_BUDGETS is None:
+        from tahoe.registry.registry import builtin_registry
+
+        registry = builtin_registry()
+        _COMMAND_BUDGETS = {
+            name: (registry.resolve(name).budget.max_tokens,
+                   registry.resolve(name).budget.max_output_bytes)
+            for name in registry.names()
+        }
+    entry = _COMMAND_BUDGETS.get(command)
+    return entry[0] if entry is not None else None
+
+
+def _command_max_output_bytes(command: str) -> int | None:
+    """The registry's ``contract.budget.max_output_bytes`` for *command*.
+
+    Returns ``None`` for commands unknown to the builtin registry
+    (custom worker handlers), so the output-size cap is never enforced
+    on commands the registry does not govern (issue #85).
+    """
+    global _COMMAND_BUDGETS
+    if _COMMAND_BUDGETS is None:
+        from tahoe.registry.registry import builtin_registry
+
+        registry = builtin_registry()
+        _COMMAND_BUDGETS = {
+            name: (registry.resolve(name).budget.max_tokens,
+                   registry.resolve(name).budget.max_output_bytes)
+            for name in registry.names()
+        }
+    entry = _COMMAND_BUDGETS.get(command)
+    return entry[1] if entry is not None else None
+
+
 def _uses_kb_refs(program: Program) -> bool:
     """Whether any invocation argument mentions a ``KB.`` reference."""
     for statement in program.statements:

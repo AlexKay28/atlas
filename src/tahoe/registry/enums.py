@@ -50,6 +50,7 @@ class FailureKind(Enum):
     INSUFFICIENT_EXAMPLES = "insufficient_examples"
     NO_COMMON_PATTERN = "no_common_pattern"
     ALL_RULES_FALSIFIED = "all_rules_falsified"
+    BUDGET_EXCEEDED = "budget_exceeded"
     UNKNOWN = "unknown"
 
 
