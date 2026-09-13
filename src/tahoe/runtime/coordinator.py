@@ -325,6 +325,9 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             if entry.await_ is not None:
                 # Issue #77: an AWAIT statement creates no task —
                 # the event system is not yet implemented.
+            if entry.approve is not None:
+                # Issue #78: an APPROVE statement creates no task —
+                # the approval system is not yet implemented.
                 continue
             task = create_ledger.create_task(
                 text=self._task_text(entry),
@@ -898,6 +901,7 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             and entry.reformulate is None
             and entry.first is None
             and entry.await_ is None
+            and entry.approve is None
         ]
         if len(task_ids) > len(static_positions):
             # Issue #4: tasks beyond the plan's own entries are per-candidate

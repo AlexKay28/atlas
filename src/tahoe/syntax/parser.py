@@ -12,6 +12,7 @@ from typing import Any, Iterable
 from .model import (
     Argument,
     Await,
+    Approve,
     Call,
     Conditional,
     Declaration,
@@ -84,6 +85,9 @@ _UNSUPPORTED = frozenset({"AWAIT", "APPROVE"})
 # Issue #77: AWAIT is no longer reserved — it parses an event-await block.
 # FIRST/APPROVE stay unsupported.
 _UNSUPPORTED = frozenset({"FIRST", "APPROVE"})
+# Issue #78: APPROVE is no longer reserved — it parses an approval-gate block.
+# FIRST/AWAIT stay unsupported.
+_UNSUPPORTED = frozenset({"FIRST", "AWAIT"})
 # Issue #4: SCATTER/GATHER block grammar.  The SCATTER line is followed by
 # exactly one indented body step line; the GATHER line names that body step
 # and optionally a judge step, itself defined by the following indented line.
@@ -134,6 +138,10 @@ _FIRST_RE = re.compile(rf"^FIRST\s+(?P<selectors>.+)$")
 # ``AWAIT <event_selector>`` optionally followed by ``TIMEOUT <duration>``.
 _AWAIT_RE = re.compile(
     rf"^AWAIT\s+(?P<selector>.+?)(?:\s+TIMEOUT\s+(?P<timeout>.+))?$"
+# Issue #78: APPROVE approval-gate grammar.  The header is
+# ``APPROVE <policy_ref> INTENT <expression>``.
+_APPROVE_RE = re.compile(
+    rf"^APPROVE\s+(?P<policy>{_REF_PATTERN})\s+INTENT\s+(?P<intent>.+)$"
 )
 _REFORMULATE_SECTION_RE = re.compile(
     r"^(?P<section>DIAGNOSE|REVISE|REPLAN|CONTINUE):\s*(?P<rest>.+)$"
@@ -303,6 +311,7 @@ def parse_program(text: str) -> Program:
     declarations: list[Declaration] = []
     statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop | Try | First] = []
     statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop | Try | Await] = []
+    statements: list[Invocation | Return | Stop | Conditional | Scatter | Gather | Par | Loop | Try | Approve] = []
     in_input = False
     terminal_seen = False
 
@@ -502,6 +511,9 @@ def parse_program(text: str) -> Program:
         # Issue #77: AWAIT event-await.  A single-line statement.
         if re.match(r"AWAIT\b", line):
             statements.append(_parse_await_line(line, line_no))
+        # Issue #78: APPROVE approval-gate.  A single-line statement.
+        if re.match(r"APPROVE\b", line):
+            statements.append(_parse_approve_line(line, line_no))
             continue
 
         # Issue #7: strip the optional trailing REVISE/RETIRE clause before
@@ -1396,6 +1408,28 @@ def _parse_await_line(line: str, line_no: int) -> Await:
     if timeout is not None:
         timeout = timeout.strip()
     return Await(selector=selector, timeout=timeout, line=line_no)
+def _parse_approve_line(line: str, line_no: int) -> Approve:
+    """Parse one ``APPROVE <policy_ref> INTENT <expression>`` line (issue #78).
+
+    The policy reference is a typed reference (e.g. ``PF.safety``).
+    The intent expression is a raw string describing the approval intent.
+
+    Parsing only — the coordinator skips APPROVE entries with a warning.
+    """
+    match = _APPROVE_RE.fullmatch(line)
+    if match is None:
+        raise ParseError(
+            "malformed APPROVE (expected APPROVE <policy_ref>"
+            " INTENT <expression>)",
+            line_no, 1,
+        )
+    policy = match.group("policy")
+    intent = match.group("intent").strip()
+    if not intent:
+        raise ParseError(
+            "APPROVE requires an INTENT expression", line_no, 1,
+        )
+    return Approve(policy=policy, intent=intent, line=line_no)
 
 
 def _parse_reformulate_do(rest: str, line_no: int, label: str) -> Invocation:
@@ -2767,6 +2801,8 @@ def validate_program(
             )
         elif isinstance(statement, Await):
             pass  # parsing only — no validation needed for AWAIT
+        elif isinstance(statement, Approve):
+            pass  # parsing only — no validation needed for APPROVE
         else:
             raise ParseError(f"unknown statement {type(statement).__name__}")
     if pending_scatter is not None:
@@ -3953,6 +3989,12 @@ def _statement_dict(statement: object) -> dict[str, Any]:
         if statement.timeout is not None:
             entry["timeout"] = statement.timeout
         return entry
+    if isinstance(statement, Approve):
+        return {
+            "kind": "approve",
+            "policy": statement.policy,
+            "intent": statement.intent,
+        }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 
@@ -4136,6 +4178,12 @@ def _statement_dict_v2(statement: object) -> dict[str, Any]:
         if statement.timeout is not None:
             entry["timeout"] = statement.timeout
         return entry
+    if isinstance(statement, Approve):
+        return {
+            "kind": "approve",
+            "policy": statement.policy,
+            "intent": statement.intent,
+        }
     raise ParseError(f"unknown statement {type(statement).__name__}")
 
 

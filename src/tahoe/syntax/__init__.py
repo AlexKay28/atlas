@@ -3,6 +3,7 @@
 from .model import (
     Argument,
     Await,
+    Approve,
     Call,
     Conditional,
     Declaration,
@@ -37,6 +38,7 @@ from .parser import (
 __all__ = [
     "Argument",
     "Await",
+    "Approve",
     "Call",
     "Conditional",
     "Declaration",

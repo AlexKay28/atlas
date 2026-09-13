@@ -33,6 +33,7 @@ from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Tr
 from tahoe.syntax import is_typed_reference, parse_program as parse_program_text
 from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Reformulate, First
 from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Reformulate, Await
+from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Reformulate, Approve
 
 # Re-import constants and helpers from engine modules (issue #38 extraction).
 from tahoe.runtime.delegate import (
@@ -276,6 +277,7 @@ class DriveEngine:
                 or entry.reformulate is not None
                 or entry.first is not None
                 or entry.await_ is not None
+                or entry.approve is not None
             ):
                 # Issue #22: the global deadline is checked before each
                 # dispatch, mirroring the other entry kinds.
@@ -370,6 +372,8 @@ class DriveEngine:
                     result = self._execute_first_entry(
                 elif entry.await_ is not None:
                     result = self._execute_await_entry(
+                elif entry.approve is not None:
+                    result = self._execute_approve_entry(
                         program,
                         run_id,
                         entry,
@@ -2396,6 +2400,10 @@ class DriveEngine:
     # ------------------------------------------------------------------
 
     def _execute_await_entry(
+    # APPROVE execution stub (issue #78 — not yet implemented)
+    # ------------------------------------------------------------------
+
+    def _execute_approve_entry(
         self,
         program: Program,
         run_id: str,
@@ -2427,6 +2435,14 @@ class DriveEngine:
         return self._fail_run(
             run_id, plan, statement_to_task, idx,
             "AWAIT is not yet implemented",
+        """Execute one APPROVE statement (issue #78).
+
+        PARSING ONLY — the approval system is not yet implemented.  This
+        stub blocks the run with an "approve not yet implemented" warning.
+        """
+        return self._fail_run(
+            run_id, plan, statement_to_task, idx,
+            "APPROVE is not yet implemented",
         )
 
     @staticmethod

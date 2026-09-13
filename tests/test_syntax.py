@@ -2825,6 +2825,18 @@ FIRST_THREE_SELECTORS = """\
 PROGRAM multi_event VERSION 1.0
 step.one: DO define(value = G.goal) -> E.result
 AWAIT E.result
+# Issue #78: APPROVE construct (parser-only, no runtime execution)
+# --------------------------------------------------------------------------
+
+APPROVE_PROGRAM = """\
+PROGRAM gated VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+  PF.safety = "strict"
+
+step.one: DO define(value = G.goal) -> E.result
+APPROVE PF.safety INTENT "deploy to production"
 
 RETURN E.result
 """
@@ -2906,6 +2918,37 @@ def test_await_parses_with_timeout():
 
 
 def test_await_requires_selector():
+
+def test_approve_parses_basic():
+    from tahoe.syntax.model import Approve
+    program = parse_program(APPROVE_PROGRAM)
+    approve_stmt = program.statements[1]
+    assert isinstance(approve_stmt, Approve)
+    assert approve_stmt.policy == "PF.safety"
+    assert approve_stmt.intent == '"deploy to production"'
+
+
+def test_approve_parses_with_simple_intent():
+    source = """\
+PROGRAM simple VERSION 1.0
+
+INPUT
+  PF.policy = "check"
+
+step.one: DO define(value = PF.policy) -> E.result
+APPROVE PF.policy INTENT ship
+
+RETURN E.result
+"""
+    from tahoe.syntax.model import Approve
+    program = parse_program(source)
+    approve_stmt = program.statements[1]
+    assert isinstance(approve_stmt, Approve)
+    assert approve_stmt.policy == "PF.policy"
+    assert approve_stmt.intent == "ship"
+
+
+def test_approve_requires_policy_ref():
     source = """\
 PROGRAM bad VERSION 1.0
 
@@ -2922,6 +2965,18 @@ RETURN OUT.result
 
 
 def test_first_requires_body():
+  PF.policy = "check"
+
+step.one: DO define(value = PF.policy) -> E.result
+APPROVE not_a_ref INTENT ship
+
+RETURN E.result
+"""
+    with pytest.raises(ParseError, match="malformed APPROVE"):
+        parse_program(source)
+
+
+def test_approve_requires_intent():
     source = """\
 PROGRAM bad VERSION 1.0
 
@@ -3018,3 +3073,50 @@ def test_await_exported_from_tahoe_syntax():
     import tahoe.syntax as syntax_module
     assert hasattr(syntax_module, "Await")
     assert "Await" in syntax_module.__all__
+  PF.policy = "check"
+
+step.one: DO define(value = PF.policy) -> E.result
+APPROVE PF.policy
+
+RETURN E.result
+"""
+    with pytest.raises(ParseError, match="malformed APPROVE"):
+        parse_program(source)
+
+
+def test_approve_seal_digest_deterministic():
+    program1 = parse_program(APPROVE_PROGRAM)
+    program2 = parse_program(APPROVE_PROGRAM)
+    assert seal_digest(program1) == seal_digest(program2)
+
+
+def test_approve_seal_digest_sensitive():
+    base = seal_digest(parse_program(APPROVE_PROGRAM))
+    changed = APPROVE_PROGRAM.replace("PF.safety", "PF.strict")
+    assert seal_digest(parse_program(changed)) != base
+
+
+def test_approve_intent_change_also_changes_seal():
+    base = seal_digest(parse_program(APPROVE_PROGRAM))
+    changed = APPROVE_PROGRAM.replace(
+        '"deploy to production"', '"deploy to staging"'
+    )
+    assert seal_digest(parse_program(changed)) != base
+
+
+def test_approve_in_canonical_json():
+    from tahoe.syntax.model import Approve
+    program = parse_program(APPROVE_PROGRAM)
+    cj = canonical_json(program)
+    import json
+    payload = json.loads(cj)
+    approve_stmt = payload["statements"][1]
+    assert approve_stmt["kind"] == "approve"
+    assert approve_stmt["policy"] == "PF.safety"
+    assert approve_stmt["intent"] == '"deploy to production"'
+
+
+def test_approve_exported_from_tahoe_syntax():
+    import tahoe.syntax as syntax_module
+    assert hasattr(syntax_module, "Approve")
+    assert "Approve" in syntax_module.__all__
