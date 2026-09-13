@@ -1311,6 +1311,32 @@ def _estimate() -> CommandSpec:
                 kind=FailureKind.EXECUTION,
                 retryable=True,
                 recovery="retry within budget attempts",
+def _induce() -> CommandSpec:
+    return CommandSpec(
+        name="induce",
+        version=_VERSION,
+        purpose="Derive a general pattern from specific observations",
+        inputs=("observations:E", "target_pattern:Q"),
+        parameters=("min_examples:int>=2", "max_rules:int>=1", "falsifier_required:bool"),
+        preconditions=("at_least_min_examples_observations_provided",),
+        outputs=("candidate_rules:H",),
+        effects=("none",),
+        done="every_rule_has_a_falsifier_and_at_least_min_examples_support",
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INSUFFICIENT_EXAMPLES,
+                retryable=False,
+                recovery="collect more observations before inducing",
+            ),
+            FailureSpec(
+                kind=FailureKind.NO_COMMON_PATTERN,
+                retryable=False,
+                recovery="observations may not share a pattern",
+            ),
+            FailureSpec(
+                kind=FailureKind.ALL_RULES_FALSIFIED,
+                retryable=True,
+                recovery="request new observations or relax constraints",
             ),
         ),
         effect_class=EffectClass.PURE,
@@ -1323,6 +1349,14 @@ def _estimate() -> CommandSpec:
             max_cost=0.10,
             max_attempts=2,
             max_output_bytes=65536,
+        capabilities=("reasoning",),
+        evidence=("induced_rules_link_to_source_observations",),
+        budget=Budget(
+            max_seconds=30.0,
+            max_tokens=2000,
+            max_cost=0.02,
+            max_attempts=2,
+            max_output_bytes=5000,
         ),
         idempotency=IdempotencyMode.INPUT_DIGEST,
         compensation="none",
@@ -1333,6 +1367,12 @@ def _estimate() -> CommandSpec:
             validator_tier=RoutingTier.T1,
             confidence_policy="calibrated_estimate",
             escalation_on=(FailureKind.INSUFFICIENT_EVIDENCE,),
+            minimum_tier=RoutingTier.T2,
+            permitted_tiers=(RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T2,
+            confidence_policy="none",
+            escalation_on=(FailureKind.NO_COMMON_PATTERN, FailureKind.ALL_RULES_FALSIFIED),
             fallback_chain=(),
         ),
     )
@@ -1363,6 +1403,7 @@ BUILTIN_FACTORIES = (
     _prove,
     _delegate,
     _estimate,
+    _induce,
 )
 
 

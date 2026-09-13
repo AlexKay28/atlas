@@ -73,6 +73,7 @@ will expand each row into the complete contract above.
 | --- | --- | --- |
 | `infer` | facts + rule/model -> claims | Rule/model and supporting inputs linked |
 | `hypothesize` | question + evidence -> hypotheses | Alternatives are distinct and falsifiable |
+| `induce` | observations + pattern question -> hypotheses | Every rule has a falsifier and at least min_examples support |
 | `challenge` | claim/decision -> counterevidence/risks | Strongest plausible failure cases checked |
 | `compare` | options + criteria -> comparison | Constraints applied before preferences; unknown cells explicit |
 | `estimate` | evidence + method -> estimate/range | Units, assumptions, range, and sensitivity recorded |

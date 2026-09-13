@@ -47,6 +47,9 @@ class FailureKind(Enum):
     VALIDATION = "validation"
     FORMALIZATION = "formalization"
     EXECUTION = "execution"
+    INSUFFICIENT_EXAMPLES = "insufficient_examples"
+    NO_COMMON_PATTERN = "no_common_pattern"
+    ALL_RULES_FALSIFIED = "all_rules_falsified"
     UNKNOWN = "unknown"
 
 
