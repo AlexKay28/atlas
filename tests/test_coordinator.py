@@ -2755,3 +2755,120 @@ RETURN V.result
         assert loop_exited[0].payload["reason"] == "while_false"
         succeeded = [e for e in history if e.event_type is EventType.SUCCEEDED]
         assert len(succeeded) == 0
+
+
+# ------------------------------------------------------------------
+# Issue #69: TRY/OR blocks for OR-parallelism / speculative execution
+# ------------------------------------------------------------------
+
+TRY_FIRST_BRANCH_SUCCEEDS = """\
+PROGRAM speculate VERSION 1.0
+INPUT
+    G.goal = "solve"
+TRY
+  step.deduce: DO define(value = G.goal) -> OUT.answer
+OR
+  step.abduct: DO define(value = G.goal) -> OUT.answer
+RETURN OUT.answer
+"""
+
+TRY_ALL_BRANCHES_FAIL = """\
+PROGRAM fail_all VERSION 1.0
+INPUT
+    G.goal = "test"
+TRY
+  step.first: DO fail_always(value = G.goal) -> OUT.result
+OR
+  step.second: DO fail_always(value = G.goal) -> OUT.result
+RETURN OUT.result
+"""
+
+TRY_WITH_CALL_BRANCH = """\
+PROGRAM call_branch VERSION 1.0
+INPUT
+    G.goal = "test"
+TRY
+  step.deduce: DO define(value = G.goal) -> OUT.answer
+OR
+  step.call_branch: CALL protocol.helper(input = G.goal) -> OUT.from_call
+RETURN OUT.answer
+"""
+
+TRY_WITH_RETURN_IN_BRANCH = """\
+PROGRAM return_branch VERSION 1.0
+INPUT
+    G.goal = "test"
+TRY
+  step.deduce: DO define(value = G.goal) -> OUT.answer
+OR
+  step.abduct: DO define(value = G.goal) -> OUT.answer
+  IF OUT.answer == "test"
+    RETURN OUT.answer
+RETURN OUT.answer
+"""
+
+
+def test_try_first_branch_succeeds(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"define": lambda value: value}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(TRY_FIRST_BRANCH_SUCCEEDS),
+            run_id="run-try-1",
+        )
+        assert result["status"] == "succeeded"
+        history = store.events("run-try-1")
+        try_started = [e for e in history if e.event_type is EventType.TRY_STARTED]
+        assert len(try_started) == 1
+        try_completed = [e for e in history if e.event_type is EventType.TRY_COMPLETED]
+        assert len(try_completed) == 1
+        assert try_completed[0].payload["status"] == "succeeded"
+
+
+def test_try_all_branches_fail(tmp_path):
+    def fail_handler(**kwargs):
+        raise RuntimeError("branch failed")
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"fail_always": fail_handler}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(TRY_ALL_BRANCHES_FAIL),
+            run_id="run-try-fail",
+        )
+        assert result["status"] == "failed"
+        history = store.events("run-try-fail")
+        try_completed = [e for e in history if e.event_type is EventType.TRY_COMPLETED]
+        assert len(try_completed) == 1
+        assert try_completed[0].payload["status"] == "failed"
+
+
+def test_try_branch_cancelled_events(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"define": lambda value: value}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(TRY_FIRST_BRANCH_SUCCEEDS),
+            run_id="run-try-cancel",
+        )
+        assert result["status"] == "succeeded"
+        history = store.events("run-try-cancel")
+        cancelled = [e for e in history if e.event_type is EventType.TRY_BRANCH_CANCELLED]
+        assert len(cancelled) >= 1
+
+
+def test_try_with_return_in_branch(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"define": lambda value: value}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(TRY_WITH_RETURN_IN_BRANCH),
+            run_id="run-try-return",
+        )
+        assert result["status"] == "succeeded"
+        history = store.events("run-try-return")
+        try_started = [e for e in history if e.event_type is EventType.TRY_STARTED]
+        assert len(try_started) == 1

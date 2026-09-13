@@ -96,6 +96,14 @@ class EventType(str, Enum):
     LOOP_ITERATION = "loop.iteration"
     LOOP_EXITED = "loop.exited"
     LOOP_EXHAUSTED = "loop.exhausted"
+    # Issue #69: TRY lifecycle events.  TRY_STARTED fires when speculative
+    # dispatch begins; TRY_BRANCH_SUCCEEDED fires when a branch wins;
+    # TRY_BRANCH_CANCELLED fires when a branch is cancelled (lost the race
+    # or the TRY failed); TRY_COMPLETED fires when the TRY block resolves.
+    TRY_STARTED = "try.started"
+    TRY_BRANCH_SUCCEEDED = "try.branch_succeeded"
+    TRY_BRANCH_CANCELLED = "try.branch_cancelled"
+    TRY_COMPLETED = "try.completed"
     TASK_UPDATED = "task.updated"
 
 

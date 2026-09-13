@@ -57,6 +57,7 @@ from tahoe.syntax.model import (
     Return,
     Scatter,
     Stop,
+    Try,
 )
 
 if TYPE_CHECKING:
@@ -138,6 +139,7 @@ from tahoe.runtime.helpers import (  # noqa: E402,F401
     _uses_par,
     _uses_delegate,
     _uses_loop,
+    _uses_try,
     _invocation_uses_kb_refs,
     _json_equal,
     evaluate_done_predicate,
@@ -307,6 +309,10 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
                 # Issue #68: a LOOP block creates no task of its own —
                 # body iteration tasks are created lazily during
                 # execution.
+                continue
+            if entry.try_ is not None:
+                # Issue #69: a TRY block creates no task of its own —
+                # branch tasks are created lazily during execution.
                 continue
             task = create_ledger.create_task(
                 text=self._task_text(entry),
@@ -665,6 +671,7 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             and not _uses_par(program)
             and not _uses_delegate(program)
             and not _uses_loop(program)
+            and not _uses_try(program)
         )
         if concurrent_run:
             metadata["concurrent"] = True
@@ -873,7 +880,7 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
         task_ids = list(ledger.tasks)
         static_positions = [
             idx for idx, entry in enumerate(plan)
-            if entry.par is None and entry.loop is None
+            if entry.par is None and entry.loop is None and entry.try_ is None
         ]
         if len(task_ids) > len(static_positions):
             # Issue #4: tasks beyond the plan's own entries are per-candidate
