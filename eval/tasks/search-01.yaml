@@ -1,0 +1,21 @@
+task_id: search-01
+description: "Search the following text for the word 'quantum' and report how many times it appears: 'quantum mechanics quantum field theory classical mechanics quantum computing'"
+difficulty: easy
+expected_state:
+  answer: "3"
+grader:
+  type: exact_match
+  params:
+    answer: "3"
+program_source: |
+  PROGRAM search-01-count-quantum
+  INPUT text = "quantum mechanics quantum field theory classical mechanics quantum computing"
+  GOAL "Report how many times the word 'quantum' appears in the text"
+
+  step.1: search "the word 'quantum' in the given text" -> hits
+    DONE matched(ref, "quantum")
+  step.2: calculate "the number of occurrences in hits" -> count
+    DONE matched(ref, "3")
+  step.3: report "3"
+    DONE matched(ref, "3")
+authoring_attempts_expected: 1

@@ -1,0 +1,32 @@
+# TAHOE ablation plan — GLM-5.3-Flash scaffold comparison
+# Goal: measure token consumption distribution across 3 arms (classic, opencode, tahoe)
+# and determine whether TAHOE saves tokens while solving tasks at least not slower.
+
+PROGRAM ablation_glm53flash VERSION 1.0
+
+INPUT
+    G.goal = "Produce a token-per-task distribution table comparing classic inference, opencode harness, and TAHOE specification arms using GLM-5.3-Flash, with honest reporting including negative results"
+    C.model = "GLM-5.3-Flash_alexkay28/."
+    C.arms = "A1 classic inference (raw chat loop), A2 opencode harness (opencode run headless), A3 TAHOE specification (model authors .think program, then tahoe run executes)"
+    C.tasks = "7 tasks of varying difficulty: routing-01, routing-02, code-fix-01, code-fix-02, search-01, plan-01, recover-01"
+    C.trials = "5 trials per task per arm = 105 total runs"
+    C.rules = "predeclare hypotheses; paired comparisons; charge authoring tokens for A3; cap authoring at 3 attempts; same model/tools/grader/resource ceilings across arms; fixed seed; shuffled trial order"
+    H.token = "H1: total tokens per solved task on tahoe arm <= classic at matched quality"
+    H.noninferior = "H2: task success rate tahoe >= baseline - 5% margin"
+    H.null = "H0: null or negative result is valid and informs design"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.freeze: DO verify(goal = "freeze task definitions, grader code, arm prompts, model ID, seeds", evidence = C.tasks) -> V.frozen
+DONE matched(V.frozen, "frozen")
+step.build_classic: DO delegate(goal = "build classic inference arm runner with token tracking", constraints = C.model, max_steps = 8) -> OUT.classic
+step.build_opencode: DO delegate(goal = "build opencode arm runner with token parsing from output logs", constraints = C.model, max_steps = 8) -> OUT.opencode
+step.build_adapter: DO delegate(goal = "wire real model worker adapter to GLM-5.3-Flash via OpenAI-compatible API", constraints = C.model, max_steps = 8) -> OUT.adapter
+step.build_tasks: DO delegate(goal = "create 7 task manifests with programmatic graders", constraints = C.tasks, max_steps = 10) -> OUT.tasks
+step.build_report: DO delegate(goal = "build token distribution report generator with mean/p25/p75 per task per arm", constraints = C.rules, max_steps = 6) -> OUT.report
+step.run_trials: DO delegate(goal = "execute 105 trials with shuffled order and fixed seed", constraints = C.rules, max_steps = 20) -> OUT.trials
+step.analyze: DO summarize(source_refs = OUT.trials, budget = 8000) -> ART.table
+step.verify: DO verify(goal = G.goal, evidence = ART.table) -> V.result
+DONE matched(V.result, "reproducible")
+step.publish: DO report(committed_refs = [ART.table, OUT.trials], format = "markdown") -> ART.final
+
+RETURN V.result, ART.table, ART.final

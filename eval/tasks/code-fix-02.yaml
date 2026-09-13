@@ -1,0 +1,23 @@
+task_id: code-fix-02
+description: "Two files have a logic bug. File A computes x = a * b. File B computes y = x + c but should use y = x * c. Return the corrected line for File B."
+difficulty: medium
+expected_state:
+  substring: "y = x * c"
+grader:
+  type: contains
+  params:
+    substring: "y = x * c"
+program_source: |
+  PROGRAM code-fix-02-file-b-multiply
+  INPUT context = "File A computes x = a * b (correct). File B computes y = x + c but should use y = x * c"
+  GOAL "Return the corrected line for File B"
+
+  step.1: check "File A line x = a * b against the specification" -> file_a_ok
+    DONE matched(ref, "x = a * b")
+  step.2: edit "replace 'y = x + c' with 'y = x * c' in File B" -> fixed_b
+    DONE matched(ref, "y = x * c")
+  step.3: verify "the corrected File B line y = x * c multiplies x by c" -> verified
+    DONE matched(ref, "verified")
+  step.4: report "y = x * c"
+    DONE matched(ref, "y = x * c")
+authoring_attempts_expected: 1

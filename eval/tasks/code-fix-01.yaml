@@ -1,0 +1,23 @@
+task_id: code-fix-01
+description: "Fix the bug in the following Python function: def add(a, b): return a - b. The function should add, not subtract. Return the fixed function."
+difficulty: easy
+expected_state:
+  substring: "return a + b"
+grader:
+  type: contains
+  params:
+    substring: "return a + b"
+program_source: |
+  PROGRAM code-fix-01-add-not-subtract
+  INPUT bug = "def add(a, b): return a - b — the function should add, not subtract"
+  GOAL "Return the fixed function"
+
+  step.1: define "the intended behavior: add(a, b) returns a + b" -> intent
+    DONE matched(ref, "a + b")
+  step.2: edit "replace 'return a - b' with 'return a + b' in add" -> fixed
+    DONE matched(ref, "return a + b")
+  step.3: verify "the fixed function def add(a, b): return a + b adds its arguments" -> verified
+    DONE matched(ref, "verified")
+  step.4: report "def add(a, b): return a + b"
+    DONE matched(ref, "return a + b")
+authoring_attempts_expected: 1

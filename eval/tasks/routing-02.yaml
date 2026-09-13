@@ -1,0 +1,23 @@
+task_id: routing-02
+description: "Given 6 delivery routes with distances [12, 25, 8, 17, 30, 5] km and costs [3, 7, 2, 5, 9, 1] units/km, and a constraint that total cost must be under 50 units, find all routes that satisfy the constraint and report the count."
+difficulty: medium
+expected_state:
+  answer: "3 routes satisfy the constraint"
+grader:
+  type: exact_match
+  params:
+    answer: "3 routes satisfy the constraint"
+program_source: |
+  PROGRAM routing-02-constraint-count
+  INPUT routes = "6 delivery routes with distances [12, 25, 8, 17, 30, 5] km and costs [3, 7, 2, 5, 9, 1] units/km; constraint: total cost under 50 units"
+  GOAL "Report the count of routes whose total cost satisfies the constraint"
+
+  step.1: calculate "total cost per route as distance * cost for routes 1-6" -> totals
+    DONE matched(ref, "totals")
+  step.2: check "each total in totals against the constraint total cost under 50" -> eligible
+    DONE matched(ref, "eligible")
+  step.3: calculate "the number of routes marked eligible" -> count
+    DONE matched(ref, "3")
+  step.4: report "3 routes satisfy the constraint"
+    DONE matched(ref, "3 routes satisfy the constraint")
+authoring_attempts_expected: 1

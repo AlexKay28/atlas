@@ -1,0 +1,21 @@
+task_id: routing-01
+description: "Given 4 delivery routes with distances [12, 25, 8, 17] km and costs [3, 7, 2, 5] units/km, find the route with minimum total cost. Report the route number and total cost."
+difficulty: easy
+expected_state:
+  answer: "Route 3, total cost: 16"
+grader:
+  type: exact_match
+  params:
+    answer: "Route 3, total cost: 16"
+program_source: |
+  PROGRAM routing-01-min-cost-route
+  INPUT routes = "4 delivery routes with distances [12, 25, 8, 17] km and costs [3, 7, 2, 5] units/km"
+  GOAL "Report the route number and total cost for the minimum-cost route"
+
+  step.1: calculate "total cost per route as distance * cost for routes 1-4" -> totals
+    DONE matched(ref, "16")
+  step.2: choose "the route with the minimum total cost from totals" -> best
+    DONE matched(ref, "Route")
+  step.3: report "Route 3, total cost: 16"
+    DONE matched(ref, "Route 3, total cost: 16")
+authoring_attempts_expected: 1

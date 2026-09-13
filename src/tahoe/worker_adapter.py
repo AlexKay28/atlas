@@ -47,12 +47,29 @@ coordinator's own ``map_results_to_targets`` rules.  Any unparseable or
 invalid response raises ``WorkerError`` carrying the raw response tail
 (last 500 chars), which the coordinator's existing exception path turns
 into a coherent failed run.
+
+Live tiers (T1+): ``LiveModelWorker`` is a registry-free adapter that
+calls any OpenAI-compatible chat-completions endpoint through the
+``openai`` package, which is imported lazily inside ``_get_client`` so
+this module imports cleanly without it.  Configuration comes from the
+``TAHOE_API_BASE`` / ``TAHOE_API_KEY`` / ``TAHOE_MODEL`` environment
+variables (model defaulting to ``DEFAULT_LIVE_MODEL``); a missing base
+URL or key raises a clear ``ValueError`` at construction.
+``dispatch(prompt)`` sends the DO step instruction as a single user
+message and returns a ``LiveResult`` — the reply text, input/output
+token usage and a success flag — degrading every API failure into
+``success=False`` with a classified ``failure_class`` and error message
+instead of raising.  ``make_worker(tier, **kwargs)`` is the tier
+factory: T0 builds the existing deterministic worker from
+``tahoe.runtime.coordinator``, T1+ builds ``LiveModelWorker`` (raising
+``ValueError`` with guidance when the API configuration is absent).
 """
 
 from __future__ import annotations
 
 import dataclasses
 import json
+import os
 from typing import Any, Callable, Mapping, Sequence
 
 from tahoe.envelope import (
@@ -72,10 +89,14 @@ from tahoe.registry.spec import _tier_rank
 from tahoe.runtime.coordinator import map_results_to_targets
 
 __all__ = [
+    "DEFAULT_LIVE_MODEL",
     "DEFAULT_TIMEOUT_SECONDS",
+    "LiveModelWorker",
+    "LiveResult",
     "ModelWorker",
     "TransportResult",
     "WorkerError",
+    "make_worker",
 ]
 
 #: Default deadline advertised to transports (``ModelWorker.timeout_seconds``).
@@ -418,3 +439,303 @@ class ModelWorker:
                 f" {exc}",
                 raw,
             ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Live-model workers (T1+): real OpenAI-compatible model calls.
+# ---------------------------------------------------------------------------
+
+#: Default ``TAHOE_MODEL`` when the environment does not pin one.
+DEFAULT_LIVE_MODEL = "GLM-5.3-Flash_alexkay28/."
+
+
+@dataclasses.dataclass
+class LiveResult:
+    """Outcome of one live-model dispatch.
+
+    ``success`` is the success/failure flag; ``text`` carries the model's
+    response text (empty on failure); ``input_tokens``/``output_tokens``
+    carry the API-reported token usage (``None`` when the response had no
+    usage block or the call failed); ``failure_class`` classifies a
+    failure (``"rate_limit"``, ``"auth_error"``, ``"network_error"``,
+    ``"api_error"``, ``"empty_response"``, ``"invalid_prompt"``) and
+    ``error`` carries the human-readable error message.  Dispatch never
+    raises on API failure — it degrades to an unsuccessful ``LiveResult``.
+    """
+
+    success: bool
+    text: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    failure_class: str | None = None
+    error: str | None = None
+
+    @property
+    def usage(self) -> dict[str, int | None] | None:
+        """Usage as a dict, or ``None`` when nothing was reported."""
+        if self.input_tokens is None and self.output_tokens is None:
+            return None
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+        }
+
+
+class LiveModelWorker:
+    """Real-model worker for T1+ tiers via an OpenAI-compatible API.
+
+    Duck-types the worker seam used by the coordinator (``.commands``
+    property, ``.execute(command, resolved_kwargs)``) and additionally
+    exposes ``dispatch(prompt)`` for direct prompt-level dispatch.  All
+    network detail goes through the lazily-constructed ``openai`` client
+    (``_get_client``) so the module imports without the ``openai``
+    package installed and no connection is made until the first dispatch.
+
+    Configuration: explicit ``api_base``/``api_key``/``model`` arguments
+    first, then the ``TAHOE_API_BASE`` / ``TAHOE_API_KEY`` /
+    ``TAHOE_MODEL`` environment variables (model defaulting to
+    ``DEFAULT_LIVE_MODEL``).  A missing base URL or key raises
+    ``ValueError`` at construction.
+    """
+
+    def __init__(
+        self,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    ):
+        env_base = (os.environ.get("TAHOE_API_BASE") or "").strip()
+        env_key = (os.environ.get("TAHOE_API_KEY") or "").strip()
+        env_model = (os.environ.get("TAHOE_MODEL") or "").strip()
+        self.api_base = str(api_base).strip() if api_base else env_base
+        self.api_key = str(api_key).strip() if api_key else env_key
+        self.model = str(model).strip() if model else (env_model or DEFAULT_LIVE_MODEL)
+        self.timeout_seconds = float(timeout_seconds)
+        missing = [
+            name
+            for name, value in (
+                ("TAHOE_API_BASE", self.api_base),
+                ("TAHOE_API_KEY", self.api_key),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                "missing required live-model worker configuration:"
+                f" {', '.join(missing)} is not set. Set the environment"
+                " variables TAHOE_API_BASE (OpenAI-compatible API base"
+                ' URL, e.g. "https://api.openai.com/v1") and'
+                " TAHOE_API_KEY, or pass api_base/api_key explicitly."
+            )
+        # Lazily-constructed client: the ``openai`` package is imported
+        # inside ``_get_client`` (not at module import) and the client is
+        # built on first dispatch, so importing this module and
+        # constructing the worker stay side-effect free.
+        self._client: Any = None
+
+    @property
+    def commands(self) -> set[str]:
+        """A live model serves arbitrary commands; it owns no registry."""
+        return set()
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            import openai  # lazy: keeps this module importable without openai
+
+            self._client = openai.OpenAI(
+                base_url=self.api_base,
+                api_key=self.api_key,
+                timeout=self.timeout_seconds,
+            )
+        return self._client
+
+    def dispatch(self, prompt: str) -> LiveResult:
+        """Send one DO step instruction; never raises on API failure."""
+        if not isinstance(prompt, str) or not prompt.strip():
+            return LiveResult(
+                success=False,
+                text="",
+                failure_class="invalid_prompt",
+                error="prompt must be a non-empty string (the DO step instruction)",
+            )
+        try:
+            client = self._get_client()
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception as exc:
+            return LiveResult(
+                success=False,
+                text="",
+                failure_class=_classify_api_error(exc),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        text = _extract_message_text(response)
+        input_tokens, output_tokens = _extract_token_usage(response)
+        if not text:
+            return LiveResult(
+                success=False,
+                text="",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                failure_class="empty_response",
+                error="model returned no message content",
+            )
+        return LiveResult(
+            success=True,
+            text=text,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+    def execute(
+        self,
+        command: str,
+        resolved_kwargs: dict[str, Any] | None = None,
+        targets: Sequence[str] | None = None,
+    ) -> LiveResult:
+        """Coordinator-facing seam: render the step prompt, then dispatch."""
+        return self.dispatch(_build_step_prompt(command, resolved_kwargs, targets))
+
+
+def _build_step_prompt(
+    command: str,
+    resolved_kwargs: Mapping[str, Any] | None,
+    targets: Sequence[str] | None = None,
+) -> str:
+    """Render a DO step instruction from the command and pinned arguments."""
+    target_refs = tuple(targets) if targets is not None else ()
+    lines = [
+        "You are the model worker executing one step of a TAHOE program.",
+        "",
+        f"Command: {command}",
+        "Resolved arguments (JSON):",
+        json.dumps(
+            dict(resolved_kwargs or {}),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        ),
+        "",
+    ]
+    if len(target_refs) > 1:
+        lines.append(
+            "This step commits results to multiple targets:"
+            f" {', '.join(target_refs)}."
+            " Reply with ONLY a JSON object whose keys are the full"
+            " target refs or their unique leaf names."
+        )
+    else:
+        lines.append(
+            "Reply with ONLY a JSON object and nothing else — no prose,"
+            " no explanation."
+        )
+    return "\n".join(lines)
+
+
+def _classify_api_error(exc: BaseException) -> str:
+    """Best-effort failure class from the exception's name and message."""
+    name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    if "ratelimit" in name or "rate limit" in message:
+        return "rate_limit"
+    if "auth" in name or "permission" in name or "unauthorized" in message:
+        return "auth_error"
+    if (
+        "timeout" in name
+        or "connection" in name
+        or "timed out" in message
+        or "connection" in message
+    ):
+        return "network_error"
+    return "api_error"
+
+
+def _extract_message_text(response: Any) -> str:
+    """First choice's message content, tolerating malformed responses."""
+    choices = getattr(response, "choices", None)
+    if not choices:
+        return ""
+    content = getattr(getattr(choices[0], "message", None), "content", None)
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, Sequence):
+        return "".join(
+            part.get("text", "") for part in content if isinstance(part, Mapping)
+        )
+    return str(content)
+
+
+def _extract_token_usage(response: Any) -> tuple[int | None, int | None]:
+    """(input_tokens, output_tokens) from the response's usage block."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None, None
+    if isinstance(usage, Mapping):
+        return (
+            _coerce_token_count(usage.get("prompt_tokens", usage.get("input_tokens"))),
+            _coerce_token_count(
+                usage.get("completion_tokens", usage.get("output_tokens"))
+            ),
+        )
+    return (
+        _coerce_token_count(getattr(usage, "prompt_tokens", None)),
+        _coerce_token_count(getattr(usage, "completion_tokens", None)),
+    )
+
+
+def _coerce_token_count(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _coerce_routing_tier(tier: Any) -> RoutingTier | None:
+    """Normalize ints (0..3), "0".."3", "T0".."T3" or RoutingTier members."""
+    if isinstance(tier, RoutingTier):
+        return tier
+    if isinstance(tier, bool):
+        return None
+    if isinstance(tier, int):
+        return RoutingTier(f"T{tier}") if 0 <= tier <= 3 else None
+    text = str(getattr(tier, "value", tier)).strip().upper()
+    if text.isdigit():
+        text = f"T{text}"
+    try:
+        return RoutingTier(text)
+    except ValueError:
+        return None
+
+
+def make_worker(tier: Any, **kwargs: Any) -> Any:
+    """Build the worker for a routing tier.
+
+    T0 returns the existing deterministic/fake worker
+    (``tahoe.runtime.coordinator.DeterministicWorker``, optionally seeded
+    with a ``handlers`` mapping).  T1+ returns ``LiveModelWorker``; when
+    neither explicit ``api_base``/``api_key`` arguments nor the
+    ``TAHOE_API_BASE`` / ``TAHOE_API_KEY`` environment variables provide
+    credentials, a ``ValueError`` with remediation guidance is raised.
+    Unknown tiers raise ``ValueError`` as well.
+    """
+    coerced = _coerce_routing_tier(tier)
+    if coerced is None:
+        raise ValueError(
+            f"unknown worker tier {tier!r}: expected one of"
+            f" {', '.join(t.value for t in RoutingTier)} (or 0..3)"
+        )
+    if _tier_rank(coerced) >= 1:
+        live_keys = ("api_base", "api_key", "model", "timeout_seconds")
+        return LiveModelWorker(
+            **{key: kwargs[key] for key in live_keys if key in kwargs}
+        )
+    from tahoe.runtime.coordinator import (  # lazy: only T0 needs the handler executor
+        DeterministicWorker,
+    )
+
+    handlers = kwargs.get("handlers")
+    return DeterministicWorker(dict(handlers) if handlers else {})

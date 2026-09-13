@@ -1,0 +1,25 @@
+task_id: plan-01
+description: "Decompose the goal 'Deploy a web app to production' into ordered subtasks. Return the number of subtasks."
+difficulty: medium
+expected_state:
+  field: "subtask_count"
+  value: 5
+grader:
+  type: json_field
+  params:
+    field: "subtask_count"
+    value: 5
+program_source: |
+  PROGRAM plan-01-deploy-web-app
+  INPUT goal = "Deploy a web app to production"
+  GOAL "Decompose the goal into ordered subtasks and return the count as JSON with a subtask_count field"
+
+  step.1: decompose "the goal 'Deploy a web app to production' into 5 ordered subtasks" -> subtasks
+    DONE matched(ref, "subtask")
+  step.2: rank "subtasks into execution order" -> ordered
+    DONE matched(ref, "ordered")
+  step.3: define "the result JSON: {\"subtask_count\": 5}" -> result_json
+    DONE matched(ref, "subtask_count")
+  step.4: report "{\"subtask_count\": 5}"
+    DONE matched(ref, "subtask_count")
+authoring_attempts_expected: 1
