@@ -81,9 +81,9 @@ tahoe lint examples/demo.think
 tahoe seal examples/demo.think
 
 # Run benchmarks
-export TAHOE_API_BASE="https://api.eliza.yandex.net/raw/internal/v2/models/GLM-5.3-Flash_alexkay28/v1"
-export TAHOE_API_KEY="$(cat ~/.soy/token)"
-export SSL_CERT_FILE=/etc/ssl/certs/yandex-ca.pem
+export TAHOE_API_BASE="https://your-api-endpoint/v1"
+export TAHOE_API_KEY="your-api-key"
+# export SSL_CERT_FILE if your endpoint uses a custom CA
 PYTHONPATH=src python3 benchmarks/run_public_bench.py
 ```
 

@@ -180,7 +180,7 @@ class DispatchTest(unittest.TestCase):
 
         fake_openai.OpenAI.assert_called_once_with(
             base_url=API_BASE, api_key="dummy", timeout=DEFAULT_TIMEOUT_SECONDS,
-            default_headers={"Authorization": f"OAuth {API_KEY}", "Ya-Pool": "notelm"}
+            default_headers={"Authorization": f"OAuth {API_KEY}"}
         )
         client.chat.completions.create.assert_called_once()
         kwargs = client.chat.completions.create.call_args.kwargs

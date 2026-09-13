@@ -555,7 +555,7 @@ class LiveModelWorker:
                 timeout=self.timeout_seconds,
                 default_headers={
                     "Authorization": f"OAuth {self.api_key}",
-                    "Ya-Pool": "notelm",
+                    **({"Ya-Pool": os.environ["TAHOE_API_POOL"]} if os.environ.get("TAHOE_API_POOL") else {}),
                 },
             )
         return self._client

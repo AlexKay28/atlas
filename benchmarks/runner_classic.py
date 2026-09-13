@@ -88,7 +88,7 @@ def run(
         client_kwargs["base_url"] = resolved_base
     client_kwargs["default_headers"] = {
         "Authorization": f"OAuth {resolved_key}",
-        "Ya-Pool": "notelm",
+        **({"Ya-Pool": os.environ["TAHOE_API_POOL"]} if os.environ.get("TAHOE_API_POOL") else {}),
     }
     client = openai.OpenAI(**client_kwargs)
 

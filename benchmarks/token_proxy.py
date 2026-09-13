@@ -6,7 +6,7 @@ Sits between opencode and the Eliza API, forwards requests, captures
 to a session-scoped JSON file.
 
 Usage:
-  python3 eval/token_proxy.py --port 18888 --upstream https://api.eliza.yandex.net/raw/internal/v2/models/GLM-5.3-Flash_alexkay28/v1 --session-file /tmp/opencode_tokens.json
+  python3 eval/token_proxy.py --port 18888 --upstream https://your-api-endpoint/v1 --session-file /tmp/opencode_tokens.json
 
 Then point opencode at http://localhost:18888 instead of the upstream.
 """
@@ -52,7 +52,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     upstream_port = None
     upstream_scheme = None
     session_file = None
-    soy_token = None
+    auth_token = None
 
     def _forward(self):
         global _total_input, _total_output, _total_calls
@@ -64,7 +64,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         if self.upstream_scheme == "https":
             ctx = ssl.create_default_context()
-            ctx.load_verify_locations(os.environ.get("SSL_CERT_FILE", "/etc/ssl/certs/yandex-ca.pem"))
+            ctx.load_verify_locations(os.environ.get("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt"))
             conn = http.client.HTTPSConnection(self.upstream_host, self.upstream_port or 443, context=ctx)
         else:
             conn = http.client.HTTPConnection(self.upstream_host, self.upstream_port or 80)
@@ -73,9 +73,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
         headers.pop("Host", None)
         headers.pop("host", None)
         headers["Host"] = self.upstream_host
-        if self.soy_token:
-            headers["Authorization"] = f"OAuth {self.soy_token}"
-            headers["Ya-Pool"] = "notelm"
+        if self.auth_token:
+            headers["Authorization"] = f"OAuth {self.auth_token}"
+            pool = os.environ.get("TAHOE_API_POOL", "")
+            if pool:
+                headers["Ya-Pool"] = pool
 
         conn.request(self.command, self.path, body, headers)
         resp = conn.getresponse()
@@ -120,7 +122,7 @@ def main():
     parser.add_argument("--port", type=int, default=18888)
     parser.add_argument("--upstream", required=True)
     parser.add_argument("--session-file", required=True)
-    parser.add_argument("--soy-token", default=None)
+    parser.add_argument("--auth-token", default=None)
     args = parser.parse_args()
 
     parsed = urlparse(args.upstream)
@@ -128,7 +130,7 @@ def main():
     ProxyHandler.upstream_port = parsed.port
     ProxyHandler.upstream_scheme = parsed.scheme
     ProxyHandler.session_file = args.session_file
-    ProxyHandler.soy_token = args.soy_token or os.environ.get("SOY_TOKEN", "")
+    ProxyHandler.auth_token = args.auth_token or os.environ.get("AUTH_TOKEN", "")
 
     load_session(args.session_file)
 

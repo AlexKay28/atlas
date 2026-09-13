@@ -2,10 +2,10 @@
 """Run the ablation trials: 7 tasks x 3 arms x 5 trials = 105 runs.
 
 Usage:
-  export TAHOE_API_BASE="https://api.eliza.yandex.net/raw/internal/v2/models/GLM-5.3-Flash_alexkay28/v1"
-  export TAHOE_API_KEY="$(cat ~/.soy/token)"
+  export TAHOE_API_BASE="https://your-api-endpoint/v1"
+  export TAHOE_API_KEY="your-api-key"
   export TAHOE_MODEL="."
-  export SSL_CERT_FILE=/etc/ssl/certs/yandex-ca.pem
+  # export SSL_CERT_FILE if your endpoint uses a custom CA
   PYTHONPATH=src python3 eval/run_trials.py
 """
 
