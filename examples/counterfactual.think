@@ -1,0 +1,21 @@
+PROGRAM counterfactual VERSION 1.0
+
+# Counterfactual reasoning protocol (issue #82).
+#
+# Demonstrates do-calculus as protocol composition over existing commands.
+# The do(X) intervention is expressed by feeding a hypothetical premise
+# into hypothesize instead of the factual one. Typed refs (H.* vs E.* vs V.*)
+# enforce the distinction between counterfactual hypothesis, factual evidence,
+# and verified verdict.
+
+INPUT
+    Q.counterfactual = "Would latency be normal if the cache had not failed?"
+    H.causal_model = "Cache failure -> stale responses -> increased latency"
+    E.observed = "p95 = 4.2s during cache failure"
+
+step.cf_hyp: DO hypothesize(question = Q.counterfactual, evidence = [E.observed, H.causal_model]) -> H.counterfactual
+step.cf_test: DO challenge(claim = H.counterfactual, evidence = E.observed) -> R.cf_result
+step.cf_verify: DO verify(goal = Q.counterfactual, evidence = [R.cf_result]) -> V.cf_verdict
+DONE V.cf_verdict == "verified"
+
+RETURN V.cf_verdict

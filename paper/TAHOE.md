@@ -120,24 +120,47 @@ D.choice: B
 The typed refs force commitment to intermediate values, eliminating the
 narrative bridge between thinking and answering.
 
-## 4. Related Work
+## 4. Completeness: Counterfactual Reasoning
+
+Counterfactual reasoning (Pearl's do-calculus) is a canonical test for whether
+a reasoning language can express interventions without adding new primitives.
+TAHOE handles this through protocol composition: the `do(X)` operator is the
+act of feeding a hypothetical premise into `hypothesize` instead of the
+factual one. The counterfactual protocol reduces to three existing commands:
+
+```text
+Q.counterfactual + H.causal_model + E.observed
+  -> DO hypothesize(question = Q.counterfactual, evidence = [E.observed, H.causal_model]) -> H.counterfactual
+  -> DO challenge(claim = H.counterfactual, evidence = E.observed) -> R.cf_result
+  -> DO verify(goal = Q.counterfactual, evidence = [R.cf_result]) -> V.cf_verdict
+```
+
+No new syntax or grammar change is required. The typed-ref system (`H.*` vs
+`E.*` vs `V.*`) enforces the distinction between counterfactual hypothesis,
+factual evidence, and verified verdict — preventing the silent substitution
+that Pearl's do-calculus was designed to expose. See
+`textbook/09-counterfactual-reasoning.md` for the full protocol specification
+and worked examples.
+
+## 5. Related Work
 
 - Chain-of-Thought (Wei et al., 2022) — unstructured reasoning
 - Tree of Thoughts (Yao et al., 2023) — search-based reasoning
 - CoALA (Sumers et al., 2023) — cognitive architecture for agents
+- Pearl, Causality (2009) — do-calculus and counterfactual reasoning
 
 TAHOE differs by providing a typed, protocol-based reasoning language that
 the model applies as a thinking skill, reducing both error rate and token
 consumption.
 
-## 5. Limitations
+## 6. Limitations
 
 - Evaluated on one model (GLM-5.3-Flash); stronger models may show different patterns
 - 10 samples per benchmark, 3 trials each (600 trials); ceiling effects on some benchmarks
 - System prompt adds ~93 input tokens per call (fixed infrastructure cost)
 - BBH-arith is the only benchmark where TAHOE uses slightly more tokens (1.07x)
 
-## 6. Future Work
+## 7. Future Work
 
 - RL integration: use TAHOE trajectory scoring as reward signal
 - Larger sample sizes and stronger models (GLM-5.2, GPT-4)

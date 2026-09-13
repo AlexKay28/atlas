@@ -27,7 +27,7 @@ from tahoe.runtime.coordinator import (
     map_results_to_targets,
 )
 from tahoe.runtime.tasks import TaskStatus
-from tahoe.syntax import ParseError, parse_program
+from tahoe.syntax import Invocation, ParseError, parse_program
 
 CANONICAL_PROGRAM = """\
 PROGRAM adder VERSION 1.0
@@ -3093,3 +3093,91 @@ def test_reformulate_event_log_records_plan_reformulated(tmp_path):
         assert payload["new_plan_digest"] is not None
         assert isinstance(payload["preserved_refs"], list)
         assert "G.goal" in payload["preserved_refs"]
+
+
+# -- Issue #82: Counterfactual reasoning protocol (do-calculus) ----------
+
+COUNTERFACTUAL_PROGRAM = """\
+PROGRAM counterfactual VERSION 1.0
+
+INPUT
+    Q.counterfactual = "Would latency be normal if the cache had not failed?"
+    H.causal_model = "Cache failure -> stale responses -> increased latency"
+    E.observed = "p95 = 4.2s during cache failure"
+
+step.cf_hyp: DO hypothesize(question = Q.counterfactual, evidence = [E.observed, H.causal_model]) -> H.counterfactual
+step.cf_test: DO challenge(claim = H.counterfactual, evidence = E.observed) -> R.cf_result
+step.cf_verify: DO verify(goal = Q.counterfactual, evidence = [R.cf_result]) -> V.cf_verdict
+DONE V.cf_verdict == "verified"
+
+RETURN V.cf_verdict
+"""
+
+
+def test_counterfactual_protocol_parses_without_errors():
+    program = parse_program(COUNTERFACTUAL_PROGRAM)
+    invocations = [s for s in program.statements if isinstance(s, Invocation)]
+    assert program.name == "counterfactual"
+    assert len(invocations) == 3
+    assert invocations[0].step_id == "step.cf_hyp"
+    assert invocations[0].command == "hypothesize"
+    assert invocations[1].step_id == "step.cf_test"
+    assert invocations[1].command == "challenge"
+    assert invocations[2].step_id == "step.cf_verify"
+    assert invocations[2].command == "verify"
+
+
+def test_counterfactual_protocol_executes_and_produces_verdict(tmp_path):
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "hypothesize": lambda question, evidence: {
+                    "hypothesis": question,
+                    "falsifier": "evidence contradicting the counterfactual",
+                },
+                "challenge": lambda claim, evidence: {
+                    "counterevidence": [],
+                    "risks": [],
+                    "contradiction": False,
+                },
+                "verify": lambda goal, evidence: "verified",
+            }
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(COUNTERFACTUAL_PROGRAM),
+            run_id="run-counterfactual",
+        )
+
+        assert result["status"] == "succeeded"
+        assert result["outputs"]["V.cf_verdict"] == "verified"
+
+        state = store.project_state("run-counterfactual")
+        assert "H.counterfactual" in state["nodes"]
+        assert "R.cf_result" in state["nodes"]
+        assert "V.cf_verdict" in state["nodes"]
+        assert state["nodes"]["H.counterfactual"]["value"]["hypothesis"].startswith(
+            "Would latency"
+        )
+        assert state["nodes"]["R.cf_result"]["value"]["contradiction"] is False
+        assert state["nodes"]["V.cf_verdict"]["value"] == "verified"
+
+
+def test_counterfactual_done_predicate_fails_on_unverified(tmp_path):
+    program_text = COUNTERFACTUAL_PROGRAM.replace(
+        'DONE V.cf_verdict == "verified"',
+        'DONE V.cf_verdict == "falsified"',
+    )
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "hypothesize": lambda question, evidence: {"hypothesis": question},
+                "challenge": lambda claim, evidence: {"contradiction": False},
+                "verify": lambda goal, evidence: "verified",
+            }
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(program_text),
+            run_id="run-cf-fail",
+        )
+        assert result["status"] == "failed"
+        assert "DONE predicate failed" in result["error"]
