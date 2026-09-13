@@ -721,3 +721,205 @@ def test_budget_exceeded_enum_exists():
     from tahoe.registry.enums import FailureKind
 
     assert FailureKind.BUDGET_EXCEEDED.value == "budget_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# Issue #85: max_cost tracking and cost enforcement
+# ---------------------------------------------------------------------------
+
+def test_budget_gate_cost_accumulation():
+    """BudgetGate.add_cost accumulates and cost_cap_exceeded checks."""
+    gate = BudgetGate(ExecutionBudget(max_total_cost=0.10))
+    assert gate.spent_cost == 0.0
+    assert not gate.cost_cap_exceeded()
+    gate.add_cost(0.05)
+    assert gate.spent_cost == 0.05
+    assert not gate.cost_cap_exceeded()
+    gate.add_cost(0.06)
+    assert gate.spent_cost == 0.11
+    assert gate.cost_cap_exceeded()
+
+
+def test_execution_budget_max_total_cost_validation():
+    """max_total_cost accepts None, 0, and positive numbers; rejects negatives."""
+    assert ExecutionBudget().max_total_cost is None
+    assert ExecutionBudget(max_total_cost=0).max_total_cost == 0
+    assert ExecutionBudget(max_total_cost=1.5).max_total_cost == 1.5
+    with pytest.raises(ValueError):
+        ExecutionBudget(max_total_cost=-1)
+    with pytest.raises(ValueError):
+        ExecutionBudget(max_total_cost=True)
+
+
+def test_cost_budget_exceeded_fails_run(tmp_path):
+    """Accumulated cost exceeding max_total_cost fails the run."""
+    def cost_define(goal: Any = None, **_: Any) -> Any:
+        return {"goal": goal, "_receipt": {"usage": {"tokens": 100, "cost": 0.06}}}
+
+    store = EventStore(str(tmp_path / "ev_cost.sqlite"))
+    coordinator = SequentialCoordinator(
+        store, DeterministicWorker({"define": cost_define})
+    )
+    program = parse_program(SIMPLE_PROGRAM)
+    # define has max_tokens=2000, max_cost=0.0 in the builtin registry.
+    # max_cost=0.0 means the per-invocation cost ceiling is not checked
+    # (cost is only checked if max_cost > 0), but max_total_cost=0.10
+    # will be exceeded after two invocations (0.06 + 0.06 = 0.12 > 0.10).
+    # Need max_total_tokens high enough to pass pre-dispatch checks:
+    # 2000 per invocation * 2 = 4000, plus the 200 reported tokens.
+    result = coordinator.execute(
+        program,
+        "costexceeded",
+        budget=ExecutionBudget(max_total_tokens=4200, max_total_cost=0.10),
+    )
+    assert result["status"] == "failed"
+    assert result["error"] == "cost budget exceeded"
+    store.close()
+
+
+def test_per_invocation_cost_ceiling(tmp_path):
+    """When receipt cost exceeds the command's max_cost, the run fails."""
+    from tahoe.registry.registry import builtin_registry
+    reg = builtin_registry()
+    est_cost = reg.resolve("estimate").budget.max_cost
+    assert est_cost == 0.02
+
+    def estimate_handler(**kwargs: Any) -> Any:
+        return {
+            "result": "ok",
+            "_receipt": {
+                "usage": {
+                    "tokens": 100,
+                    "input_tokens": 50,
+                    "output_tokens": 50,
+                    "cost": 0.10,  # exceeds max_cost of 0.02
+                },
+            },
+        }
+
+    store = EventStore(str(tmp_path / "ev_costceil.sqlite"))
+    coordinator = SequentialCoordinator(
+        store, DeterministicWorker({"estimate": estimate_handler})
+    )
+    program = parse_program(
+        """\
+PROGRAM costceil VERSION 1.0
+INPUT
+    G.a = "a"
+step.only: DO estimate(evidence = G.a) -> OUT.a
+RETURN OUT.a
+"""
+    )
+    result = coordinator.execute(program, "costceil")
+    assert result["status"] == "failed"
+    assert result["error"] == "cost_exceeded"
+    store.close()
+
+
+def test_gate_none_path_unaffected_by_cost_checks(tmp_path):
+    """budget=None path is unaffected by cost tracking — no gate, no checks."""
+    def define(goal: Any = None, **_: Any) -> Any:
+        return {"goal": goal, "_receipt": {"usage": {"tokens": 100, "cost": 999.0}}}
+
+    store = EventStore(str(tmp_path / "ev_nocost.sqlite"))
+    coordinator = SequentialCoordinator(
+        store, DeterministicWorker({"define": define})
+    )
+    program = parse_program(SIMPLE_PROGRAM)
+    result = coordinator.execute(program, "nocost")
+    assert result["status"] == "succeeded"
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# Issue #85: LiveModelWorker receipt wrapping
+# ---------------------------------------------------------------------------
+
+def test_live_model_worker_execute_returns_receipt_wrapper():
+    """LiveModelWorker.execute returns a dict with _receipt containing usage."""
+    from tahoe.worker_adapter import LiveModelWorker, LiveResult
+
+    # Create a worker with a stub transport by patching dispatch
+    worker = LiveModelWorker.__new__(LiveModelWorker)
+    worker.total_input_tokens = 0
+    worker.total_output_tokens = 0
+    worker.model = "test-model"
+
+    # Stub dispatch to return a successful LiveResult
+    def stub_dispatch(prompt: str) -> LiveResult:
+        return LiveResult(
+            success=True,
+            text='{"answer": 42}',
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+    worker.dispatch = stub_dispatch
+
+    result = worker.execute("define", {"goal": "test"})
+    assert isinstance(result, dict)
+    assert result["answer"] == 42
+    receipt = result.get("_receipt")
+    assert isinstance(receipt, dict)
+    usage = receipt.get("usage")
+    assert isinstance(usage, dict)
+    assert usage["tokens"] == 15
+    assert usage["input_tokens"] == 10
+    assert usage["output_tokens"] == 5
+    assert "cost" in usage
+
+
+def test_live_model_worker_execute_receipt_for_non_dict_result():
+    """LiveModelWorker.execute wraps non-dict results with a receipt."""
+    from tahoe.worker_adapter import LiveModelWorker, LiveResult
+
+    worker = LiveModelWorker.__new__(LiveModelWorker)
+    worker.total_input_tokens = 0
+    worker.total_output_tokens = 0
+    worker.model = "test-model"
+
+    def stub_dispatch(prompt: str) -> LiveResult:
+        return LiveResult(
+            success=True,
+            text='just a plain string',
+            input_tokens=8,
+            output_tokens=2,
+        )
+
+    worker.dispatch = stub_dispatch
+
+    result = worker.execute("define", {"goal": "test"})
+    assert isinstance(result, dict)
+    assert result["result"] == "just a plain string"
+    receipt = result.get("_receipt")
+    assert isinstance(receipt, dict)
+    usage = receipt.get("usage")
+    assert usage["tokens"] == 10
+    assert usage["input_tokens"] == 8
+    assert usage["output_tokens"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Issue #85: BUDGET_EXCEEDED event type
+# ---------------------------------------------------------------------------
+
+def test_budget_exceeded_event_type_exists():
+    """EventType.BUDGET_EXCEEDED is a valid event type."""
+    assert EventType.BUDGET_EXCEEDED.value == "budget.exceeded"
+
+
+def test_command_max_cost_helper():
+    """_command_max_cost returns the registry's max_cost for known commands."""
+    from tahoe.runtime.helpers import _command_max_cost
+
+    # The helper caches on first call; reset for determinism
+    import tahoe.runtime.helpers as helpers_mod
+    helpers_mod._COMMAND_BUDGETS = None
+
+    cost = _command_max_cost("define")
+    assert cost == 0.0  # define has max_cost=0.0 in builtins
+
+    cost_estimate = _command_max_cost("estimate")
+    assert cost_estimate == 0.02  # estimate has max_cost=0.02 in builtins
+
+    assert _command_max_cost("nonexistent_command") is None

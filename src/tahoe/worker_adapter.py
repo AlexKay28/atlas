@@ -609,8 +609,11 @@ class LiveModelWorker:
         """Coordinator-facing seam: render the step prompt, dispatch, unwrap.
 
         Returns the model's response text parsed as JSON if possible,
-        otherwise the raw text.  Raises WorkerError on API failure so
-        the coordinator's exception path handles it.
+        otherwise the raw text, wrapped in a dict carrying a ``_receipt``
+        with usage telemetry (tokens, input_tokens, output_tokens, cost)
+        so the driver's receipt extraction fires for live workers too.
+        Raises WorkerError on API failure so the coordinator's exception
+        path handles it.
         """
         result = self.dispatch(_build_step_prompt(command, resolved_kwargs, targets))
         if not result.success:
@@ -625,9 +628,33 @@ class LiveModelWorker:
             if len(lines) >= 2:
                 text = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
         try:
-            return json.loads(text)
+            parsed = json.loads(text)
         except (json.JSONDecodeError, ValueError):
-            return text
+            parsed = text
+        in_tok = result.input_tokens or 0
+        out_tok = result.output_tokens or 0
+        total_tok = in_tok + out_tok
+        if isinstance(parsed, dict):
+            parsed["_receipt"] = {
+                "usage": {
+                    "tokens": total_tok,
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    "cost": None,
+                }
+            }
+            return parsed
+        return {
+            "result": parsed,
+            "_receipt": {
+                "usage": {
+                    "tokens": total_tok,
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    "cost": None,
+                }
+            },
+        }
 
 
 def _build_step_prompt(

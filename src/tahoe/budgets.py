@@ -74,6 +74,7 @@ class ExecutionBudget:
     per_invocation_deadline_seconds: float | None = None
     max_child_depth: int = 8
     max_total_tokens: int | None = None
+    max_total_cost: float | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -112,6 +113,15 @@ class ExecutionBudget:
             raise ValueError(
                 "max_total_tokens must be a non-negative integer or None,"
                 f" got {self.max_total_tokens!r}"
+            )
+        if self.max_total_cost is not None and (
+            isinstance(self.max_total_cost, bool)
+            or not isinstance(self.max_total_cost, (int, float))
+            or self.max_total_cost < 0
+        ):
+            raise ValueError(
+                "max_total_cost must be a non-negative number or None,"
+                f" got {self.max_total_cost!r}"
             )
 
 
@@ -152,6 +162,7 @@ class BudgetGate:
         self._slots = threading.BoundedSemaphore(max(1, budget.max_concurrent_workers))
         self._started = time.monotonic() - elapsed_offset
         self._spent_tokens = 0
+        self._spent_cost = 0.0
         self._lock = threading.Lock()
 
     # -- concurrency slots --------------------------------------------
@@ -216,6 +227,26 @@ class BudgetGate:
             return False
         with self._lock:
             return self._spent_tokens > cap
+
+    # -- cost accumulation (issue #85) -----------------------------------
+
+    def add_cost(self, amount: float) -> None:
+        """Accumulate spent cost from a result receipt."""
+        with self._lock:
+            self._spent_cost += float(amount)
+
+    @property
+    def spent_cost(self) -> float:
+        with self._lock:
+            return self._spent_cost
+
+    def cost_cap_exceeded(self) -> bool:
+        """Whether the accumulated cost spend has exceeded the cap."""
+        cap = self.budget.max_total_cost
+        if cap is None:
+            return False
+        with self._lock:
+            return self._spent_cost > cap
 
     # -- child depth -----------------------------------------------------
 

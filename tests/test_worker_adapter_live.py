@@ -225,7 +225,14 @@ class DispatchTest(unittest.TestCase):
             result = self._worker().execute("echo", {"value": 7})
 
         self.assertIsInstance(result, dict)
-        self.assertEqual(result, {"ok": True})
+        self.assertEqual(result["ok"], True)
+        receipt = result.get("_receipt")
+        self.assertIsInstance(receipt, dict)
+        usage = receipt.get("usage")
+        self.assertIsInstance(usage, dict)
+        self.assertEqual(usage["input_tokens"], 11)
+        self.assertEqual(usage["output_tokens"], 7)
+        self.assertEqual(usage["tokens"], 18)
         sent = client.chat.completions.create.call_args.kwargs
         self.assertEqual(sent["model"], DEFAULT_LIVE_MODEL)
         prompt = sent["messages"][0]["content"]

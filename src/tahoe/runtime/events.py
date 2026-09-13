@@ -122,6 +122,7 @@ class EventType(str, Enum):
     # fired.  Payload: {selector_index, selector, event_type, event_payload}.
     FIRST_EVENT_MATCHED = "first.event_matched"
     TASK_UPDATED = "task.updated"
+    BUDGET_EXCEEDED = "budget.exceeded"
 
 
 def canonical_json(value: Any) -> str:

@@ -58,6 +58,7 @@ from tahoe.runtime.helpers import (
     _command_max_attempts,
     _command_max_tokens,
     _command_max_output_bytes,
+    _command_max_cost,
     map_results_to_targets,
     evaluate_done_predicate,
     evaluate_condition,
@@ -977,6 +978,7 @@ class DriveEngine:
 
             # Issue #41: feed the budget gate's token accumulator from
             # the result receipt if the worker carries usage info.
+            # Issue #85: also accumulate cost from receipt.usage.cost.
             if gate is not None and isinstance(result, dict):
                 receipt = result.get("_receipt")
                 if isinstance(receipt, dict):
@@ -985,9 +987,19 @@ class DriveEngine:
                         tokens = usage.get("tokens", 0)
                         if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
                             gate.add_tokens(tokens)
+                        cost = usage.get("cost")
+                        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost > 0:
+                            gate.add_cost(cost)
                 if gate.token_cap_exceeded():
                     failed = True
                     error_msg = "token budget exceeded"
+                    finish_failed_invocation(
+                        idx, statement.step_id, invocation_id, task_id, error_msg
+                    )
+                    break
+                if gate.cost_cap_exceeded():
+                    failed = True
+                    error_msg = "cost budget exceeded"
                     finish_failed_invocation(
                         idx, statement.step_id, invocation_id, task_id, error_msg
                     )
@@ -1039,6 +1051,32 @@ class DriveEngine:
                         task_id, error_msg,
                     )
                     break
+
+            # Issue #85: post-result per-invocation cost ceiling check —
+            # if the receipt's cost exceeded the command's max_cost, fail.
+            cmd_max_cost = _command_max_cost(statement.command)
+            if (
+                cmd_max_cost is not None
+                and cmd_max_cost > 0
+                and isinstance(result, dict)
+            ):
+                receipt = result.get("_receipt")
+                if isinstance(receipt, dict):
+                    usage = receipt.get("usage")
+                    if isinstance(usage, dict):
+                        cost = usage.get("cost")
+                        if (
+                            isinstance(cost, (int, float))
+                            and not isinstance(cost, bool)
+                            and cost > cmd_max_cost
+                        ):
+                            failed = True
+                            error_msg = "cost_exceeded"
+                            finish_failed_invocation(
+                                idx, statement.step_id, invocation_id,
+                                task_id, error_msg,
+                            )
+                            break
 
             target_values, validation_error = map_results_to_targets(
                 statement.targets, result
