@@ -94,7 +94,7 @@ arguments     = argument, (",", argument)* ;
 argument      = name, "=", expression ;
 references    = reference, (",", reference)* ;
 reference     = type, ".", name, (".", name)* ;
-type          = "G" | "Q" | "CTX" | "C" | "P" | "F" | "E" | "A" |
+type          = "G" | "Q" | "CTX" | "C" | "P" | "PF" | "F" | "E" | "A" |
                 "H" | "O" | "K" | "D" | "X" | "V" | "R" | "U" |
                 "OUT" | "ART" ;
 protocol      = "protocol.", name ;

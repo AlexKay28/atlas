@@ -37,6 +37,7 @@ Put control information before supporting material:
 ```text
 G: <one outcome>
 C: <hard boundaries>
+PF: <soft ranking>
 CTX: <decision-shaping facts only>
 ASK: <the operation the AI should perform>
 OUT: <format, order, and detail>

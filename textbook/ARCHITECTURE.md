@@ -38,7 +38,7 @@ TAHOE
 |---|---|---|
 | `G.` | Goal | The outcome that should be true after solving |
 | `C.` | Constraint | Hard limit that invalidates options |
-| `P.` | Preference | Soft ranking criterion for valid options |
+| `PF.` | Preference | Soft ranking criterion for valid options |
 | `E.` | Evidence | Observed, verifiable facts |
 | `F.` | Finding | Derived from evidence, less raw |
 | `A.` | Assumption | Unverified but currently treated as true |
@@ -62,7 +62,7 @@ TAHOE
 | **Select** | Multiple choice, one correct option | G + E.options → P.elimination → D → V → OUT | 03 §Select |
 | **Deduce** | Logical deduction, ordering, positions | G + C → P.positions → V.all_met → OUT | 03 §Deduce |
 | **Explore** | Unclear problem space | Q → CTX → F/E/A/U → H → OUT | 03 §Explore |
-| **Decide** | Choice among approaches | G + C + P → O → K → D → R → V → OUT | 03 §Decide |
+| **Decide** | Choice among approaches | G + C + PF → O → K → D → R → V → OUT | 03 §Decide |
 | **Plan** | Decompose into steps | G + C + D → X(links) → V → OUT | 03 §Plan |
 | **Debug** | Observed ≠ expected | Q + F + E → H → V → D/X → V.regression → OUT | 03 §Debug |
 | **Review** | Evaluate an artifact | CTX + C → E + R → D/X → OUT | 03 §Review |

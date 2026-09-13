@@ -151,14 +151,14 @@ The first profile can remain human-readable:
 @profile <name>
 version: 0.1
 
-P.detail: concise
-P.order: result,evidence,next
-P.autonomy: act_when_reversible
-P.challenge: challenge_material_assumptions
-P.questions: ask_only_if_answer_changes_action
-P.options: recommend_one_with_rejected_alternatives
-P.verify: always_report_check
-P.escalate: security,privacy,irreversible,costly
+PF.detail: concise
+PF.order: result,evidence,next
+PF.autonomy: act_when_reversible
+PF.challenge: challenge_material_assumptions
+PF.questions: ask_only_if_answer_changes_action
+PF.options: recommend_one_with_rejected_alternatives
+PF.verify: always_report_check
+PF.escalate: security,privacy,irreversible,costly
 ```
 
 This is illustrative, not yet a standardized serialization. Profile keys should be

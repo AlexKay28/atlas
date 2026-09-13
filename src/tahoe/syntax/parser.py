@@ -30,7 +30,7 @@ _NAME = r"[a-z][a-z0-9_]*"
 # Everything else — step ids, typed-reference leaf segments, command names,
 # argument names, STOP kinds — keeps the underscore-only _NAME pattern.
 _PROGRAM_NAME = r"[a-z][a-z0-9_-]*"
-_PREFIX = r"(?:G|Q|CTX|C|P|F|E|A|H|O|K|D|X|V|R|U|OUT|ART|KB)"
+_PREFIX = r"(?:G|Q|CTX|C|P|PF|F|E|A|H|O|K|D|X|V|R|U|OUT|ART|KB)"
 _REF_PATTERN = rf"{_PREFIX}\.{_NAME}(?:\.{_NAME})*"
 _REF_RE = re.compile(rf"^{_REF_PATTERN}$")
 _HEADER_RE = re.compile(rf"^PROGRAM\s+(?P<name>{_PROGRAM_NAME})\s+VERSION\s+(?P<version>\d+(?:\.\d+)*)$")

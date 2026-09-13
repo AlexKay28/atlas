@@ -2088,3 +2088,75 @@ def test_split_top_level_unbalanced_closing_error_has_line():
     with pytest.raises(ParseError) as excinfo:
         parse_program(source)
     assert excinfo.value.line > 0
+
+
+# -- Issue #66: PF. (Preference) type distinct from P. (Plan) --------------
+
+PF_PROGRAM = """\
+PROGRAM prefs VERSION 1.0
+
+INPUT
+  G.goal = "ship"
+  PF.style = "minimal dependencies"
+
+step.one: DO define(value = PF.style) -> E.result
+RETURN E.result
+"""
+
+
+def test_pf_ref_parses_in_input_declaration():
+    program = parse_program(PF_PROGRAM)
+    assert [(item.ref, item.value) for item in program.declarations] == [
+        ("G.goal", "ship"),
+        ("PF.style", "minimal dependencies"),
+    ]
+
+
+def test_pf_ref_parses_as_argument_value():
+    program = parse_program(PF_PROGRAM)
+    step = program.statements[0]
+    assert step.args[0].value == "PF.style"
+
+
+def test_pf_ref_in_reference_list_parses():
+    source = """\
+PROGRAM pf_list VERSION 1.0
+
+INPUT
+  G.left = 5
+  PF.weight = 10
+
+step.combine: DO merge(items = [G.left, PF.weight]) -> E.combined
+RETURN E.combined
+"""
+    program = parse_program(source)
+    assert program.statements[0].args[0].value == ["G.left", "PF.weight"]
+
+
+def test_pf_and_p_are_distinct_valid_prefixes():
+    source = """\
+PROGRAM both VERSION 1.0
+
+INPUT
+  PF.pref = "rank by cost"
+  P.plan = "step one"
+
+step.one: DO define(value = P.plan, pref = PF.pref) -> E.result
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert ("PF.pref", "rank by cost") in [
+        (d.ref, d.value) for d in program.declarations
+    ]
+    assert ("P.plan", "step one") in [
+        (d.ref, d.value) for d in program.declarations
+    ]
+    step = program.statements[0]
+    assert step.args[0].value == "P.plan"
+    assert step.args[1].value == "PF.pref"
+
+
+def test_pf_ref_validates_correctly():
+    assert validate_program(
+        parse_program(PF_PROGRAM), known_commands={"define"}
+    ) is True

@@ -57,7 +57,7 @@ Use for consequential choices with more than one valid approach.
 Required artifacts:
 
 ```text
-G + C + P -> O -> K -> D -> R -> V -> OUT
+G + C + PF -> O -> K -> D -> R -> V -> OUT
 ```
 
 Procedure:
@@ -77,7 +77,7 @@ Compact example:
 ```text
 G.store: Select storage for the event stream.
 C.volume: Support 20k writes/second.
-P.ops: Prefer existing operational expertise.
+PF.ops: Prefer existing operational expertise.
 O.pg: Partitioned PostgreSQL.
 O.kafka: Kafka.
 K.scale: Sustained write capacity. weight=critical

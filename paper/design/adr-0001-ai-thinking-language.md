@@ -86,7 +86,7 @@ explicit requested output.
 | Question | `Q` | Unknown to resolve |
 | Context | `CTX` | Relevant background or state |
 | Constraint | `C` | Hard boundary that must be respected |
-| Preference | `P` | Soft boundary used to rank valid options |
+| Preference | `PF` | Soft boundary used to rank valid options |
 | Fact | `F` | Accepted observation with adequate support |
 | Evidence | `E` | Source, measurement, example, or observation |
 | Assumption | `A` | Temporarily accepted statement requiring visibility |
@@ -94,6 +94,7 @@ explicit requested output.
 | Option | `O` | Candidate approach |
 | Criterion | `K` | Rule used to compare options |
 | Decision | `D` | Selected option and rationale |
+| Plan | `P` | Intermediate computed result |
 | Action | `X` | Executable next step |
 | Check | `V` | Verification or acceptance test |
 | Risk | `R` | Possible harmful or undesirable outcome |
@@ -274,7 +275,7 @@ The first reusable protocols should be deliberately small:
 | Protocol | Required shape |
 | --- | --- |
 | `explore` | `Q -> E/F/A/U -> OUT` |
-| `decide` | `G/C/P -> O -> K -> D -> R -> OUT` |
+| `decide` | `G/C/PF -> O -> K -> D -> R -> OUT` |
 | `plan` | `G/C -> X -> V -> OUT` |
 | `debug` | `Q -> E -> H -> V -> D/X -> V -> OUT` |
 | `review` | `CTX/C -> E/R -> D/X -> OUT` |

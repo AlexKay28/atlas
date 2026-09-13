@@ -45,8 +45,8 @@ A constraint invalidates an option. A preference ranks otherwise valid options.
 ```text
 C.deadline: Must ship by Friday.
 C.privacy: Customer data must not leave the private network.
-P.style: Prefer fewer dependencies.
-P.cost: Prefer lower operating cost.
+PF.style: Prefer fewer dependencies.
+PF.cost: Prefer lower operating cost.
 ```
 
 Never sacrifice a constraint to improve a preference unless a decision explicitly
