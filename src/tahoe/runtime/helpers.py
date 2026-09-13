@@ -206,6 +206,48 @@ def evaluate_done_predicate(
         if re.fullmatch(done.value, actual) is not None:
             return True, ""
         return False, f"value {actual!r} does not match pattern {done.value!r}"
+    if done.op in ("every", "any"):
+        if not isinstance(actual, list):
+            return False, (
+                f"{done.op} predicate requires a list-valued reference"
+                f", got {type(actual).__name__}"
+            )
+        pred = done.value
+        pred_func = pred[0]
+        if pred_func == "has":
+            field = pred[1]
+            results = [
+                isinstance(item, Mapping) and field in item
+                for item in actual
+            ]
+        elif pred_func == "eq":
+            field, value = pred[1], pred[2]
+            results = [
+                isinstance(item, Mapping)
+                and field in item
+                and _json_equal(item[field], value)
+                for item in actual
+            ]
+        elif pred_func == "ne":
+            field, value = pred[1], pred[2]
+            results = [
+                isinstance(item, Mapping)
+                and field in item
+                and not _json_equal(item[field], value)
+                for item in actual
+            ]
+        else:
+            raise ValueError(f"unknown quantifier predicate {pred_func!r}")
+        if done.op == "every":
+            passed = all(results)
+            if passed:
+                return True, ""
+            return False, f"not every element satisfies {pred_func}({pred[1:]})"
+        else:
+            passed = any(results)
+            if passed:
+                return True, ""
+            return False, f"no element satisfies {pred_func}({pred[1:]})"
     raise ValueError(f"unknown DONE predicate {done.op!r}")
 
 
@@ -240,6 +282,42 @@ def _eval_condition_node(node: tuple, values: Mapping[str, Any]) -> bool:
                 f" ({node[1]}), got {type(operand).__name__}"
             )
         return _compare(len(operand), node[2], node[3])
+    if kind in ("every", "any"):
+        operand = _condition_operand(node[1], values)
+        if not isinstance(operand, list):
+            raise ValueError(
+                f"{kind} condition requires a list-valued reference"
+                f" ({node[1]}), got {type(operand).__name__}"
+            )
+        pred = node[2]
+        pred_func = pred[0]
+        if pred_func == "has":
+            field = pred[1]
+            results = [
+                isinstance(item, Mapping) and field in item
+                for item in operand
+            ]
+        elif pred_func == "eq":
+            field, value = pred[1], pred[2]
+            results = [
+                isinstance(item, Mapping)
+                and field in item
+                and _json_equal(item[field], value)
+                for item in operand
+            ]
+        elif pred_func == "ne":
+            field, value = pred[1], pred[2]
+            results = [
+                isinstance(item, Mapping)
+                and field in item
+                and not _json_equal(item[field], value)
+                for item in operand
+            ]
+        else:
+            raise ValueError(f"unknown quantifier predicate {pred_func!r}")
+        if kind == "every":
+            return all(results)
+        return any(results)
     if kind == "not":
         return not _eval_condition_node(node[1], values)
     if kind == "and":

@@ -99,12 +99,9 @@ _BARRIER_RE = re.compile(
 _GATHER_MODES = frozenset({"all", "any", "ranked"})
 _GATHER_MODE_ALIASES = {"first": "any", "best": "ranked"}
 _STOP_KINDS = frozenset({"completed", "failed", "blocked", "denied", "cancelled", "unresolved"})
-_DONE_OPS = frozenset({"equals", "in", "matched", "ne", "eq_ref", "ne_ref", "count"})
+_DONE_OPS = frozenset({"equals", "in", "matched", "ne", "eq_ref", "ne_ref", "count", "every", "any"})
 _DONE_MATCHED_RE = re.compile(r"^matched\((?P<inner>.*)\)$", re.DOTALL)
-# Issue #3: block forms of the conditional (ELSE, ELSE IF) are out of scope
-# and rejected with a dedicated message; the keyword check sees the line's
-# first word, so both bare ELSE and "ELSE IF ..." report the ELSE construct.
-_ELSE_KEYWORDS = frozenset({"ELSE"})
+_DONE_QUANTIFIER_RE = re.compile(r"^(?P<quantifier>every|any)\((?P<inner>.*)\)$", re.DOTALL)
 # Condition grammar (issue #3): ordering operators are only valid on
 # count(<ref>); the combined match list is longest-first so "<=" is not
 # read as "<".
@@ -113,6 +110,8 @@ _CONDITION_EQUALITY_OPS = ("==", "!=")
 _CONDITION_ALL_OPS = _CONDITION_EQUALITY_OPS + _CONDITION_ORDER_OPS + ("<", ">")
 _CONDITION_STEP_RE = re.compile(rf"step\.{_NAME}\s*:")
 _JSON_DECODER = json.JSONDecoder()
+
+_pending_lines: list[tuple[int, str, str]] = []
 
 
 class ParseError(Exception):
@@ -250,10 +249,13 @@ def parse_program(text: str) -> Program:
 
     lines = iter(source[1:])
     while True:
-        try:
-            line_no, raw, line = next(lines)
-        except StopIteration:
-            break
+        if _pending_lines:
+            line_no, raw, line = _pending_lines.pop(0)
+        else:
+            try:
+                line_no, raw, line = next(lines)
+            except StopIteration:
+                break
         if line == "INPUT":
             if declarations or statements or in_input:
                 raise ParseError("INPUT must appear once before statements", line_no, 1)
@@ -316,14 +318,12 @@ def parse_program(text: str) -> Program:
         keyword = line.split(None, 1)[0]
         if keyword in _UNSUPPORTED:
             raise ParseError(f"unsupported control construct {keyword}", line_no, 1)
-        if keyword in _ELSE_KEYWORDS:
-            # Issue #3: block conditionals (ELSE, ELSE IF) are out of scope.
-            raise ParseError("unsupported control construct ELSE", line_no, 1)
+
         if terminal_seen:
             raise ParseError("statement appears after terminal", line_no, 1)
 
         if re.match(r"IF\b", line):
-            statements.append(_parse_conditional_line(line, line_no))
+            statements.append(_parse_if(line, line_no, lines, raw))
             continue
 
         if re.match(r"DONE\b", line):
@@ -502,6 +502,122 @@ def _parse_conditional_line(line: str, line_no: int) -> Conditional:
             1,
         )
     return Conditional(condition, embedded, line_no)
+
+
+def _parse_block_statement(
+    line: str, line_no: int, lines, raw: str
+) -> object:
+    """Parse one indented statement inside an IF/ELSE block body.
+
+    Supports step invocations, STOP, RETURN, and DONE (which attaches
+    to the preceding invocation in the block).
+    """
+    if re.match(r"STOP\b", line):
+        stop = _STOP_RE.fullmatch(line)
+        if stop is None:
+            raise ParseError("malformed STOP in IF block", line_no, 1)
+        return Stop(stop.group("kind"), stop.group("ref"))
+    if re.match(r"RETURN\b", line):
+        return Return(_parse_refs(line[6:].strip(), line_no, "RETURN"))
+    if _CONDITION_STEP_RE.match(line):
+        return _parse_invocation_text(line, line_no)
+    raise ParseError(
+        "IF/ELSE block statement must be STOP, RETURN, or a DO"
+        " invocation (step.<id>: DO ...)",
+        line_no,
+        1,
+    )
+
+
+def _parse_if(
+    line: str, line_no: int, lines, raw: str
+) -> Conditional:
+    """Parse an IF construct — single-line or block form with optional ELSE.
+
+    Single-line (issue #3): ``IF <expr> <statement>``
+
+    Block form (issue #83):
+
+    .. code-block:: text
+
+       IF <cond>
+         <statement>
+         ...
+       ELSE
+         <statement>
+         ...
+
+    The block form is detected when the IF line has no embedded statement.
+    For the block form, ``statement`` is the first if-branch statement and
+    ``else_branch`` is a tuple of else-branch statements (or ``None``).
+    """
+    rest = line[2:].strip()
+    try:
+        _condition_ast, statement_start = _parse_condition_head(rest, line_no)
+    except ParseError:
+        condition = rest.strip()
+        if not condition:
+            raise ParseError("IF condition is empty", line_no, 4)
+        parse_condition(condition, line_no)
+        statement_start = None
+    else:
+        remaining = rest[statement_start:].strip()
+        if remaining:
+            return _parse_conditional_line(line, line_no)
+        condition = rest[:statement_start].strip()
+        if not condition:
+            raise ParseError("IF condition is empty", line_no, 4)
+        parse_condition(condition, line_no)
+
+    if_branch: list[object] = []
+    else_branch: list[object] | None = None
+
+    while True:
+        try:
+            next_line_no, next_raw, next_line = next(lines)
+        except StopIteration:
+            break
+        if next_raw[:1].isspace():
+            if_branch.append(
+                _parse_block_statement(next_line, next_line_no, lines, next_raw)
+            )
+        elif next_line.strip() == "ELSE":
+            else_branch = []
+            while True:
+                try:
+                    else_line_no, else_raw, else_line = next(lines)
+                except StopIteration:
+                    break
+                if else_raw[:1].isspace():
+                    else_branch.append(
+                        _parse_block_statement(
+                            else_line, else_line_no, lines, else_raw
+                        )
+                    )
+                else:
+                    _pending_lines.append((else_line_no, else_raw, else_line))
+                    break
+            break
+        else:
+            _pending_lines.append((next_line_no, next_raw, next_line))
+            break
+
+    if not if_branch:
+        raise ParseError(
+            "IF block requires at least one indented statement", line_no, 1
+        )
+    if else_branch is not None and not else_branch:
+        raise ParseError(
+            "ELSE block requires at least one indented statement", line_no, 1
+        )
+
+    return Conditional(
+        condition,
+        if_branch[0],
+        line_no,
+        else_branch=tuple(else_branch) if else_branch is not None else None,
+        if_branch_extra=tuple(if_branch[1:]),
+    )
 
 
 def _consume_block_line(
@@ -814,6 +930,10 @@ class _ConditionScanner:
             )
         if self.source.startswith("count(", self.pos):
             return self.parse_count_comparison()
+        if self.source.startswith("every(", self.pos):
+            return self.parse_quantifier_condition("every")
+        if self.source.startswith("any(", self.pos):
+            return self.parse_quantifier_condition("any")
         ref_match = re.compile(_REF_PATTERN).match(self.source, self.pos)
         if ref_match is None:
             raise ParseError(
@@ -902,6 +1022,97 @@ class _ConditionScanner:
         self.pos = end
         return ("count", ref, op, value)
 
+    def parse_quantifier_condition(self, quantifier: str) -> tuple:
+        """Parse ``every(ref, pred)`` or ``any(ref, pred)`` (issue #83)."""
+        self.pos += len(quantifier) + 1
+        self.skip_spaces()
+        ref_match = re.compile(_REF_PATTERN).match(self.source, self.pos)
+        if ref_match is None:
+            raise ParseError(
+                f"{quantifier} requires a typed reference as its first argument",
+                self.line_no,
+                self.pos + 1,
+            )
+        ref = ref_match.group(0)
+        self.pos = ref_match.end()
+        self.skip_spaces()
+        if self.pos >= self.n or self.source[self.pos] != ",":
+            raise ParseError(
+                f"{quantifier} requires a predicate as its second argument",
+                self.line_no,
+                self.pos + 1,
+            )
+        self.pos += 1
+        self.skip_spaces()
+        pred = self._parse_quantifier_sub_predicate(quantifier)
+        self.skip_spaces()
+        if self.pos >= self.n or self.source[self.pos] != ")":
+            raise ParseError(
+                f"{quantifier} requires a closing parenthesis",
+                self.line_no,
+                self.pos + 1,
+            )
+        self.pos += 1
+        return (quantifier, ref, pred)
+
+    def _parse_quantifier_sub_predicate(self, quantifier: str) -> tuple:
+        """Parse the inner predicate of every()/any(): has(), eq(), or ne()."""
+        for func in ("has", "eq", "ne"):
+            if self.source.startswith(f"{func}(", self.pos):
+                self.pos += len(func) + 1
+                self.skip_spaces()
+                field_value, end = _decode_condition_literal(
+                    self.source, self.pos, self.line_no
+                )
+                if not isinstance(field_value, str):
+                    raise ParseError(
+                        f"{quantifier} {func} predicate requires a quoted"
+                        f" field string",
+                        self.line_no,
+                        self.pos + 1,
+                    )
+                self.pos = end
+                self.skip_spaces()
+                if func == "has":
+                    if self.pos >= self.n or self.source[self.pos] != ")":
+                        raise ParseError(
+                            f"{quantifier} has predicate requires a closing"
+                            " parenthesis",
+                            self.line_no,
+                            self.pos + 1,
+                        )
+                    self.pos += 1
+                    return ("has", field_value)
+                if self.pos >= self.n or self.source[self.pos] != ",":
+                    raise ParseError(
+                        f"{quantifier} {func} predicate requires a comma"
+                        " between field and value",
+                        self.line_no,
+                        self.pos + 1,
+                    )
+                self.pos += 1
+                self.skip_spaces()
+                value, end = _decode_condition_literal(
+                    self.source, self.pos, self.line_no
+                )
+                self.pos = end
+                self.skip_spaces()
+                if self.pos >= self.n or self.source[self.pos] != ")":
+                    raise ParseError(
+                        f"{quantifier} {func} predicate requires a closing"
+                        " parenthesis",
+                        self.line_no,
+                        self.pos + 1,
+                    )
+                self.pos += 1
+                return (func, field_value, value)
+        raise ParseError(
+            f"{quantifier} predicate must be has(\"field\"),"
+            f" eq(\"field\", \"value\"), or ne(\"field\", \"value\")",
+            self.line_no,
+            self.pos + 1,
+        )
+
 
 def _match_condition_op(source: str, pos: int) -> str | None:
     for op in _CONDITION_ALL_OPS:
@@ -945,6 +1156,8 @@ def _condition_refs(node: tuple) -> tuple[str, ...]:
         return (node[1],)
     if kind in ("eq_ref", "ne_ref"):
         return (node[1], node[2])
+    if kind in ("every", "any"):
+        return (node[1],)
     if kind == "not":
         return _condition_refs(node[1])
     if kind in ("and", "or"):
@@ -1031,6 +1244,12 @@ def _parse_done_expression(expression: str, line_no: int) -> DonePredicate:
     matched = _DONE_MATCHED_RE.fullmatch(text)
     if matched is not None:
         return _parse_matched_predicate(matched.group("inner"), line_no)
+
+    quantifier = _DONE_QUANTIFIER_RE.fullmatch(text)
+    if quantifier is not None:
+        return _parse_quantifier_predicate(
+            quantifier.group("quantifier"), quantifier.group("inner"), line_no
+        )
 
     # Issue #36: count() comparison reuses the condition machinery.
     if text.startswith("count("):
@@ -1171,6 +1390,115 @@ def _parse_matched_predicate(inner: str, line_no: int) -> DonePredicate:
             f"invalid regex in DONE matched predicate: {exc.msg}", line_no, 5
         ) from exc
     return DonePredicate("matched", ref, pattern, line_no)
+
+
+_QUANTIFIER_PREDICATE_RE = re.compile(
+    r'^(?P<func>has|eq|ne)\(\s*(?P<args>.*)\)$',
+    re.DOTALL,
+)
+
+
+def _parse_quantifier_predicate(
+    quantifier: str, inner: str, line_no: int
+) -> DonePredicate:
+    """Parse ``every(ref, pred)`` or ``any(ref, pred)`` (issue #83).
+
+    The first argument must be a typed reference naming a collection.
+    The second argument is a predicate function: ``has("field")``,
+    ``eq("field", "value")``, or ``ne("field", "value")``.
+    """
+    items = _split_top_level(inner, line_no)
+    if len(items) != 2:
+        raise ParseError(
+            f"{quantifier} predicate requires exactly (ref, predicate)"
+            " arguments",
+            line_no, 5,
+        )
+    ref_text, pred_text = items
+    if _REF_RE.fullmatch(ref_text) is None:
+        raise ParseError(
+            f"{quantifier} predicate requires a typed reference as its"
+            " first argument",
+            line_no, 5,
+        )
+    pred_match = _QUANTIFIER_PREDICATE_RE.fullmatch(pred_text.strip())
+    if pred_match is None:
+        raise ParseError(
+            f"{quantifier} predicate must be has(\"field\"),"
+            f" eq(\"field\", \"value\"), or ne(\"field\", \"value\")",
+            line_no, 5,
+        )
+    func = pred_match.group("func")
+    pred_args = _split_top_level(pred_match.group("args"), line_no)
+    if func == "has":
+        if len(pred_args) != 1:
+            raise ParseError(
+                'has predicate requires exactly ("field")',
+                line_no, 5,
+            )
+        try:
+            field = json.loads(pred_args[0])
+        except json.JSONDecodeError as exc:
+            raise ParseError(
+                f"invalid field in has predicate: {exc.msg}",
+                line_no, exc.colno,
+            ) from exc
+        if not isinstance(field, str):
+            raise ParseError(
+                'has predicate requires a quoted field string', line_no, 5,
+            )
+        pred = ("has", field)
+    elif func == "eq":
+        if len(pred_args) != 2:
+            raise ParseError(
+                'eq predicate requires exactly ("field", "value")',
+                line_no, 5,
+            )
+        try:
+            field = json.loads(pred_args[0])
+        except json.JSONDecodeError as exc:
+            raise ParseError(
+                f"invalid field in eq predicate: {exc.msg}",
+                line_no, exc.colno,
+            ) from exc
+        if not isinstance(field, str):
+            raise ParseError(
+                'eq predicate requires a quoted field string', line_no, 5,
+            )
+        try:
+            value = json.loads(pred_args[1])
+        except json.JSONDecodeError as exc:
+            raise ParseError(
+                f"invalid value in eq predicate: {exc.msg}",
+                line_no, exc.colno,
+            ) from exc
+        pred = ("eq", field, value)
+    else:
+        if len(pred_args) != 2:
+            raise ParseError(
+                'ne predicate requires exactly ("field", "value")',
+                line_no, 5,
+            )
+        try:
+            field = json.loads(pred_args[0])
+        except json.JSONDecodeError as exc:
+            raise ParseError(
+                f"invalid field in ne predicate: {exc.msg}",
+                line_no, exc.colno,
+            ) from exc
+        if not isinstance(field, str):
+            raise ParseError(
+                'ne predicate requires a quoted field string', line_no, 5,
+            )
+        try:
+            value = json.loads(pred_args[1])
+        except json.JSONDecodeError as exc:
+            raise ParseError(
+                f"invalid value in ne predicate: {exc.msg}",
+                line_no, exc.colno,
+            ) from exc
+        pred = ("ne", field, value)
+    return DonePredicate(quantifier, ref_text, pred, line_no)
 
 
 def _find_top_level(text: str, needle: str) -> int:
@@ -1546,6 +1874,74 @@ def validate_program(
                 raise ParseError(
                     "IF statement must embed STOP, RETURN, or a DO invocation"
                 )
+            if statement.else_branch is not None:
+                for else_stmt in statement.else_branch:
+                    if isinstance(else_stmt, Invocation):
+                        if else_stmt.command not in known if known is not None else False:
+                            raise ParseError(
+                                f"unknown command {else_stmt.command}",
+                                statement.line, 1,
+                            )
+                        if else_stmt.step_id in steps:
+                            raise ParseError(
+                                f"duplicate step {else_stmt.step_id}"
+                            )
+                        steps.add(else_stmt.step_id)
+                        for argument in else_stmt.args:
+                            for ref in _references_in(argument.value):
+                                if ref.startswith("KB."):
+                                    continue
+                                if ref not in available:
+                                    raise ParseError(
+                                        f"reference {ref} used before"
+                                        f" definition (ELSE branch)",
+                                        argument.line, 1,
+                                    )
+                    elif isinstance(else_stmt, Return):
+                        for ref in else_stmt.refs:
+                            if ref not in available:
+                                raise ParseError(
+                                    f"unresolved return reference {ref}"
+                                    " (ELSE branch)",
+                                    statement.line, 1,
+                                )
+                    elif isinstance(else_stmt, Stop):
+                        if else_stmt.kind not in _STOP_KINDS:
+                            raise ParseError(
+                                f"invalid STOP kind {else_stmt.kind}"
+                                " (ELSE branch)",
+                                statement.line, 1,
+                            )
+                        if else_stmt.ref is not None and else_stmt.ref not in available:
+                            raise ParseError(
+                                f"unresolved STOP reference {else_stmt.ref}"
+                                " (ELSE branch)",
+                                statement.line, 1,
+                            )
+                    else:
+                        raise ParseError(
+                            "ELSE branch statement must be STOP, RETURN,"
+                            " or a DO invocation",
+                            statement.line, 1,
+                        )
+                # Issue #83: a block-form IF with both branches
+                # terminating satisfies the terminal requirement.
+                if_terminal = (
+                    isinstance(statement.statement, (Stop, Return))
+                    or any(
+                        isinstance(s, (Stop, Return))
+                        for s in statement.if_branch_extra
+                    )
+                )
+                else_terminal = (
+                    statement.else_branch is not None
+                    and any(
+                        isinstance(s, (Stop, Return))
+                        for s in statement.else_branch
+                    )
+                )
+                if if_terminal and else_terminal:
+                    terminal = True
         else:
             raise ParseError(f"unknown statement {type(statement).__name__}")
     if pending_scatter is not None:
@@ -2153,15 +2549,20 @@ def _statement_dict(statement: object) -> dict[str, Any]:
     if isinstance(statement, Stop):
         return {"kind": "stop", **dataclasses.asdict(statement)}
     if isinstance(statement, Conditional):
-        # Issue #3: the source line is not part of the canonical form (like
-        # invocations and calls), so pre-IF programs seal byte-identically
-        # and a conditional's seal depends only on its condition text and
-        # embedded statement.
-        return {
+        entry: dict[str, Any] = {
             "kind": "conditional",
             "condition": statement.condition,
             "statement": _statement_dict(statement.statement),
         }
+        if statement.else_branch is not None:
+            entry["else_branch"] = [
+                _statement_dict(s) for s in statement.else_branch
+            ]
+        if statement.if_branch_extra:
+            entry["if_branch_extra"] = [
+                _statement_dict(s) for s in statement.if_branch_extra
+            ]
+        return entry
     if isinstance(statement, Scatter):
         # Issue #4: the source line is not part of the canonical form; the
         # block seals as its header fields plus the body invocation.
@@ -2234,6 +2635,8 @@ def _condition_ast_to_canonical(node: tuple) -> list:
         return ["ne_ref", node[1], node[2]]
     if kind == "count":
         return ["count", node[1], node[2], node[3]]
+    if kind in ("every", "any"):
+        return [kind, node[1], list(node[2])]
     if kind == "not":
         return ["not", _condition_ast_to_canonical(node[1])]
     if kind in ("and", "or"):
@@ -2247,11 +2650,20 @@ def _statement_dict_v2(statement: object) -> dict[str, Any]:
     if isinstance(statement, Conditional):
         ast = parse_condition(statement.condition)
         condition_repr = _condition_ast_to_canonical(ast)
-        return {
+        entry: dict[str, Any] = {
             "kind": "conditional",
             "condition": condition_repr,
             "statement": _statement_dict_v2(statement.statement),
         }
+        if statement.else_branch is not None:
+            entry["else_branch"] = [
+                _statement_dict_v2(s) for s in statement.else_branch
+            ]
+        if statement.if_branch_extra:
+            entry["if_branch_extra"] = [
+                _statement_dict_v2(s) for s in statement.if_branch_extra
+            ]
+        return entry
     if isinstance(statement, Par):
         branch_targets: list[str] = []
         for branch in statement.branches:

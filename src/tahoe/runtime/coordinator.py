@@ -470,8 +470,52 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
         the terminal result dict, or ``None`` when no conditional fired.
         Conditional DO invocations never appear here — they are plan
         entries evaluated inside the loop itself.
+
+        Issue #83: ``_ElseAnchor`` entries are evaluated with inverted
+        logic — the else-branch terminal fires when the condition is FALSE.
         """
+        from tahoe.runtime.planning import _ElseAnchor, _IfExtraAnchor
         for conditional in conditionals:
+            if isinstance(conditional, _IfExtraAnchor):
+                try:
+                    fired = evaluate_condition(
+                        conditional.conditional.condition, values
+                    )
+                except ValueError as exc:
+                    return self._fail_run(
+                        run_id, plan, statement_to_task, cancel_from_idx, str(exc)
+                    )
+                if not fired:
+                    continue
+                embedded = conditional.statement
+                self._cancel_pending_after(
+                    run_id, plan, statement_to_task, cancel_from_idx
+                )
+                if isinstance(embedded, Stop):
+                    return self._terminal_stop(run_id, embedded, values)
+                if isinstance(embedded, Return):
+                    return self._terminal_return(run_id, embedded.refs, values)
+                continue
+            if isinstance(conditional, _ElseAnchor):
+                try:
+                    fired = not evaluate_condition(
+                        conditional.conditional.condition, values
+                    )
+                except ValueError as exc:
+                    return self._fail_run(
+                        run_id, plan, statement_to_task, cancel_from_idx, str(exc)
+                    )
+                if not fired:
+                    continue
+                embedded = conditional.statement
+                self._cancel_pending_after(
+                    run_id, plan, statement_to_task, cancel_from_idx
+                )
+                if isinstance(embedded, Stop):
+                    return self._terminal_stop(run_id, embedded, values)
+                if isinstance(embedded, Return):
+                    return self._terminal_return(run_id, embedded.refs, values)
+                continue
             try:
                 fired = evaluate_condition(conditional.condition, values)
             except ValueError as exc:

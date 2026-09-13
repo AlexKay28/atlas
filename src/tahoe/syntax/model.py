@@ -75,23 +75,40 @@ class Call:
 
 @dataclass(frozen=True)
 class Conditional:
-    """Single-line deterministic conditional (issue #3): ``IF <expr> <statement>``.
+    """Deterministic conditional (issue #3, issue #83): ``IF <expr> ...``.
 
-    ``condition`` is the raw condition text between ``IF`` and the embedded
-    statement — deterministic comparisons over committed node refs and JSON
-    literals (``<ref> == <json>``, ``<ref> != <json>``, ``count(<ref>) <op>
-    <int>`` for list-valued refs) combined with left-associative ``AND`` /
-    ``OR`` and prefix ``NOT``; no parentheses, no worker calls.  ``statement``
-    is the embedded statement object — a :class:`Stop`, a :class:`Return`, or
-    a full :class:`Invocation` (``step.<id>: DO ...``).  Block forms (ELSE,
-    ELSE IF) are not part of the grammar and are rejected at parse time.
-    The coordinator evaluates the condition purely over committed run state
-    and executes the embedded statement only when it holds.
+    Two forms:
+
+    * Single-line: ``IF <expr> <statement>`` — the embedded ``statement`` is
+      a :class:`Stop`, a :class:`Return`, or a full :class:`Invocation`.
+    * Block form with optional ELSE (issue #83):
+
+      .. code-block:: text
+
+         IF <cond>
+           <statement>
+           ...
+         ELSE
+           <statement>
+           ...
+
+    In the block form ``statement`` holds the first branch's embedded
+    statement and ``else_branch`` holds the ELSE body as a tuple of
+    statements (or ``None`` when there is no ELSE).  The single-line form
+    always has ``else_branch = None``.
+
+    ``condition`` is the raw condition text — deterministic comparisons
+    over committed node refs and JSON literals combined with
+    left-associative ``AND`` / ``OR`` and prefix ``NOT``.  The coordinator
+    evaluates the condition purely over committed run state and executes
+    the embedded statement(s) only when it holds.
     """
 
     condition: str
     statement: object
     line: int = 0
+    else_branch: tuple[object, ...] | None = None
+    if_branch_extra: tuple[object, ...] = ()
 
 
 @dataclass(frozen=True)

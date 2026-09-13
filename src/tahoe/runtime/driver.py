@@ -359,6 +359,57 @@ class DriveEngine:
                 if task_id is None:
                     task_id = self._create_single_plan_task(run_id, entry)
                     statement_to_task[idx] = task_id
+            elif entry.else_condition is not None:
+                # Issue #83: an else-branch entry executes only when the
+                # IF condition is FALSE.  A true condition skips the else
+                # branch entirely.
+                try:
+                    fired = evaluate_condition(entry.else_condition, values)
+                except ValueError as exc:
+                    return self._fail_run(
+                        run_id, plan, statement_to_task, idx, str(exc)
+                    )
+                if fired:
+                    continue
+                if statement is not None:
+                    task_id = statement_to_task.get(idx)
+                    if task_id is None:
+                        task_id = self._create_single_plan_task(run_id, entry)
+                        statement_to_task[idx] = task_id
+                else:
+                    # else-branch terminal (STOP/RETURN): execute directly
+                    for s in program.statements:
+                        if isinstance(s, Conditional) and s.else_branch is not None:
+                            for es in s.else_branch:
+                                if es is entry.invocation or (
+                                    not isinstance(es, Invocation) and es is not None
+                                ):
+                                    pass
+                    # Find the matching else-branch terminal statement
+                    for cond_stmt in program.statements:
+                        if (
+                            isinstance(cond_stmt, Conditional)
+                            and cond_stmt.else_branch is not None
+                        ):
+                            for es in cond_stmt.else_branch:
+                                if not isinstance(es, Invocation):
+                                    if isinstance(es, Stop):
+                                        self._cancel_pending_after(
+                                            run_id, plan,
+                                            statement_to_task, idx,
+                                        )
+                                        return self._terminal_stop(
+                                            run_id, es, values
+                                        )
+                                    if isinstance(es, Return):
+                                        self._cancel_pending_after(
+                                            run_id, plan,
+                                            statement_to_task, idx,
+                                        )
+                                        return self._terminal_return(
+                                            run_id, es.refs, values
+                                        )
+                    continue
             else:
                 task_id = statement_to_task[idx]
 
