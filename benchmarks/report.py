@@ -4,6 +4,11 @@ import json
 import statistics
 from collections import defaultdict
 
+try:
+    from metrics import compute_all_metrics
+except ImportError:
+    from benchmarks.metrics import compute_all_metrics
+
 STAT_FIELDS = (
     "pass_rate",
     "mean_tokens",
@@ -20,6 +25,12 @@ STAT_FIELDS = (
     "tokens_per_success",
 )
 
+REASONING_METRIC_FIELDS = (
+    "re_reasoning_efficiency",
+    "rc_reasoning_concentration",
+    "rr_redundancy_rate",
+)
+
 COMPARISON_METRICS = (
     "pass_rate",
     "mean_tokens",
@@ -28,6 +39,9 @@ COMPARISON_METRICS = (
     "mean_wall",
     "mean_quality",
     "tokens_per_success",
+    "re_reasoning_efficiency",
+    "rc_reasoning_concentration",
+    "rr_redundancy_rate",
 )
 
 
@@ -54,9 +68,34 @@ def group_trials(trials):
     return dict(groups)
 
 
+def compute_reasoning_metrics(run_data) -> dict:
+    """Compute RE, RC, RR reasoning metrics from run results.
+
+    Accepts either a list of trial dicts (as used by compute_stats) or a
+    single run-summary dict.  When trial-level ref/token counts are
+    absent (e.g. classic-arm public-bench trials), the metrics are 0.0.
+    """
+    if isinstance(run_data, dict):
+        return compute_all_metrics(run_data)
+
+    if not run_data:
+        return {field: 0.0 for field in REASONING_METRIC_FIELDS}
+
+    totals = {
+        "verified_logical_steps": sum(t.get("verified_logical_steps", 0) for t in run_data),
+        "total_tokens": sum(t.get("total_tokens", 0) for t in run_data),
+        "typed_refs_produced": sum(t.get("typed_refs_produced", 0) for t in run_data),
+        "output_tokens": sum(t.get("output_tokens", 0) for t in run_data),
+        "repeated_refs": sum(t.get("repeated_refs", 0) for t in run_data),
+        "retired_refs": sum(t.get("retired_refs", 0) for t in run_data),
+        "total_refs_produced": sum(t.get("total_refs_produced", 0) for t in run_data),
+    }
+    return compute_all_metrics(totals)
+
+
 def compute_stats(trials):
     if not trials:
-        return {field: 0.0 for field in STAT_FIELDS}
+        return {field: 0.0 for field in STAT_FIELDS + REASONING_METRIC_FIELDS}
     totals = [trial["total_tokens"] for trial in trials]
     inputs = [trial["input_tokens"] for trial in trials]
     outputs = [trial["output_tokens"] for trial in trials]
@@ -83,7 +122,7 @@ def compute_stats(trials):
         statistics.fmean(success_tokens) if success_tokens else 0.0
     )
 
-    return {
+    result = {
         "pass_rate": passed / len(trials),
         "mean_tokens": statistics.fmean(totals),
         "p25_tokens": p25,
@@ -98,19 +137,21 @@ def compute_stats(trials):
         "p75_quality": q_p75,
         "tokens_per_success": tokens_per_success,
     }
+    result.update(compute_reasoning_metrics(trials))
+    return result
 
 
 def generate_markdown_table(trials):
     groups = group_trials(trials)
     lines = [
-        "| task_id | arm | trials | pass_rate | mean_quality | mean_tokens | p25 | p50 | p75 | mean_wall | tokens/success |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| task_id | arm | trials | pass_rate | mean_quality | mean_tokens | p25 | p50 | p75 | mean_wall | tokens/success | RE | RC | RR |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for task_id, arm in sorted(groups):
         group = groups[(task_id, arm)]
         stats = compute_stats(group)
         lines.append(
-            "| {task} | {arm} | {n} | {pr} | {mq} | {mt} | {p25} | {p50} | {p75} | {mw} | {tps} |".format(
+            "| {task} | {arm} | {n} | {pr} | {mq} | {mt} | {p25} | {p50} | {p75} | {mw} | {tps} | {re_:.4f} | {rc:.4f} | {rr:.4f} |".format(
                 task=task_id,
                 arm=arm,
                 n=len(group),
@@ -122,6 +163,9 @@ def generate_markdown_table(trials):
                 p75=_fmt(stats["p75_tokens"]),
                 mw=_fmt(stats["mean_wall"]),
                 tps=_fmt(stats["tokens_per_success"]),
+                re_=stats["re_reasoning_efficiency"],
+                rc=stats["rc_reasoning_concentration"],
+                rr=stats["rr_redundancy_rate"],
             )
         )
     return "\n".join(lines)
