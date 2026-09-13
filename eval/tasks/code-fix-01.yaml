@@ -8,16 +8,11 @@ grader:
   params:
     substring: "return a + b"
 program_source: |
-  PROGRAM code-fix-01-add-not-subtract
-  INPUT bug = "def add(a, b): return a - b — the function should add, not subtract"
-  GOAL "Return the fixed function"
-
-  step.1: define "the intended behavior: add(a, b) returns a + b" -> intent
-    DONE matched(ref, "a + b")
-  step.2: edit "replace 'return a - b' with 'return a + b' in add" -> fixed
-    DONE matched(ref, "return a + b")
-  step.3: verify "the fixed function def add(a, b): return a + b adds its arguments" -> verified
-    DONE matched(ref, "verified")
-  step.4: report "def add(a, b): return a + b"
-    DONE matched(ref, "return a + b")
+  PROGRAM code_fix_01_add_not_subtract VERSION 1.0
+  INPUT
+      G.goal = "Fix the bug in the following Python function: def add(a, b): return a - b. The function should add, not subtract. Return the fixed function."
+  step.edit: DO edit(instruction = "replace 'return a - b' with 'return a + b' in add") -> P.fixed
+  step.verify: DO verify(claim = "the fixed function def add(a, b): return a + b adds its arguments") -> V.verified
+  step.report: DO report(committed_refs = V.verified, format = "json") -> OUT.answer
+  RETURN OUT.answer
 authoring_attempts_expected: 1
