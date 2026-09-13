@@ -326,11 +326,11 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
                 continue
             if entry.await_ is not None:
                 # Issue #77: an AWAIT statement creates no task —
-                # the event system is not yet implemented.
+                # suspension/resume is handled through the event system.
                 continue
             if entry.approve is not None:
                 # Issue #78: an APPROVE statement creates no task —
-                # the approval system is not yet implemented.
+                # the approval gate is handled through the event system.
                 continue
             task = create_ledger.create_task(
                 text=self._task_text(entry),

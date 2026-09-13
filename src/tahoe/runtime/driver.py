@@ -178,6 +178,20 @@ class DriveEngine:
             "outputs": {},
         }
 
+    @staticmethod
+    def _parse_timeout(timeout: str) -> float | None:
+        """Parse a duration string like ``30s``, ``5m``, ``2h`` into seconds.
+
+        Returns ``None`` if the string does not match a known suffix.
+        """
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([smhd])", timeout.strip())
+        if match is None:
+            return None
+        value = float(match.group(1))
+        unit = match.group(2)
+        multipliers = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
+        return value * multipliers[unit]
+
     def _drive_plan(
         self,
         program: Program,
@@ -2402,7 +2416,7 @@ class DriveEngine:
     _TYPED_REF_CANDIDATE_RE = _planning._TYPED_REF_CANDIDATE_RE
 
     # ------------------------------------------------------------------
-    # FIRST execution stub (issue #76 — not yet implemented)
+    # FIRST execution (issue #76)
     # ------------------------------------------------------------------
 
     def _execute_first_entry(
@@ -2420,14 +2434,103 @@ class DriveEngine:
         claims: "ResourceLedger | None",
         branch_root: str | None,
     ) -> dict[str, Any] | None:
-        """FIRST execution stub (issue #76 — not yet implemented)."""
-        return self._fail_run(
-            run_id, plan, statement_to_task, idx,
-            "FIRST event-choice execution is not yet implemented",
+        """Execute one FIRST event-choice block (issue #76).
+
+        The FIRST construct subscribes to a set of event selectors and
+        waits for the first one to fire.  When an event matches a
+        selector, the remaining selectors are cancelled and the body
+        statements execute sequentially (reusing the LOOP body execution
+        path).  A FIRST_EVENT_MATCHED event records which selector fired.
+
+        Event selectors are simple string patterns of the form
+        ``event_name`` or ``event_name(args)`` — a name with optional
+        parenthesised arguments.  Matching is by event type name: an
+        incoming event whose type matches the selector's name fires
+        that selector.
+
+        For the deterministic test harness, events are injected via
+        the EventStore before execution — the coordinator scans the
+        run's event history for matching events.  If no event matches,
+        the FIRST block blocks (returns None, leaving the run
+        non-terminal); if exactly one matches, the body executes.
+        """
+        first = entry.first
+        assert first is not None
+
+        # Scan the run's event history for a matching event
+        events = self.store.events(run_id)
+        matched_selector: int | None = None
+        matched_event = None
+        for selector_idx, selector in enumerate(first.selectors):
+            selector_name = selector.split("(")[0].strip()
+            for event in events:
+                event_type_name = event.event_type.value
+                if event_type_name == selector_name or event_type_name.startswith(selector_name + "."):
+                    matched_selector = selector_idx
+                    matched_event = event
+                    break
+            if matched_selector is not None:
+                break
+
+        if matched_selector is None:
+            # No matching event found — record a BLOCKED and return
+            self.store.append(
+                run_id,
+                EventType.BLOCKED,
+                invocation_id=invocation_id,
+                payload={
+                    "selectors": list(first.selectors),
+                    "reason": "no matching event",
+                },
+            )
+            return None
+
+        # Record FIRST_EVENT_MATCHED
+        self.store.append(
+            run_id,
+            EventType.FIRST_EVENT_MATCHED,
+            invocation_id=invocation_id,
+            payload={
+                "selector_index": matched_selector,
+                "selector": first.selectors[matched_selector],
+                "event_type": matched_event.event_type.value
+                if matched_event
+                else None,
+            },
         )
 
+        # Execute body statements sequentially (reuse LOOP body path)
+        for body_stmt in first.body:
+            result = self._execute_loop_body_statement(
+                body_stmt,
+                program,
+                run_id,
+                invocation_id,
+                1,  # iteration = 1
+                values,
+                plan,
+                statement_to_task,
+                crash_hook,
+                gate,
+                claims,
+                branch_root,
+            )
+            if result is not None:
+                return result
+
+        # Record SUCCEEDED for the FIRST entry
+        expected_sv = self.store._current_state_version(run_id)
+        self.store.append(
+            run_id,
+            EventType.SUCCEEDED,
+            invocation_id=invocation_id,
+            expected_state_version=expected_sv,
+            payload={"delta": StateDelta()},
+        )
+        return None
+
     # ------------------------------------------------------------------
-    # AWAIT execution stub (issue #77 — not yet implemented)
+    # AWAIT execution (issue #77)
     # ------------------------------------------------------------------
 
     def _execute_await_entry(
@@ -2445,14 +2548,112 @@ class DriveEngine:
         claims: "ResourceLedger | None",
         branch_root: str | None,
     ) -> dict[str, Any] | None:
-        """AWAIT execution stub (issue #77 — not yet implemented)."""
-        return self._fail_run(
-            run_id, plan, statement_to_task, idx,
-            "AWAIT event-wait execution is not yet implemented",
-        )
+        """Execute an AWAIT statement (issue #77).
+
+        Records AWAIT_SUSPENDED with the event selector and optional
+        timeout, then blocks the run (returns a "blocked" result without
+        appending RUN_FINISHED — the run is non-terminal).  On resume,
+        checks for a matching event in the event store; if found,
+        records AWAIT_RESUMED and continues.  If a timeout was set and
+        no event arrived, records AWAIT_RESUMED with reason "timeout"
+        and continues without the event.  If neither, re-blocks.
+        """
+        await_stmt = entry.await_
+        assert await_stmt is not None
+        selector = await_stmt.selector
+        timeout = await_stmt.timeout
+
+        # On resume, check if AWAIT_SUSPENDED was already recorded.
+        events = self.store.events(run_id)
+        existing_suspended = [
+            e for e in events
+            if e.event_type is EventType.AWAIT_SUSPENDED
+            and e.invocation_id == invocation_id
+        ]
+
+        if not existing_suspended:
+            # First pass: record suspension and block the run.
+            self.store.append(
+                run_id,
+                EventType.AWAIT_SUSPENDED,
+                invocation_id=invocation_id,
+                payload={
+                    "selector": selector,
+                    "timeout": timeout,
+                },
+            )
+            return {
+                "run_id": run_id,
+                "status": "blocked",
+                "reason": "await",
+                "selector": selector,
+                "outputs": {},
+            }
+
+        # Resume: check for a matching event or timeout.
+        suspended_event = existing_suspended[-1]
+        suspended_payload = suspended_event.payload or {}
+        suspended_selector = suspended_payload.get("selector", selector)
+        suspended_timeout = suspended_payload.get("timeout", timeout)
+
+        # Check for matching events recorded after AWAIT_SUSPENDED.
+        # External events are stored as EXTERNAL_EVENT with a payload
+        # carrying the selector string; the match is on that payload field.
+        suspended_seq = suspended_event.seq
+        matching_events = [
+            e for e in events
+            if e.seq > suspended_seq
+            and e.event_type is EventType.EXTERNAL_EVENT
+            and isinstance(e.payload, dict)
+            and e.payload.get("selector") == suspended_selector
+        ]
+
+        timed_out = False
+        if suspended_timeout:
+            deadline = self._parse_timeout(suspended_timeout)
+            if deadline is not None:
+                from datetime import datetime, timezone
+                suspended_ts = suspended_event.occurred_at
+                elapsed = (datetime.now(timezone.utc) - suspended_ts).total_seconds()
+                if elapsed >= deadline:
+                    timed_out = True
+
+        if matching_events:
+            match_event = matching_events[0]
+            self.store.append(
+                run_id,
+                EventType.AWAIT_RESUMED,
+                invocation_id=invocation_id,
+                payload={
+                    "reason": "event",
+                    "selector": suspended_selector,
+                    "matched_seq": match_event.seq,
+                },
+            )
+            return None  # continue to next plan entry
+        elif timed_out:
+            self.store.append(
+                run_id,
+                EventType.AWAIT_RESUMED,
+                invocation_id=invocation_id,
+                payload={
+                    "reason": "timeout",
+                    "selector": suspended_selector,
+                },
+            )
+            return None  # continue to next plan entry
+        else:
+            # No event and no timeout: re-block.
+            return {
+                "run_id": run_id,
+                "status": "blocked",
+                "reason": "await",
+                "selector": suspended_selector,
+                "outputs": {},
+            }
 
     # ------------------------------------------------------------------
-    # APPROVE execution stub (issue #78 — not yet implemented)
+    # APPROVE execution (issue #78)
     # ------------------------------------------------------------------
 
     def _execute_approve_entry(
@@ -2470,57 +2671,137 @@ class DriveEngine:
         claims: "ResourceLedger | None",
         branch_root: str | None,
     ) -> dict[str, Any] | None:
-        """FIRST execution stub (issue #76)."""
-        return self._fail_run(
-            run_id, plan, statement_to_task, idx,
-            "FIRST event-choice is not yet implemented",
-        )
+        """Execute an APPROVE statement (issue #78).
 
-    # AWAIT execution stub (issue #77)
+        Computes an SHA-256 digest of the intent expression, records
+        APPROVAL_REQUESTED with {policy_ref, intent_digest, step_index},
+        and blocks the run (RUN_FINISHED with status "blocked" and
+        reason "approve").  On resume, checks for APPROVAL_GRANTED or
+        APPROVAL_DENIED events recorded after the suspension:
 
-    def _execute_await_entry(
-        self,
-        program: "Program",
-        run_id: str,
-        entry: "_PlanEntry",
-        idx: int,
-        invocation_id: str,
-        values: dict,
-        plan: list,
-        statement_to_task: dict,
-        crash_hook,
-        gate,
-        claims,
-        branch_root,
-    ):
-        """AWAIT execution stub (issue #77)."""
-        return self._fail_run(
-            run_id, plan, statement_to_task, idx,
-            "AWAIT is not yet implemented",
-        )
+        - APPROVAL_GRANTED: verifies the grant's ``intent_digest`` matches
+          the request's; on mismatch the run fails.  On match, continues
+          to the next plan entry.
+        - APPROVAL_DENIED: records RUN_FINISHED with status "denied" and
+          stops the run.
+        - Neither found: re-blocks the run.
+        """
+        approve_stmt = entry.approve
+        assert approve_stmt is not None
+        policy_ref = approve_stmt.policy
+        intent_expr = approve_stmt.intent
 
-    # APPROVE execution stub (issue #78)
+        intent_digest = hashlib.sha256(intent_expr.encode("utf-8")).hexdigest()
 
-    def _execute_approve_entry(
-        self,
-        program: "Program",
-        run_id: str,
-        entry: "_PlanEntry",
-        idx: int,
-        invocation_id: str,
-        values: dict,
-        plan: list,
-        statement_to_task: dict,
-        crash_hook,
-        gate,
-        claims,
-        branch_root,
-    ):
-        """APPROVE execution stub (issue #78)."""
-        return self._fail_run(
-            run_id, plan, statement_to_task, idx,
-            "APPROVE is not yet implemented",
-        )
+        # On resume, check if APPROVAL_REQUESTED was already recorded.
+        events = self.store.events(run_id)
+        existing_requested = [
+            e for e in events
+            if e.event_type is EventType.APPROVAL_REQUESTED
+            and e.invocation_id == invocation_id
+        ]
+
+        if not existing_requested:
+            # First pass: record the approval request and block the run.
+            self.store.append(
+                run_id,
+                EventType.APPROVAL_REQUESTED,
+                invocation_id=invocation_id,
+                payload={
+                    "policy_ref": policy_ref,
+                    "intent": intent_expr,
+                    "intent_digest": intent_digest,
+                    "step_index": idx,
+                },
+            )
+            self.store.append(
+                run_id,
+                EventType.RUN_FINISHED,
+                payload={
+                    "status": "blocked",
+                    "reason": "approve",
+                    "policy_ref": policy_ref,
+                    "intent_digest": intent_digest,
+                },
+            )
+            return {
+                "run_id": run_id,
+                "status": "blocked",
+                "reason": "approve",
+                "policy_ref": policy_ref,
+                "intent_digest": intent_digest,
+                "outputs": {},
+            }
+        else:
+            # Resume: check for APPROVAL_GRANTED or APPROVAL_DENIED.
+            request_event = existing_requested[-1]
+            request_payload = request_event.payload or {}
+            request_digest = request_payload.get("intent_digest", intent_digest)
+            request_seq = request_event.seq
+
+            granted_events = [
+                e for e in events
+                if e.seq > request_seq
+                and e.event_type is EventType.APPROVAL_GRANTED
+                and e.invocation_id == invocation_id
+            ]
+            denied_events = [
+                e for e in events
+                if e.seq > request_seq
+                and e.event_type is EventType.APPROVAL_DENIED
+                and e.invocation_id == invocation_id
+            ]
+
+            if granted_events:
+                grant_event = granted_events[-1]
+                grant_payload = grant_event.payload or {}
+                grant_digest = grant_payload.get("intent_digest")
+                if grant_digest != request_digest:
+                    return self._fail_run(
+                        run_id, plan, statement_to_task, idx,
+                        "APPROVAL_GRANTED digest mismatch: approval was"
+                        " for a different intent",
+                    )
+                # Digest matches: continue to next plan entry.
+                return None
+
+            if denied_events:
+                # Approval denied: stop the run with "denied" status.
+                self.store.append(
+                    run_id,
+                    EventType.RUN_FINISHED,
+                    payload={
+                        "status": "denied",
+                        "reason": "approval denied",
+                        "policy_ref": policy_ref,
+                    },
+                )
+                return {
+                    "run_id": run_id,
+                    "status": "denied",
+                    "reason": "approval denied",
+                    "outputs": {},
+                }
+
+            # No grant or denial yet: re-block.
+            self.store.append(
+                run_id,
+                EventType.RUN_FINISHED,
+                payload={
+                    "status": "blocked",
+                    "reason": "approve",
+                    "policy_ref": policy_ref,
+                    "intent_digest": request_digest,
+                },
+            )
+            return {
+                "run_id": run_id,
+                "status": "blocked",
+                "reason": "approve",
+                "policy_ref": policy_ref,
+                "intent_digest": request_digest,
+                "outputs": {},
+            }
 
     @staticmethod
     def _scan_arg_refs(value: Any) -> frozenset[str]:

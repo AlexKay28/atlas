@@ -128,6 +128,8 @@ def resume_run(
             )
 
     # -- terminal runs are never resumed (W4/W10/W11/W12) -------------
+    # Issue #77: an AWAIT-blocked run has no RUN_FINISHED — it is
+    # non-terminal and resumes naturally through _resume_existing_run.
     run_finished = [
         event for event in events if event.event_type is EventType.RUN_FINISHED
     ]

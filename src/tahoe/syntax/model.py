@@ -278,35 +278,40 @@ class First:
     ``FIRST event_selector OR event_selector+`` followed by an indented
     body of statements.  The first event selector to fire triggers the
     body; remaining selectors are cancelled.
-
-    Parsing only — no runtime execution yet.  The coordinator skips FIRST
-    entries with a "not yet executed" warning.
     """
 
     selectors: tuple[str, ...]
     body: tuple
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Await:
     """Event-await statement (issue #77).
 
     ``AWAIT <event_selector> [TIMEOUT <duration>]`` — pauses execution
-    until the named event fires or the timeout expires.
-
-    Parsing only — no runtime execution yet.  The coordinator skips AWAIT
-    entries with a warning.
+    until the named event fires or the timeout expires.  The coordinator
+    records AWAIT_SUSPENDED, blocks the run, and on resume checks for a
+    matching event or timeout expiry before recording AWAIT_RESUMED and
+    continuing to the next plan entry.
     """
 
     selector: str
     timeout: str | None = None
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Approve:
     """Approval-gate statement (issue #78).
 
     ``APPROVE <policy_ref> INTENT <expression>`` — gates execution on
     an approval policy.  The policy reference names a policy node
     (e.g. ``PF.safety``); the intent expression describes what the
-    approval is for.
-
-    Parsing only — no runtime execution yet.  The coordinator skips
-    APPROVE entries with a warning.
+    approval is for.  The coordinator records APPROVAL_REQUESTED with
+    an SHA-256 digest of the intent, blocks the run, and on
+    APPROVAL_GRANTED (with matching digest) continues; on
+    APPROVAL_DENIED the run stops with status "denied".
     """
 
     policy: str

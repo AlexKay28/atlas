@@ -86,8 +86,8 @@ _UNSUPPORTED = frozenset({"AWAIT", "APPROVE"})
 # FIRST/APPROVE stay unsupported.
 _UNSUPPORTED = frozenset({"FIRST", "APPROVE"})
 # Issue #78: APPROVE is no longer reserved — it parses an approval-gate block.
-# FIRST/AWAIT stay unsupported.
-_UNSUPPORTED = frozenset({"FIRST", "AWAIT"})
+# Issue #76: FIRST is now implemented — remove from unsupported.
+_UNSUPPORTED = frozenset()
 # Issue #4: SCATTER/GATHER block grammar.  The SCATTER line is followed by
 # exactly one indented body step line; the GATHER line names that body step
 # and optionally a judge step, itself defined by the following indented line.
@@ -509,9 +509,11 @@ def parse_program(text: str) -> Program:
         # (FIRST <selector> OR <selector>+), followed by an indented body.
         if re.match(r"FIRST\b", line):
             statements.append(_parse_first_block(line, line_no, lines))
+            continue
         # Issue #77: AWAIT event-await.  A single-line statement.
         if re.match(r"AWAIT\b", line):
             statements.append(_parse_await_line(line, line_no))
+            continue
         # Issue #78: APPROVE approval-gate.  A single-line statement.
         if re.match(r"APPROVE\b", line):
             statements.append(_parse_approve_line(line, line_no))
@@ -1390,8 +1392,6 @@ def _parse_await_line(line: str, line_no: int) -> Await:
 
     The selector is a raw event selector string.  The optional TIMEOUT
     clause carries a raw duration string (e.g. ``30s``, ``5m``).
-
-    Parsing only — the coordinator skips AWAIT entries with a warning.
     """
     match = _AWAIT_RE.fullmatch(line)
     if match is None:
