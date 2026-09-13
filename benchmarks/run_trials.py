@@ -27,13 +27,13 @@ from graders import make_grader
 from report import generate_markdown_table, generate_json_report, generate_per_task_comparison
 
 TASK_FILES = [
-    "eval/tasks/routing-01.yaml",
-    "eval/tasks/routing-02.yaml",
-    "eval/tasks/code-fix-01.yaml",
-    "eval/tasks/code-fix-02.yaml",
-    "eval/tasks/search-01.yaml",
-    "eval/tasks/plan-01.yaml",
-    "eval/tasks/recover-01.yaml",
+    "benchmarks/tasks/routing-01.yaml",
+    "benchmarks/tasks/routing-02.yaml",
+    "benchmarks/tasks/code-fix-01.yaml",
+    "benchmarks/tasks/code-fix-02.yaml",
+    "benchmarks/tasks/search-01.yaml",
+    "benchmarks/tasks/plan-01.yaml",
+    "benchmarks/tasks/recover-01.yaml",
 ]
 
 ARMS = ["classic", "tahoe"]
@@ -250,7 +250,7 @@ def main():
     print()
     print(generate_per_task_comparison(all_trials))
 
-    results_dir = Path("eval/results")
+    results_dir = Path("benchmarks/results")
     results_dir.mkdir(parents=True, exist_ok=True)
     with open(results_dir / "trials.json", "w") as f:
         json.dump(all_trials, f, indent=2, sort_keys=True)
