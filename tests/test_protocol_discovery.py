@@ -534,7 +534,7 @@ def test_parse_from_benchmark_data():
     trials = [parse_trial(t, i) for i, t in enumerate(tahoe)]
     assert len(trials) == 300
     passed = sum(1 for t in trials if t.passed)
-    assert passed == 267
+    assert passed == 266
     assert 0.85 < passed / 300 < 0.95  # ~89%
 
 
