@@ -533,6 +533,8 @@ class LiveModelWorker:
         # built on first dispatch, so importing this module and
         # constructing the worker stay side-effect free.
         self._client: Any = None
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
 
     @property
     def commands(self) -> set[str]:
@@ -615,6 +617,8 @@ class LiveModelWorker:
             raise WorkerError(
                 f"LiveModelWorker dispatch failed ({result.failure_class}): {result.error}"
             )
+        self.total_input_tokens += result.input_tokens or 0
+        self.total_output_tokens += result.output_tokens or 0
         text = result.text.strip()
         if text.startswith("```"):
             lines = text.split("\n")

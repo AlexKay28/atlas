@@ -36,7 +36,7 @@ TASK_FILES = [
     "eval/tasks/recover-01.yaml",
 ]
 
-ARMS = ["classic", "opencode", "tahoe"]
+ARMS = ["classic", "tahoe"]
 TRIALS_PER_ARM = 5
 SEED = 42
 
@@ -163,13 +163,8 @@ def run_tahoe_arm(task, trial_idx):
                     final_answer = str(ev.payload.get("status", ""))
                     break
 
-        input_tokens = 0
-        output_tokens = 0
-        for ev in events:
-            payload = ev.payload or {}
-            tokens = payload.get("tokens") or 0
-            if tokens:
-                input_tokens += int(tokens)
+        input_tokens = getattr(worker, "total_input_tokens", 0)
+        output_tokens = getattr(worker, "total_output_tokens", 0)
 
         run_status = "succeeded"
         for ev in reversed(events):
