@@ -2329,3 +2329,234 @@ def test_conditional_gate_open_runs_everything(tmp_path):
         assert result["status"] == "succeeded"
         grouped = events_by_invocation(store.events("run-gate-open"))
         assert [event.event_type for event in grouped["inv-1"]] == list(LIFECYCLE)
+
+
+# --------------------------------------------------------------------------
+# Issue #83: every() and any() evaluation, IF/ELSE execution
+# --------------------------------------------------------------------------
+
+
+def test_evaluate_condition_every_has():
+    values = {"E.items": [{"status": "done"}, {"status": "done"}]}
+    assert evaluate_condition('every(E.items, has("status"))', values) is True
+    values = {"E.items": [{"status": "done"}, {}]}
+    assert evaluate_condition('every(E.items, has("status"))', values) is False
+
+
+def test_evaluate_condition_any_eq():
+    values = {"E.items": [{"status": "pending"}, {"status": "done"}]}
+    assert evaluate_condition('any(E.items, eq("status", "done"))', values) is True
+    values = {"E.items": [{"status": "pending"}, {"status": "blocked"}]}
+    assert evaluate_condition('any(E.items, eq("status", "done"))', values) is False
+
+
+def test_evaluate_condition_every_ne():
+    values = {"E.items": [{"status": "done"}, {"status": "done"}]}
+    assert evaluate_condition('every(E.items, ne("status", "rejected"))', values) is True
+    values = {"E.items": [{"status": "done"}, {"status": "rejected"}]}
+    assert evaluate_condition('every(E.items, ne("status", "rejected"))', values) is False
+
+
+def test_evaluate_condition_any_ne():
+    values = {"E.items": [{"status": "rejected"}, {"status": "done"}]}
+    assert evaluate_condition('any(E.items, ne("status", "rejected"))', values) is True
+    values = {"E.items": [{"status": "rejected"}, {"status": "rejected"}]}
+    assert evaluate_condition('any(E.items, ne("status", "rejected"))', values) is False
+
+
+def test_evaluate_condition_every_non_list_raises():
+    values = {"V.flag": "go"}
+    with pytest.raises(ValueError, match="every.*list"):
+        evaluate_condition('every(V.flag, has("x"))', values)
+
+
+def test_done_every_passing_predicate_succeeds(tmp_path):
+    source = """\
+PROGRAM quant VERSION 1.0
+INPUT
+    G.goal = "ship"
+step.collect: DO collect_items(seed = G.goal) -> E.items
+DONE every(E.items, has("status"))
+RETURN E.items
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"collect_items": lambda seed: [{"status": "done"}, {"status": "ok"}]}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-every-pass"
+        )
+        assert result["status"] == "succeeded"
+
+
+def test_done_every_failing_predicate_fails(tmp_path):
+    source = """\
+PROGRAM quant VERSION 1.0
+INPUT
+    G.goal = "ship"
+step.collect: DO collect_items(seed = G.goal) -> E.items
+DONE every(E.items, has("status"))
+RETURN E.items
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"collect_items": lambda seed: [{"status": "done"}, {}]}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-every-fail"
+        )
+        assert result["status"] == "failed"
+        assert "DONE predicate failed" in result["error"]
+
+
+def test_done_any_passing_predicate_succeeds(tmp_path):
+    source = """\
+PROGRAM quant VERSION 1.0
+INPUT
+    G.goal = "ship"
+step.collect: DO collect_items(seed = G.goal) -> E.items
+DONE any(E.items, eq("status", "done"))
+RETURN E.items
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"collect_items": lambda seed: [{"status": "pending"}, {"status": "done"}]}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-any-pass"
+        )
+        assert result["status"] == "succeeded"
+
+
+def test_done_any_failing_predicate_fails(tmp_path):
+    source = """\
+PROGRAM quant VERSION 1.0
+INPUT
+    G.goal = "ship"
+step.collect: DO collect_items(seed = G.goal) -> E.items
+DONE any(E.items, eq("status", "done"))
+RETURN E.items
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"collect_items": lambda seed: [{"status": "pending"}, {"status": "blocked"}]}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-any-fail"
+        )
+        assert result["status"] == "failed"
+
+
+def test_if_else_true_branch_executes(tmp_path):
+    source = """\
+PROGRAM branched VERSION 1.0
+INPUT
+    V.status = "passed"
+step.test: DO set_status(status = V.status) -> V.tests
+IF V.tests.status == "passed"
+  step.final: DO verify(goal = V.status, evidence = V.tests) -> V.result
+  RETURN V.result
+ELSE
+  STOP failed(V.tests)
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "set_status": lambda status: {"status": status},
+                "verify": verify_handler,
+            }
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-if-else-true"
+        )
+        assert result["status"] == "succeeded"
+        assert "V.result" in result["outputs"]
+
+
+def test_if_else_false_branch_executes(tmp_path):
+    source = """\
+PROGRAM branched VERSION 1.0
+INPUT
+    V.status = "failed"
+step.test: DO set_status(status = V.status) -> V.tests
+IF V.tests.status == "passed"
+  step.final: DO verify(goal = V.status, evidence = V.tests) -> V.result
+  RETURN V.result
+ELSE
+  STOP failed(V.tests)
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "set_status": lambda status: {"status": status},
+                "verify": verify_handler,
+            }
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-if-else-false"
+        )
+        assert result["status"] == "failed"
+        assert result.get("outputs") == {}
+
+
+def test_if_else_block_without_else_falls_through(tmp_path):
+    source = """\
+PROGRAM branched VERSION 1.0
+INPUT
+    V.status = "skip"
+step.test: DO set_status(status = V.status) -> V.tests
+IF V.tests.status == "passed"
+  step.final: DO verify(goal = V.status) -> V.result
+RETURN V.tests
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={
+                "set_status": lambda status: {"status": status},
+                "verify": verify_handler,
+            }
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-if-no-else"
+        )
+        assert result["status"] == "succeeded"
+        assert "V.result" not in result["outputs"]
+        assert "V.tests" in result["outputs"]
+
+
+def test_every_in_if_condition_stops(tmp_path):
+    source = """\
+PROGRAM quant VERSION 1.0
+INPUT
+    G.seed = "test"
+step.collect: DO collect_items(seed = G.seed) -> E.items
+IF every(E.items, eq("status", "done")) STOP completed()
+RETURN E.items
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"collect_items": lambda seed: [{"status": "done"}, {"status": "done"}]}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-every-if"
+        )
+        assert result["status"] == "succeeded"
+
+
+def test_any_in_if_condition_stops(tmp_path):
+    source = """\
+PROGRAM quant VERSION 1.0
+INPUT
+    G.seed = "test"
+step.collect: DO collect_items(seed = G.seed) -> E.items
+IF any(E.items, eq("status", "blocked")) STOP blocked(E.items)
+RETURN E.items
+"""
+    with EventStore(tmp_path / "events.db") as store:
+        worker = DeterministicWorker(
+            handlers={"collect_items": lambda seed: [{"status": "ok"}, {"status": "blocked"}]}
+        )
+        result = SequentialCoordinator(store, worker).execute(
+            parse_program(source), run_id="run-any-if"
+        )
+        assert result["status"] == "blocked"

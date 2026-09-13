@@ -67,6 +67,7 @@ class PlanEntry:
     binds: tuple[tuple[str, tuple, tuple], ...] = ()
     finalizes: tuple[tuple[str, tuple[str, ...]], ...] = ()
     condition: str | None = None
+    else_condition: str | None = None
 
 
 # Backward-compatible alias — coordinator re-exports this as _PlanEntry.
@@ -97,6 +98,16 @@ def build_plan(program: Program) -> list[PlanEntry]:
                             condition=statement.condition,
                         )
                     )
+                if statement.else_branch is not None:
+                    for else_stmt in statement.else_branch:
+                        if isinstance(else_stmt, Invocation):
+                            entries.append(
+                                PlanEntry(
+                                    invocation=else_stmt,
+                                    condition=None,
+                                    else_condition=statement.condition,
+                                )
+                            )
             elif isinstance(statement, Call):
                 entries.append(PlanEntry(call=statement))
             elif isinstance(statement, Scatter):
@@ -155,8 +166,23 @@ def collect_anchors(program: Program) -> dict[int, list]:
             elif isinstance(statement, Conditional):
                 if isinstance(statement.statement, Invocation):
                     count += 1
+                    # Extra if-branch statements (RETURN/STOP after the
+                    # Invocation) become anchors at this position — they
+                    # fire when the condition is true.
+                    for extra in statement.if_branch_extra:
+                        anchors.setdefault(count, []).append(
+                            _IfExtraAnchor(statement, extra)
+                        )
                 else:
                     anchors.setdefault(count, []).append(statement)
+                if statement.else_branch is not None:
+                    for else_stmt in statement.else_branch:
+                        if isinstance(else_stmt, Invocation):
+                            count += 1
+                        else:
+                            anchors.setdefault(count, []).append(
+                                _ElseAnchor(statement, else_stmt)
+                            )
             elif isinstance(statement, Call):
                 count += 1
             elif isinstance(statement, (Scatter, Gather, Par)):
@@ -165,6 +191,20 @@ def collect_anchors(program: Program) -> dict[int, list]:
 
     walk(program.statements)
     return anchors
+
+
+@dataclasses.dataclass(frozen=True)
+class _ElseAnchor:
+    """An else-branch terminal (STOP/RETURN) evaluated when condition is false."""
+    conditional: Conditional
+    statement: object
+
+
+@dataclasses.dataclass(frozen=True)
+class _IfExtraAnchor:
+    """An extra if-branch terminal (RETURN/STOP) evaluated when condition is true."""
+    conditional: Conditional
+    statement: object
 
 
 def map_results_to_targets(

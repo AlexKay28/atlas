@@ -1386,16 +1386,18 @@ RETURN V.flag
 
 
 def test_if_else_block_forms_rejected():
-    for source in (
-        CANONICAL.replace("RETURN E.result", "ELSE STOP completed()"),
-        CANONICAL.replace(
-            "RETURN E.result", 'ELSE IF E.result == 1 STOP completed()'
-        ),
-    ):
-        with pytest.raises(
-            ParseError, match="unsupported control construct ELSE"
-        ):
-            parse_program(source)
+    # Issue #83: ELSE is now supported in block-form IF, but a bare ELSE
+    # without a preceding block IF is still rejected (it falls through
+    # to the invocation parser).
+    source = CANONICAL.replace("RETURN E.result", "ELSE STOP completed()")
+    with pytest.raises(ParseError):
+        parse_program(source)
+    # ELSE IF is still not supported (only IF ... ELSE).
+    source = CANONICAL.replace(
+        "RETURN E.result", 'ELSE IF E.result == 1 STOP completed()'
+    )
+    with pytest.raises(ParseError):
+        parse_program(source)
 
 
 def test_if_parentheses_rejected():
@@ -2088,3 +2090,253 @@ def test_split_top_level_unbalanced_closing_error_has_line():
     with pytest.raises(ParseError) as excinfo:
         parse_program(source)
     assert excinfo.value.line > 0
+
+
+# --------------------------------------------------------------------------
+# Issue #83: every() and any() in DONE predicates and IF conditions,
+#           ELSE in IF blocks.
+# --------------------------------------------------------------------------
+
+EVERY_ANY_DONE_PROGRAM = """\
+PROGRAM quant VERSION 1.0
+
+INPUT
+  G.goal = "ship it"
+
+step.one: DO collect(goal = G.goal) -> E.items
+DONE every(E.items, has("status"))
+RETURN E.items
+"""
+
+
+def test_done_every_has_parses():
+    program = parse_program(EVERY_ANY_DONE_PROGRAM)
+    step = program.statements[0]
+    assert step.done.op == "every"
+    assert step.done.ref == "E.items"
+    assert step.done.value == ("has", "status")
+
+
+def test_done_any_has_parses():
+    source = EVERY_ANY_DONE_PROGRAM.replace(
+        "DONE every(E.items, has(\"status\"))",
+        "DONE any(E.items, has(\"status\"))",
+    )
+    step = parse_program(source).statements[0]
+    assert step.done.op == "any"
+    assert step.done.ref == "E.items"
+    assert step.done.value == ("has", "status")
+
+
+def test_done_every_eq_parses():
+    source = EVERY_ANY_DONE_PROGRAM.replace(
+        'DONE every(E.items, has("status"))',
+        'DONE every(E.items, eq("status", "done"))',
+    )
+    step = parse_program(source).statements[0]
+    assert step.done.op == "every"
+    assert step.done.value == ("eq", "status", "done")
+
+
+def test_done_any_ne_parses():
+    source = EVERY_ANY_DONE_PROGRAM.replace(
+        'DONE every(E.items, has("status"))',
+        'DONE any(E.items, ne("status", "rejected"))',
+    )
+    step = parse_program(source).statements[0]
+    assert step.done.op == "any"
+    assert step.done.value == ("ne", "status", "rejected")
+
+
+def test_done_every_field_path_ref():
+    source = EVERY_ANY_DONE_PROGRAM.replace(
+        "DONE every(E.items, has(\"status\"))",
+        'DONE every(E.items.extra, has("flag"))',
+    )
+    step = parse_program(source).statements[0]
+    assert step.done.ref == "E.items.extra"
+    assert step.done.op == "every"
+
+
+def test_every_in_if_condition_parses():
+    source = """\
+PROGRAM ifquant VERSION 1.0
+
+INPUT
+  V.flag = "go"
+  E.items = [{"status": "done"}, {"status": "done"}]
+
+IF every(E.items, has("status")) STOP completed()
+RETURN V.flag
+"""
+    program = parse_program(source)
+    cond = _conditionals(program)[0]
+    assert "every(E.items, has(\"status\"))" in cond.condition
+
+
+def test_any_in_if_condition_parses():
+    source = """\
+PROGRAM ifquant VERSION 1.0
+
+INPUT
+  V.flag = "go"
+  E.items = [{"status": "pending"}, {"status": "done"}]
+
+IF any(E.items, eq("status", "done")) STOP completed()
+RETURN V.flag
+"""
+    program = parse_program(source)
+    cond = _conditionals(program)[0]
+    assert "any(E.items, eq(\"status\", \"done\"))" in cond.condition
+
+
+def test_every_in_if_condition_ast():
+    ast = parse_condition('every(E.items, has("status"))')
+    assert ast == ("every", "E.items", ("has", "status"))
+
+
+def test_any_in_if_condition_ast():
+    ast = parse_condition('any(E.items, eq("status", "done"))')
+    assert ast == ("any", "E.items", ("eq", "status", "done"))
+
+
+def test_every_any_condition_refs_validated():
+    base = """\
+PROGRAM ordered VERSION 0.1
+
+INPUT
+  V.flag = "go"
+
+{lines}
+
+RETURN V.flag
+"""
+    program = parse_program(
+        base.format(lines='IF every(E.items, has("status")) STOP completed()')
+    )
+    with pytest.raises(ParseError, match="E.items.*used before definition"):
+        validate_program(program, known_commands=set())
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        'every(E.items)',
+        'every(E.items, foo("x"))',
+        'every("notref", has("x"))',
+        'any(E.items, has(7))',
+        'any(E.items, eq("x"))',
+        'every(E.items, has("x", "y"))',
+    ],
+)
+def test_invalid_every_any_done_rejected(expr):
+    source = EVERY_ANY_DONE_PROGRAM.replace(
+        'DONE every(E.items, has("status"))',
+        f'DONE {expr}',
+    )
+    with pytest.raises(ParseError):
+        parse_program(source)
+
+
+def test_if_else_block_parses():
+    source = """\
+PROGRAM branched VERSION 1.0
+
+INPUT
+  V.status = "passed"
+
+step.test: DO define(goal = V.status) -> V.tests
+IF V.tests.status == "passed"
+  step.final: DO verify(goal = V.status) -> V.result
+  RETURN V.result
+ELSE
+  STOP failed(V.tests)
+"""
+    program = parse_program(source)
+    cond = program.statements[1]
+    assert isinstance(cond, Conditional)
+    assert cond.else_branch is not None
+    assert isinstance(cond.statement, Invocation)
+    assert cond.statement.step_id == "step.final"
+    assert len(cond.else_branch) == 1
+    assert isinstance(cond.else_branch[0], Stop)
+    assert cond.else_branch[0].kind == "failed"
+    assert cond.else_branch[0].ref == "V.tests"
+
+
+def test_if_else_block_without_else():
+    source = """\
+PROGRAM branched VERSION 1.0
+
+INPUT
+  V.status = "passed"
+
+step.test: DO define(goal = V.status) -> V.tests
+IF V.tests.status == "passed"
+  step.final: DO verify(goal = V.status) -> V.result
+RETURN V.result
+"""
+    program = parse_program(source)
+    cond = program.statements[1]
+    assert isinstance(cond, Conditional)
+    assert cond.else_branch is None
+    assert isinstance(cond.statement, Invocation)
+
+
+def test_if_else_block_seal_deterministic():
+    source = """\
+PROGRAM branched VERSION 1.0
+
+INPUT
+  V.status = "passed"
+
+step.test: DO define(goal = V.status) -> V.tests
+IF V.tests.status == "passed"
+  step.final: DO verify(goal = V.status) -> V.result
+  RETURN V.result
+ELSE
+  STOP failed(V.tests)
+"""
+    base = seal_digest(parse_program(source))
+    assert seal_digest(parse_program(source)) == base
+
+
+def test_if_else_block_seal_sensitive_to_else():
+    source_with_else = """\
+PROGRAM branched VERSION 1.0
+
+INPUT
+  V.status = "passed"
+
+step.test: DO define(goal = V.status) -> V.tests
+IF V.tests.status == "passed"
+  step.final: DO verify(goal = V.status) -> V.result
+  RETURN V.result
+ELSE
+  STOP failed(V.tests)
+"""
+    source_without_else = source_with_else.replace(
+        "ELSE\n  STOP failed(V.tests)\n", ""
+    )
+    assert (
+        seal_digest(parse_program(source_with_else))
+        != seal_digest(parse_program(source_without_else))
+    )
+
+
+def test_single_line_if_still_works():
+    source = """\
+PROGRAM inline VERSION 1.0
+
+INPUT
+  V.flag = "go"
+
+IF V.flag == "go" STOP completed()
+RETURN V.flag
+"""
+    program = parse_program(source)
+    cond = program.statements[0]
+    assert isinstance(cond, Conditional)
+    assert cond.else_branch is None
+    assert isinstance(cond.statement, Stop)
+    assert cond.statement.kind == "completed"

@@ -141,6 +141,13 @@ The `DONE` predicate supports the same comparison operators as `IF` conditions:
 - `<ref> IN [<json-literal>, ...]` — set membership
 - `matched(<ref>, "<regex>")` — deterministic regex predicate
 - `count(<ref>) <op> <int>` — count comparison (`op` in `== != < <= > >=`)
+- `every(<ref>, <pred>)` — true if every element of the collection ref satisfies the predicate
+- `any(<ref>, <pred>)` — true if at least one element satisfies the predicate
+
+Supported predicates for `every()` and `any()`:
+- `has("field")` — element is a mapping containing the field
+- `eq("field", "value")` — element's field equals the JSON value
+- `ne("field", "value")` — element's field does not equal the JSON value
 
 DONE may attach after an `IF ... step.x: DO ...` conditional (attaching to the
 embedded invocation) or after a `SCATTER` body step. Indexed element access
