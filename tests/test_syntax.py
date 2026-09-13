@@ -2340,3 +2340,73 @@ RETURN V.flag
     assert cond.else_branch is None
     assert isinstance(cond.statement, Stop)
     assert cond.statement.kind == "completed"
+
+
+# -- PR.* probabilistic reasoning refs (issue #67) -------------------------
+
+
+PR_PROGRAM = """\
+PROGRAM bayesian VERSION 1.0
+
+INPUT
+  G.goal = "decide whether to deploy"
+  PR.prior = 0.6
+  E.load_test = "passed at 80% capacity"
+
+step.estimate: DO estimate(evidence = E.load_test, method = "bayesian") -> PR.posterior
+RETURN PR.posterior
+"""
+
+
+def test_pr_refs_parse_as_typed_references():
+    program = parse_program(PR_PROGRAM)
+    assert program.declarations[1].ref == "PR.prior"
+    assert program.declarations[1].value == 0.6
+    step = program.statements[0]
+    assert step.targets == ("PR.posterior",)
+    ret = program.statements[-1]
+    assert ret.refs == ("PR.posterior",)
+
+
+def test_pr_ref_in_input_validates():
+    program = parse_program(PR_PROGRAM)
+    assert validate_program(program, known_commands={"estimate"}) is True
+
+
+def test_pr_is_distinct_from_p_and_pf():
+    source = """\
+PROGRAM distinct VERSION 1.0
+
+INPUT
+  PR.prior = 0.3
+  P.plan = "step 1"
+  PF.soft = "prefer fast"
+
+step.use: DO define(value = PR.prior) -> E.check
+step.plan: DO define(value = P.plan) -> E.plan
+step.pref: DO define(value = PF.soft) -> E.pref
+RETURN E.check, E.plan, E.pref
+"""
+    program = parse_program(source)
+    assert program.declarations[0].ref == "PR.prior"
+    assert program.declarations[1].ref == "P.plan"
+    assert program.declarations[2].ref == "PF.soft"
+    assert validate_program(program, known_commands={"define"}) is True
+
+
+def test_pr_dotted_refs_parse():
+    source = """\
+PROGRAM dotted VERSION 1.0
+
+INPUT
+  G.goal = "test"
+
+step.one: DO define(value = G.goal) -> PR.stability.posterior
+DONE PR.stability.posterior == 0.9
+RETURN PR.stability.posterior
+"""
+    program = parse_program(source)
+    step = program.statements[0]
+    assert step.targets == ("PR.stability.posterior",)
+    assert step.done.ref == "PR.stability.posterior"
+    assert step.done.value == 0.9

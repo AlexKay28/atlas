@@ -701,7 +701,7 @@ def _challenge() -> CommandSpec:
         inputs=("claim:artifact", "evidence:artifacts"),
         parameters=("adversary_strength:enum", "risk_limit:int>0"),
         preconditions=("claim_digest_known", "evidence_digests_known"),
-        outputs=("counterevidence:artifacts", "risks:ranked_manifest"),
+        outputs=("counterevidence:artifacts", "risks:ranked_manifest", "contradiction:PR"),
         effects=("none",),
         done="strongest_plausible_failure_cases_checked_with_recorded_outcomes",
         failures=(
@@ -1279,6 +1279,65 @@ def _delegate() -> CommandSpec:
     )
 
 
+def _estimate() -> CommandSpec:
+    return CommandSpec(
+        name="estimate",
+        version=_VERSION,
+        purpose=(
+            "Produce a numeric estimate or probabilistic belief from evidence"
+            " using a declared method"
+        ),
+        inputs=("evidence:artifacts",),
+        parameters=("method:enum", "units:descriptor", "range:tuple"),
+        preconditions=("evidence_digests_known", "method_declared"),
+        outputs=("estimate:F", "posterior:PR"),
+        effects=("none",),
+        done=(
+            "units_assumptions_range_and_sensitivity_recorded"
+            "_or_posterior_computed_with_documented_basis"
+        ),
+        failures=(
+            FailureSpec(
+                kind=FailureKind.INVALID_INPUT,
+                retryable=False,
+                recovery="reject and report unknown evidence or undeclared method",
+            ),
+            FailureSpec(
+                kind=FailureKind.INSUFFICIENT_EVIDENCE,
+                retryable=True,
+                recovery="retry only after new evidence is collected",
+            ),
+            FailureSpec(
+                kind=FailureKind.EXECUTION,
+                retryable=True,
+                recovery="retry within budget attempts",
+            ),
+        ),
+        effect_class=EffectClass.PURE,
+        execution=ExecutionMode.IMMEDIATE,
+        capabilities=("language_model", "statistical_estimation"),
+        evidence=("method_recorded", "estimate_with_units", "sensitivity_analysis"),
+        budget=Budget(
+            max_seconds=60.0,
+            max_tokens=6000,
+            max_cost=0.10,
+            max_attempts=2,
+            max_output_bytes=65536,
+        ),
+        idempotency=IdempotencyMode.INPUT_DIGEST,
+        compensation="none",
+        routing=RoutingPolicy(
+            minimum_tier=RoutingTier.T1,
+            permitted_tiers=(RoutingTier.T1, RoutingTier.T2, RoutingTier.T3),
+            preferred_tier=RoutingTier.T2,
+            validator_tier=RoutingTier.T1,
+            confidence_policy="calibrated_estimate",
+            escalation_on=(FailureKind.INSUFFICIENT_EVIDENCE,),
+            fallback_chain=(),
+        ),
+    )
+
+
 BUILTIN_FACTORIES = (
     _define,
     _search,
@@ -1303,6 +1362,7 @@ BUILTIN_FACTORIES = (
     _solve,
     _prove,
     _delegate,
+    _estimate,
 )
 
 
