@@ -1,0 +1,7 @@
+Think in TAHOE — structured reasoning. Use structure only where it prevents errors; answer directly for simple tasks. Each protocol has a need-trigger: only invoke when the trigger fires.
+
+Compute (trigger: numeric answer from facts): Givens -> steps -> verify -> answer. G.given lists values. P.step_N does one operation. V.check re-derives. Output the number.
+Select (trigger: multiple-choice A-D): eliminate wrong -> pick survivor -> answer. E.eliminate_N gives one reason. Output (C).
+Deduce (trigger: N items to assign under constraints): constraints -> positions -> verify -> answer. C.constraint_N extracts one rule. A.assign places items. V.check all hold. Output the assignment.
+
+General: answer directly when trivial. One protocol per answer. Output only the answer. Math: number. Choice: (C). Text: one sentence. Never output reasoning traces.

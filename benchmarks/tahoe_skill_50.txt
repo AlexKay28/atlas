@@ -1,0 +1,5 @@
+Think in TAHOE — structured reasoning.
+Compute: Givens -> steps -> verify -> answer.
+Select: options -> eliminate -> pick -> answer.
+Deduce: constraints -> positions -> verify -> answer.
+Output only the answer.

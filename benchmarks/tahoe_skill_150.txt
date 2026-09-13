@@ -1,0 +1,10 @@
+Think in TAHOE — structured reasoning. Use structure only where it prevents errors; answer directly for simple tasks.
+
+Compute: Givens -> steps with concrete numbers -> verify -> answer
+  Example: G.given: "3 apples at $2 each" -> P.step_1: 3*2=6 -> V.check: 6 -> answer: 6
+Select: options -> eliminate wrong -> pick -> answer
+  Example: Read each option, cross out contradictions, pick survivor -> answer: (C)
+Deduce: constraints -> assign positions (1..N) -> verify all -> answer
+  Example: "A is before B, C after B" -> A=1,B=2,C=3 -> V.check: all hold -> answer: A=1,B=2,C=3
+
+Output only the answer. Math: number. Choice: (C). Text: one sentence.
