@@ -203,6 +203,7 @@ class VMExecutor:
         max_tokens: int = 512,
         compile_max_tokens: int = 1500,
         step_effort: str = "",
+        compile_effort: str = "",
     ):
         """
         call_model(system, user, max_tokens) -> (text, input_tokens, output_tokens).
@@ -217,14 +218,23 @@ class VMExecutor:
         self._max_tokens = max_tokens
         self._compile_max_tokens = compile_max_tokens
         self._step_effort = step_effort
+        self._compile_effort = compile_effort
 
     # -- token/call bookkeeping ------------------------------------------------
 
     def _invoke(self, result: VMResult, system: str, user: str, max_tokens: int | None = None,
                 phase: str = "call") -> str:
         budget = max_tokens or self._max_tokens
+        phase_effort = ""
+        if phase.startswith("step"):
+            phase_effort = self._step_effort
+        elif phase.startswith("compile"):
+            phase_effort = self._compile_effort
         try:
-            text, in_tok, out_tok = self._call(system, user, budget, effort=self._step_effort) if phase.startswith("step") and self._step_effort else self._call(system, user, budget)
+            if phase_effort:
+                text, in_tok, out_tok = self._call(system, user, budget, effort=phase_effort)
+            else:
+                text, in_tok, out_tok = self._call(system, user, budget)
         except TypeError:
             text, in_tok, out_tok = self._call(system, user, budget)
         result.llm_input_tokens += in_tok
@@ -442,7 +452,8 @@ class VMExecutor:
                     f"Your previous output was invalid: {text[:200]!r}\n"
                     f"Respond with exactly one line: {invocation.targets[0]} = <value>"
                 )
-                text = self._invoke(result, INTERPRETER_SYSTEM, user_retry)
+                text = self._invoke(result, INTERPRETER_SYSTEM, user_retry,
+                                    phase=f"step:{invocation.step_id}:retry")
                 value = self._parse_step_output(text, invocation.targets)
             if value is None:
                 record.parsed_ok = False

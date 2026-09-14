@@ -57,7 +57,8 @@ def run_trial(task: dict, arm: str, skill_prompt: str) -> dict:
     t0 = time.time()
     try:
         if arm == "vm":
-            executor = VMExecutor(vm_call_model)
+            executor = VMExecutor(vm_call_model, step_effort=os.environ.get("VM_STEP_EFFORT", "low"),
+                       compile_effort=os.environ.get("VM_COMPILE_EFFORT", "low"))
             vm = executor.run(task["task_id"], task["description"])
             model_answer = vm.final_answer
             trial = {
