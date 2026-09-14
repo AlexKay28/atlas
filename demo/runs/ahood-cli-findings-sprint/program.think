@@ -1,0 +1,73 @@
+# TAHOE resolution plan for the 13 review findings filed as ahood-cli#132-#144,
+# raised by run ahood-cli-v088-review (seal fbd37c66...a061a4).
+# Sealed BEFORE any source edit. Verify with:
+#   PYTHONPATH=src python3 -m tahoe seal demo/runs/ahood-cli-findings-sprint/program.think
+#
+# Waves are partitioned by FILE OWNERSHIP, not by severity alone: two fixes that
+# touch the same file cannot run as sibling PAR branches without clobbering each
+# other, so lockfile.ts (#140,#141,#144), snap.ts (#134,#135,#136,#137,#138) and
+# remove.ts (#142,#143) are each serialised into their own lane and spread across
+# waves. Within that constraint the three HIGH findings go first.
+
+PROGRAM ahood_cli_findings_sprint VERSION 1.0
+
+INPUT
+    G.goal = "Resolve the 13 review findings ahood-cli#132 through #144 against 87d7d21, each as an isolated worktree branch with a PR, preserving every behaviour the existing 581 tests pin"
+    C.scope = "/home/minnesota/ClaudeSpace/ahood-cli: src/lockfile.ts, src/commands/add.ts, src/commands/read.ts, src/commands/remove.ts, src/commands/snap.ts, src/commands/update.ts, src/flags.ts, tests/"
+    C.done = "every finding is either fixed with a regression test that fails against the pre-fix source, or closed with a written reason it should not be fixed; the suite is green and order-independent after each wave"
+    C.waves = "w1 HIGH and file-disjoint 140+132+133; w2 141+135+142+139; w3 144+134+143; w4 136; w5 137; w6 138 -- lanes lockfile/snap/remove are serialised because sibling branches must not share a file"
+    C.risk = "five of the 13 exist because an earlier fix was applied to one path and not its sibling, so each fix must name its sibling path and state whether that path needs the same change"
+    C.regression = "no existing test may be edited to accommodate a fix; a test needing modification means a behaviour change that was not asked for"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.locate: DO search(query = G.plan, scope = C.scope) -> E.sites
+step.read: DO fetch(resource_refs = E.sites) -> ART.sources
+step.analyze: DO extract(artifact = ART.sources, schema = "finding_to_callsite") -> E.findings
+step.lanes: DO decompose(goal = G.plan, protocol = "lane_partition_by_file") -> G.lanes
+step.siblings: DO hypothesize(question = C.risk, evidence = E.findings) -> H.siblings
+step.challenge_siblings: DO challenge(claim = H.siblings, evidence = ART.sources) -> V.siblings
+
+PAR MAX 3
+    step.w1_lock: DO edit(path = "src/lockfile.ts", content = "ahood-cli#140: check the deadline on every retry path so a stale lock whose rmSync fails cannot spin; distinguish a failed reclaim from a lost race") -> ART.p140
+    step.w1_add: DO edit(path = "src/commands/add.ts", content = "ahood-cli#132: roll back the .mcp.json merge for every lockfile failure, not only LockfileChecksumConflictError, and guard the rollback so its own failure cannot mask the original error") -> ART.p132
+    step.w1_read: DO edit(path = "src/commands/read.ts", content = "ahood-cli#133: sanitize content when process.stdout.isTTY, leaving the piped path byte-exact so redirection still round-trips") -> ART.p133
+BARRIER -> ART.p140, ART.p132, ART.p133
+step.w1_test: DO test(path = "tests/") -> V.t1
+DONE matched(V.t1, "passed")
+
+PAR MAX 4
+    step.w2_lock: DO edit(path = "src/lockfile.ts", content = "ahood-cli#141: make stale-lock reclaim atomic via rename-then-claim and verify ownership before the release in finally") -> ART.p141
+    step.w2_snap: DO edit(path = "src/commands/snap.ts", content = "ahood-cli#135: reject unrecognized flags and stray positionals in listSnaps so a typoed filter cannot return the unfiltered set") -> ART.p135
+    step.w2_remove: DO edit(path = "src/commands/remove.ts", content = "ahood-cli#142: delete the .mcp.json entry before clearing the lockfile pin, and use force on the agent unlink") -> ART.p142
+    step.w2_update: DO edit(path = "src/commands/update.ts", content = "ahood-cli#139: check whether the .mcp.json entry is present before short-circuiting an up-to-date mcp pin, so the self-heal path stays reachable") -> ART.p139
+BARRIER -> ART.p141, ART.p135, ART.p142, ART.p139
+step.w2_test: DO test(path = "tests/") -> V.t2
+DONE matched(V.t2, "passed")
+
+PAR MAX 3
+    step.w3_lock: DO edit(path = "src/lockfile.ts", content = "ahood-cli#144: decide and implement symlink handling for the atomic write destination, using lstat explicitly rather than incidentally") -> ART.p144
+    step.w3_snap: DO edit(path = "src/commands/snap.ts", content = "ahood-cli#134: reject a leading double-dash token that is not --json or --tags in createSnap, and stop relocating a tag word into the note body") -> ART.p134
+    step.w3_remove: DO edit(path = "src/commands/remove.ts", content = "ahood-cli#143: warn about an unreadable .mcp.json for a legacy mcp pin with no fingerprint, using the absent on-disk footprint as the evidence") -> ART.p143
+BARRIER -> ART.p144, ART.p134, ART.p143
+step.w3_test: DO test(path = "tests/") -> V.t3
+DONE matched(V.t3, "passed")
+
+step.w4_flags: DO edit(path = "src/flags.ts", content = "ahood-cli#136: stop a repeated value-flag from deleting the following token, and settle on error-or-last-wins for a duplicate") -> ART.p136
+step.w4_test: DO test(path = "tests/") -> V.t4
+DONE matched(V.t4, "passed")
+
+step.w5_snap: DO edit(path = "src/commands/snap.ts", content = "ahood-cli#137: stop space-separated tags collapsing into one multi-word tag, and make the echoed confirmation distinguish one tag from several") -> ART.p137
+step.w5_test: DO test(path = "tests/") -> V.t5
+DONE matched(V.t5, "passed")
+
+step.w6_snap: DO edit(path = "src/commands/snap.ts", content = "ahood-cli#138: give snap tags a non-destructive bare-id form and a read path, so asking what the tags are cannot clear them") -> ART.p138
+step.w6_test: DO test(path = "tests/") -> V.t6
+DONE matched(V.t6, "passed")
+
+step.regress: DO check(artifact = V.t6, predicate = C.regression) -> V.regression
+step.review: DO review(artifact_refs = [ART.p140, ART.p132, ART.p133, ART.p141, ART.p135], focus = C.done) -> V.review
+step.verify: DO verify(goal = G.goal, evidence = [V.review, V.regression, V.siblings, V.t6]) -> V.result
+DONE V.result == "resolved"
+step.report: DO report(committed_refs = [V.result, V.review], format = "markdown") -> ART.report
+
+RETURN V.result, V.review, ART.report

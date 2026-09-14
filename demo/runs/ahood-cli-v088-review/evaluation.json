@@ -1,0 +1,45 @@
+{
+  "task": "Adversarially review the ahood-cli changes released as v0.8.1 through v0.8.8 and report only findings that survive re-derivation from the current source",
+  "run_id": "ahood-cli-v088-review",
+  "seal": "fbd37c6685180dd68133d82cdecbc0978cdca4dcf7088a89f0a139f1aca061a4",
+  "terminal_status": "resolved",
+  "target": {
+    "repo": "AlexKay28/ahood-cli",
+    "commit": "87d7d21",
+    "range": "v0.8.0..HEAD",
+    "commits": 32,
+    "source_files_changed": 10,
+    "source_insertions": 846,
+    "suite_at_head": "581 passed / 36 files"
+  },
+  "steps_planned": 12,
+  "steps_executed": 12,
+  "acceptance": {
+    "every reported finding cites a file and line in current source": "met — all 8 survivors carry file:line at 87d7d21",
+    "every reported finding states a concrete failure scenario": "met — 6 of 8 were reproduced on the wire or on disk, 2 by direct source trace",
+    "candidates that did not survive challenge are reported as discarded rather than dropped silently": "met — 4 demotions recorded in solution.md with the evidence that demoted them",
+    "findings re-derived from source rather than recalled": "met — orchestrator independently re-verified every survivor; reviewer write-ups were not accepted as evidence",
+    "DONE matched(V.tests, \"passed\")": "met — npm test 581 passed",
+    "DONE V.result == \"resolved\"": "met"
+  },
+  "findings": {
+    "candidates_raised": 30,
+    "survived_challenge": 8,
+    "demoted_or_discarded": 4,
+    "not_individually_challenged": 18,
+    "by_severity": { "high": 3, "medium_high": 1, "medium": 4 },
+    "reproduced_empirically": 6
+  },
+  "unresolved": [
+    "Dimension D2 (concurrency/filesystem/permissions in lockfile.ts and remove.ts) did not return before the run closed. That surface is therefore UNREVIEWED by this run — notably sweepStaleTempFiles' name-matching and pid check, the chmod-after-rename window, and remove.ts's branch logic. Any claim that this run cleared lockfile.ts would be false.",
+    "18 of 30 raised candidates were not individually re-derived by the orchestrator; they are neither confirmed nor refuted here. Only the 8 survivors carry this run's evidentiary weight.",
+    "D3's coverage map asserts ~15 unsanitized registry-JSON display sites (view.ts, search.ts, list.ts, versions.ts, group.ts, login.ts, publish.ts, edit.ts). Spot-checked read.ts only; the rest are reported as the reviewer found them, not independently verified.",
+    "No finding was fixed. This run is review-only; all 8 survivors remain open in the code at 87d7d21."
+  ],
+  "protocol_deviations": [
+    "step.review completed for 3 of 4 planned dimensions. The program did not gate step.challenge on dimension completeness, so the run proceeded on partial input — a plan defect, not an execution shortcut. A future revision should express the dimensions as SCATTER/GATHER so an unreturned branch blocks the barrier.",
+    "WORKLOG.md contains two step.challenge headers: the original 'not started' entry written before dispatch, and the completed entry appended after. Left as-is — demo/runs is evidence and the chronology is accurate rather than tidied.",
+    "The run directory lives in the tahoe repo (demo/runs/) per protocol, while the reviewed code lives in ahood-cli. No cross-repo linkage is recorded beyond the commit sha in this file."
+  ],
+  "artifacts": ["program.think", "seal.txt", "WORKLOG.md", "solution.md", "evaluation.json"]
+}

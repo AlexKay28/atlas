@@ -1,0 +1,32 @@
+# TAHOE review plan for the ahood-cli changes released as v0.8.1..v0.8.8.
+# Sealed BEFORE any finding is recorded, so the plan cannot be retrofitted to
+# whatever the review happens to turn up. Verify with:
+#   PYTHONPATH=src python3 -m tahoe seal demo/runs/ahood-cli-v088-review/program.think
+# The reviewing session also authored the code under review, which is exactly
+# why step.challenge is a separate gate rather than a rhetorical flourish.
+
+PROGRAM ahood_cli_v088_review VERSION 1.0
+
+INPUT
+    G.goal = "Adversarially review the ahood-cli changes released as v0.8.1 through v0.8.8 and report only findings that survive re-derivation from the current source"
+    C.scope = "/home/minnesota/ClaudeSpace/ahood-cli at 87d7d21, diff v0.8.0..HEAD, issues 114 115 116 117 119 120 121 122 123 124 125 126 127 128 129"
+    C.done = "every reported finding cites a file and line in current source and states a concrete failure scenario, and every candidate that did not survive challenge is reported as discarded rather than dropped silently"
+    C.risk = "this session authored the changes under review; confirmation bias is the primary threat, so findings must be re-derived from source rather than recalled from the session"
+    C.evidence = "the suite is 581 tests at HEAD and the working tree is clean; any finding implying a test gap must name the specific uncovered path"
+
+step.frame: DO define(request = G.goal) -> G.plan
+step.surface: DO search(query = "files and hunks changed since v0.8.0", scope = C.scope) -> E.surface
+step.read: DO fetch(resource_refs = E.surface) -> ART.sources
+step.inventory: DO extract(artifact = ART.sources, schema = "change_inventory") -> E.inventory
+step.dimensions: DO decompose(goal = G.plan, protocol = "review_dimensions") -> G.dimensions
+step.review: DO review(artifact_refs = [ART.sources, E.inventory], focus = G.dimensions) -> ART.candidates
+step.challenge: DO challenge(claim = ART.candidates, evidence = [ART.sources, C.risk]) -> E.survivors
+step.test: DO test(path = "tests/") -> V.tests
+DONE matched(V.tests, "passed")
+step.rank: DO rank(options = E.survivors, criteria = "severity") -> E.ranked
+step.check: DO check(artifact = E.ranked, predicate = C.done) -> V.verdict
+step.verify: DO verify(goal = G.goal, evidence = [V.verdict, V.tests, E.ranked]) -> V.result
+DONE V.result == "resolved"
+step.report: DO report(committed_refs = [E.ranked, V.result], format = "markdown") -> ART.report
+
+RETURN V.result, E.ranked, ART.report
