@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **#94** — `protocol.triz` (`protocols/triz.think`): contradiction-driven ideation protocol — challenge before any hypothesize (event-log-checkable), discipline + remote-field solution spectrum, pattern/compromise/antipattern classification, KB.triz persistence under the caller's key; demo run `demo/runs/sprint3-94-triz-ideation/` and `tests/test_triz_protocol.py`.
+
 ### Changed
 
 - Renamed the project tikhon → ATLAS (Agent Task Language & Audit System); package `atlas`, CLI `atlas`.
