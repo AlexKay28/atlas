@@ -96,6 +96,22 @@ archive/           Historical files (old reports, build artifacts)
 **TAHOE saves 49% (GLM) / 32% (gpt-oss) reasoning tokens** while improving quality
 +1.9% on GLM and matching on gpt-oss. HM: 1.247 vs 0.945 (GLM), 1.107 vs 0.942 (gpt-oss).
 
+### The compound language: TAHOE × TRIZ, implicit (6,000 trials)
+
+TRIZ operators (ideal-first, obstacle-naming, minimal derivation) as silent
+thinking discipline, answer-only output:
+
+| Arm | Quality | Avg out | HM |
+|---|---|---|---|
+| classic | 93.8% | 308 | 0.968 |
+| tahoe-93 | 95.0% | 178 | 1.227 |
+| **tahoe-triz-implicit** | **96.2%** | **132** | **1.362** |
+
+GSM8K ladder: 71.0% → 80.0% → **94.5%** (+23.5pp, 78% fewer tokens).
+Law: *a reasoning language must shape thought, never constrain output* —
+explicit notation failed twice (VM, visible TRIZ). See
+`insights/compact-language.md` and `benchmarks/tahoe_triz_implicit.txt`.
+
 ## Quick start
 
 ```bash
