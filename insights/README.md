@@ -19,6 +19,7 @@
 | [grader-lessons.md](grader-lessons.md) | The BBH "(X)" format bug — eval integrity lessons |
 | [gap-analysis.md](gap-analysis.md) | Capability matrix, precise novelty statement, risk register |
 | [vm-design.md](vm-design.md) | TAHOE-VM architecture and open design decisions |
+| [2026-landscape.md](2026-landscape.md) | Who cites our anchors in 2026: FoldAct, U-Fold, Earl — niche still open |
 
 ## The one-paragraph summary
 
