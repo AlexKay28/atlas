@@ -1,0 +1,28 @@
+# demo/runs/sprint3-94-triz-ideation/program.think — issue #94 evidence run.
+#
+# Exercises protocol.triz end-to-end on a real harness antipattern
+# (tool thrash — triz ch. 14.4 boom #5) and proves the KB.triz
+# round-trip: the classified spectrum is remembered under the caller's
+# kb_key and recalled by prefix in the next breath.
+#
+# Executed with the deterministic coordinator (see WORKLOG.md); sealed
+# before execution per the sealed protocol.
+
+PROGRAM triz_ideation_demo VERSION 1.0
+
+INPUT
+    G.task = "an agent retries a failing tool call with identical arguments forever: thrash loops burn budget and never recover"
+    G.done = "every candidate classified as pattern, compromise or antipattern; zero unclassified"
+    C.discipline = "AI agent harness engineering"
+    C.remote = "chemical process control"
+    C.ifr_question = "state the IFR: the thrash-free loop recovers by itself; name what exactly prevents it"
+    C.moves_question = "propose concrete moves that remove the tool-thrash contradiction; use the harness-engineering hits and the process-control transfers; name the principle behind each move"
+    C.criteria = "pattern removes the contradiction; compromise softens it; antipattern widens it; prefer higher ideality"
+    C.kb_key = "triz/ai-harness"
+
+CALL protocol.triz(task = G.task, done = G.done, discipline = C.discipline, remote = C.remote, ifr_question = C.ifr_question, moves_question = C.moves_question, criteria = C.criteria, kb_key = C.kb_key) -> V.contradiction, E.spectrum, V.matrix, E.ordering, K.spectrum, ART.report
+step.recall: DO recall(query = "triz/") -> OUT.prior
+step.check: DO check(artifact = ART.report, predicate = "every candidate classified as pattern, compromise or antipattern") -> V.verdict
+DONE V.verdict == "pass"
+
+RETURN V.verdict, V.contradiction, E.spectrum, V.matrix, ART.report

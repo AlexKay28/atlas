@@ -1,0 +1,41 @@
+{
+  "task": "GitHub issue #94: TRIZ-guided ideation protocol — contradiction-driven brainstorm with pattern/antipattern mining of the solution spectrum; protocol.triz composes registered commands only, persists the classified spectrum under KB.triz, and makes the formulate-before-generating behavior contract checkable from the event log",
+  "run_id": "sprint3-94-triz-ideation",
+  "seal": "61d89ca5b2c8968817ac65fa97fdc237826cbbd2a300741be9ee290f2eae0d80",
+  "terminal_status": "succeeded",
+  "steps_planned": 15,
+  "steps_executed": 15,
+  "acceptance": [
+    {
+      "criterion": "protocol.triz runs end-to-end on a demo problem, sealed, full suite green",
+      "passed": true,
+      "evidence": "deterministic-coordinator execution of the sealed caller reached terminal succeeded (child run sprint3-94-triz-ideation:inv-1); seal matches via tahoe seal --check; tests/test_triz_protocol.py::test_protocol_triz_executes_end_to_end; full suite 1711 passed / 9 skipped (1705 baseline + 6 new)"
+    },
+    {
+      "criterion": "every candidate in report carries discipline, TC, PC, class, principle refs; zero unclassified",
+      "passed": true,
+      "evidence": "V.matrix holds 7 candidates, each with class pattern|compromise|antipattern (5 patterns 9/23/16/11/13, 1 compromise, 1 antipattern); ART.report renders the classified map; zero unclassified entries"
+    },
+    {
+      "criterion": "event-log order enforced: no hypothesize before the first challenge",
+      "passed": true,
+      "evidence": "tests/test_triz_protocol.py::test_no_hypothesize_before_the_contradiction asserts first step.contra event precedes step.ideal and step.moves in the child run's ordered event log"
+    },
+    {
+      "criterion": "KB.triz persists across runs; recall on a repeat problem surfaces prior patterns",
+      "passed": true,
+      "evidence": "step.keep stored the classified spectrum under triz/ai-harness (K.spectrum); parent step.recall with query prefix triz/ returned the stored entry (OUT.prior); tests/test_triz_protocol.py::test_kb_triz_round_trip_under_caller_key"
+    },
+    {
+      "criterion": "all historical seals still verify byte-identically after implementation",
+      "passed": true,
+      "evidence": "seal-sweep regression (tests/test_seal_v2.py looping demo/runs/*/seal.txt, incl. the new one) green in the full suite; protocols/ change requires caller re-seal, and the caller was sealed fresh"
+    }
+  ],
+  "unresolved": [],
+  "protocol_deviations": [
+    "Executed with the deterministic coordinator and canned handlers: the run evidences the protocol's structure, ordering and data flow reproducibly; an LLM-backed execution of the same sealed program is future work",
+    "v1 uses two plain search steps instead of the issue sketch's SCATTER/GATHER — same two branches (discipline + remote), fewer parser constraints; SCATTER sugar can come later without changing the contract",
+    "The demo run program is the capability exercise (a CALL protocol.triz caller), not a copy of the issue's implementation-plan program: issue #94's acceptance criteria demand evidence that the protocol itself executes; the sealed implementation plan lives in the issue thread"
+  ]
+}
