@@ -1,0 +1,518 @@
+[
+  {
+    "arm": "tahoe",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "$2,180",
+    "grader_detail": "expected=2280, got=2180",
+    "input_tokens": 154,
+    "output_tokens": 110,
+    "passed": false,
+    "quality_score": 0.0,
+    "task_id": "gsm8k-1309",
+    "total_tokens": 264,
+    "trial": 0,
+    "wall_seconds": 1.3008899511769414
+  },
+  {
+    "arm": "tahoe",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "**1**\n\nE.givens: Kalinda = 4 pieces/min; mom = 4 \u00f7 2 = 2 pieces/min \u2192 combined = 6 pieces/min.\nSteps: 360 \u00f7 6 = 60 minutes = 1 hour.\nVerify: 6 pieces/min \u00d7 60 min = 360 pieces \u2713",
+    "grader_detail": "expected=1, got=360",
+    "input_tokens": 154,
+    "output_tokens": 117,
+    "passed": false,
+    "quality_score": 0.0,
+    "task_id": "gsm8k-0228",
+    "total_tokens": 271,
+    "trial": 0,
+    "wall_seconds": 1.3383121863007545
+  },
+  {
+    "arm": "classic",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "**Step 1: Find each person's amount**\n\n- **Alexandra:** $430\n- **Kim:** $430 + $320 = $750\n- **Sarah:** $300\n- **Maryam:** $300 + $400 = $700\n\n**Step 2: Add everyone's total**\n\n$430 + $750 + $300 + $700 = **$2,180**\n\nTogether, they raised **$2,180**.",
+    "grader_detail": "expected=2280, got=180",
+    "input_tokens": 65,
+    "output_tokens": 158,
+    "passed": false,
+    "quality_score": 0.0,
+    "task_id": "gsm8k-1309",
+    "total_tokens": 223,
+    "trial": 0,
+    "wall_seconds": 1.4261204544454813
+  },
+  {
+    "arm": "tahoe",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "5 hours",
+    "grader_detail": "expected=5, got=5",
+    "input_tokens": 149,
+    "output_tokens": 33,
+    "passed": true,
+    "quality_score": 1.0,
+    "task_id": "gsm8k-0051",
+    "total_tokens": 182,
+    "trial": 0,
+    "wall_seconds": 0.4293573508039117
+  },
+  {
+    "arm": "classic",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "**Step 1: Find each person's speed.**\n- Kalinda: 4 pieces per minute\n- Mom: half as many \u2192 4 \u00f7 2 = 2 pieces per minute\n\n**Step 2: Find their combined speed.**\n- 4 + 2 = 6 pieces per minute\n\n**Step 3: Find the total time.**\n- 360 pieces \u00f7 6 pieces per minute = 60 minutes\n\n**Step 4: Convert to hours.**\n- 60 minutes = **1 hour**\n\nIt will take them **1 hour** to complete the puzzle.",
+    "grader_detail": "expected=1, got=1",
+    "input_tokens": 65,
+    "output_tokens": 187,
+    "passed": true,
+    "quality_score": 1.0,
+    "task_id": "gsm8k-0228",
+    "total_tokens": 252,
+    "trial": 0,
+    "wall_seconds": 1.9156730538234115
+  },
+  {
+    "arm": "classic",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "**Step 1: Find the distance traveled**\n\nTom sails from 1 PM to 4 PM, which is **3 hours** at 10 mph:\n\n$$\\text{Distance} = 10 \\text{ mph} \\times 3 \\text{ hours} = 30 \\text{ miles}$$\n\n**Step 2: Find the return trip time**\n\nAt 6 mph, covering 30 miles takes:\n\n$$\\text{Time} = \\frac{30 \\text{ miles}}{6 \\text{ mph}} = \\boxed{5 \\text{ hours}}$$\n\nIt takes Tom **5 hours** to get back.",
+    "grader_detail": "expected=5, got=5",
+    "input_tokens": 60,
+    "output_tokens": 208,
+    "passed": true,
+    "quality_score": 1.0,
+    "task_id": "gsm8k-0051",
+    "total_tokens": 268,
+    "trial": 0,
+    "wall_seconds": 1.6861886819824576
+  },
+  {
+    "arm": "classic",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "**Step 1: Find the younger son's age.**\nThe younger son is 4 years younger than 12: 12 \u2212 4 = **8 years old**\n\n**Step 2: Find the total number of candles needed.**\n12 + 8 = **20 candles**\n\n**Step 3: Find the number of packs needed.**\n20 \u00f7 5 = **4 packs**\n\n**Step 4: Calculate the total cost.**\n4 \u00d7 $3 = **$12**\n\nJames spends **$12** on candles.",
+    "grader_detail": "expected=12, got=12",
+    "input_tokens": 60,
+    "output_tokens": 194,
+    "passed": true,
+    "quality_score": 1.0,
+    "task_id": "gsm8k-0563",
+    "total_tokens": 254,
+    "trial": 0,
+    "wall_seconds": 1.4544886769726872
+  },
+  {
+    "arm": "tahoe",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "$12",
+    "grader_detail": "expected=12, got=12",
+    "input_tokens": 149,
+    "output_tokens": 56,
+    "passed": true,
+    "quality_score": 1.0,
+    "task_id": "gsm8k-0563",
+    "total_tokens": 205,
+    "trial": 0,
+    "wall_seconds": 1.0241296561434865
+  },
+  {
+    "arm": "classic",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "**Step 1: Find how much yarn Mariah used.**\n\nMariah used 1/4 of a skein:\n$$\\frac{1}{4} \\times 364 = 91 \\text{ yards}$$\n\n**Step 2: Find how much yarn her grandma used.**\n\nHer grandma used 1/2 of a skein:\n$$\\frac{1}{2} \\times 364 = 182 \\text{ yards}$$\n\n**Step 3: Add the amounts together.**\n\n$$91 + 182 = 273 \\text{ yards}$$\n\n**They used 273 yards of yarn altogether.**",
+    "grader_detail": "expected=273, got=273",
+    "input_tokens": 73,
+    "output_tokens": 260,
+    "passed": true,
+    "quality_score": 1.0,
+    "task_id": "gsm8k-0501",
+    "total_tokens": 333,
+    "trial": 0,
+    "wall_seconds": 1.9750407552346587
+  },
+  {
+    "arm": "tahoe",
+    "benchmark": "gsm8k",
+    "failure_class": "none",
+    "final_answer": "273",
+    "grader_detail": "expected=273, got=273",
+    "input_tokens": 162,
+    "output_tokens": 29,
+    "passed": true,
+    "quality_score": 1.0,
+    "task_id": "gsm8k-0501",
+    "total_tokens": 191,
+    "trial": 0,
+    "wall_seconds": 0.4354134136810899
+  },
+  {
+    "arm": "vm",
+    "benchmark": "gsm8k",
+    "compile_attempts": 1,
+    "deterministic_steps": 3,
+    "failure_class": "none",
+    "final_answer": "21",
+    "grader_detail": "expected=5, got=21",
+    "input_tokens": 804,
+    "llm_steps": 1,
+    "output_tokens": 1227,
+    "passed": false,
+    "program": "PROGRAM task VERSION 1.0\nINPUT\n    G.task = \"Tom's ship can travel at 10 miles per hour. He is sailing from 1 to 4 PM. He then travels back at a rate of 6 mph. How long does it take him to get back?\"\nstep.hours: DO calculate(start_hour = 1, end_hour = 4) -> E.sail_hours\nstep.distance: DO calculate(speed = 10, hours = E.sail_hours) -> E.distance\nstep.back: DO calculate(distance = E.distance, speed = 6) -> E.back_hours\nstep.answer: DO reason(hours = E.back_hours, directive = \"state how many hours the return trip takes, as a number only\") -> OUT.answer\nRETURN OUT.answer",
+    "quality_score": 0.0,
+    "steps": [
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.hours",
+        "targets": [
+          "E.sail_hours"
+        ],
+        "value": 5
+      },
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.distance",
+        "targets": [
+          "E.distance"
+        ],
+        "value": 15
+      },
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.back",
+        "targets": [
+          "E.back_hours"
+        ],
+        "value": 21
+      },
+      {
+        "command": "reason",
+        "detail": "",
+        "deterministic": false,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.answer",
+        "targets": [
+          "OUT.answer"
+        ],
+        "value": 21
+      }
+    ],
+    "task_id": "gsm8k-0051",
+    "total_tokens": 2031,
+    "trial": 0,
+    "vm_error": "",
+    "vm_ok": true,
+    "wall_seconds": 10.06293272972107
+  },
+  {
+    "arm": "vm",
+    "benchmark": "gsm8k",
+    "compile_attempts": 1,
+    "deterministic_steps": 3,
+    "failure_class": "none",
+    "final_answer": "273",
+    "grader_detail": "expected=273, got=273",
+    "input_tokens": 764,
+    "llm_steps": 1,
+    "output_tokens": 1036,
+    "passed": true,
+    "program": "PROGRAM knitting VERSION 1.0\nINPUT\n    G.task = \"Mariah used 1/4 of a skein of yarn and her grandma used 1/2 of a skein. A skein has 364 yards. How many yards of yarn did they use altogether?\"\nstep.mariah: DO calculate(mariah = \"364 * 1 / 4\") -> E.mariah\nstep.grandma: DO calculate(grandma = \"364 * 1 / 2\") -> E.grandma\nstep.total: DO calculate(total = E.mariah, grandma_yards = E.grandma) -> E.total\nstep.answer: DO reason(question = G.task, mariah_yards = E.mariah, grandma_yards = E.grandma, total_yards = E.total, directive = \"state the total yards of yarn used as a number only\") -> OUT.answer\nRETURN OUT.answer",
+    "quality_score": 1.0,
+    "steps": [
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.mariah",
+        "targets": [
+          "E.mariah"
+        ],
+        "value": 91
+      },
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.grandma",
+        "targets": [
+          "E.grandma"
+        ],
+        "value": 182
+      },
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.total",
+        "targets": [
+          "E.total"
+        ],
+        "value": 273
+      },
+      {
+        "command": "reason",
+        "detail": "",
+        "deterministic": false,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.answer",
+        "targets": [
+          "OUT.answer"
+        ],
+        "value": 273
+      }
+    ],
+    "task_id": "gsm8k-0501",
+    "total_tokens": 1800,
+    "trial": 0,
+    "vm_error": "",
+    "vm_ok": true,
+    "wall_seconds": 7.234708309173584
+  },
+  {
+    "arm": "vm",
+    "benchmark": "gsm8k",
+    "compile_attempts": 1,
+    "deterministic_steps": 4,
+    "failure_class": "none",
+    "final_answer": "28",
+    "grader_detail": "expected=12, got=28",
+    "input_tokens": 1265,
+    "llm_steps": 1,
+    "output_tokens": 2763,
+    "passed": false,
+    "program": "PROGRAM candles VERSION 1.0\nINPUT\n    G.task = \"James decides to buy birthday candles for his 2 sons. One of them is 12 and the other is 4 years younger. A pack of 5 candles costs $3. How much does James spend on candles?\"\nstep.younger: DO calculate(age = \"12 - 4\") -> E.younger_age\nstep.total: DO calculate(son1 = 12, son2 = E.younger_age) -> E.total_candles\nstep.packs: DO calculate(candles = E.total_candles, per_pack = 5) -> E.packs\nstep.cost: DO calculate(packs = E.packs, price = 3) -> E.cost\nstep.answer: DO reason(spent = E.cost, directive = \"state the total amount James spends in dollars\") -> OUT.answer\nRETURN OUT.answer",
+    "quality_score": 0.0,
+    "steps": [
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.younger",
+        "targets": [
+          "E.younger_age"
+        ],
+        "value": 8
+      },
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.total",
+        "targets": [
+          "E.total_candles"
+        ],
+        "value": 20
+      },
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.packs",
+        "targets": [
+          "E.packs"
+        ],
+        "value": 25
+      },
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.cost",
+        "targets": [
+          "E.cost"
+        ],
+        "value": 28
+      },
+      {
+        "command": "reason",
+        "detail": "",
+        "deterministic": false,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.answer",
+        "targets": [
+          "OUT.answer"
+        ],
+        "value": 28
+      }
+    ],
+    "task_id": "gsm8k-0563",
+    "total_tokens": 4028,
+    "trial": 0,
+    "vm_error": "",
+    "vm_ok": true,
+    "wall_seconds": 20.0855770111084
+  },
+  {
+    "arm": "vm",
+    "benchmark": "gsm8k",
+    "compile_attempts": 2,
+    "deterministic_steps": 4,
+    "failure_class": "none",
+    "final_answer": "1 hour",
+    "grader_detail": "expected=1, got=1",
+    "input_tokens": 1621,
+    "llm_steps": 1,
+    "output_tokens": 4462,
+    "passed": true,
+    "program": "PROGRAM task VERSION 1.0\nINPUT\n    G.task = \"Kalinda is working on a 360 piece puzzle with her mom. Kalinda can normally add 4 pieces per minute. Her mom can typically place half as many pieces per minute as Kalinda. How many hours will it take them to complete this puzzle?\"\nstep.rates: DO calculate(kalinda_rate = 4, mom_rate = 2, combined_rate = 6) -> R.rates\nstep.minutes: DO calculate(total_pieces = 360, minutes_needed = 60) -> R.minutes\nstep.hours: DO calculate(minutes_per_hour = 60, hours_needed = 1) -> R.hours\nstep.verify: DO check(left = 1, op = \"eq\", right = 1) -> C.verify\nstep.answer: DO reason(result = \"Kalinda places 4 pieces per minute and her mom places half as many, which is 2 pieces per minute, so together they place 6 pieces per minute. The 360 piece puzzle at 6 pieces per minute takes 360 / 6 = 60 minutes, which equals 1 hour. It will take them 1 hour to complete the puzzle.\") -> OUT.answer\nRETURN OUT.answer",
+    "quality_score": 1.0,
+    "steps": [
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.rates",
+        "targets": [
+          "R.rates"
+        ],
+        "value": 12
+      },
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.minutes",
+        "targets": [
+          "R.minutes"
+        ],
+        "value": 420
+      },
+      {
+        "command": "calculate",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.hours",
+        "targets": [
+          "R.hours"
+        ],
+        "value": 61
+      },
+      {
+        "command": "check",
+        "detail": "",
+        "deterministic": true,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.verify",
+        "targets": [
+          "C.verify"
+        ],
+        "value": true
+      },
+      {
+        "command": "reason",
+        "detail": "",
+        "deterministic": false,
+        "done_ok": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "parsed_ok": true,
+        "step_id": "step.answer",
+        "targets": [
+          "OUT.answer"
+        ],
+        "value": "1 hour"
+      }
+    ],
+    "task_id": "gsm8k-0228",
+    "total_tokens": 6083,
+    "trial": 0,
+    "vm_error": "",
+    "vm_ok": true,
+    "wall_seconds": 29.981112480163574
+  },
+  {
+    "arm": "vm",
+    "benchmark": "gsm8k",
+    "compile_attempts": 3,
+    "deterministic_steps": 0,
+    "failure_class": "vm_error",
+    "final_answer": "",
+    "grader_detail": "expected=2280, got=",
+    "input_tokens": 1554,
+    "llm_steps": 0,
+    "output_tokens": 5294,
+    "passed": false,
+    "program": "PROGRAM task VERSION 1.0\nINPUT\n    G.task = \"The girls are trying to raise money for a carnival. Kim raises $320 more than Alexandra, who raises $430, and Maryam raises $400 more than Sarah, who raises $300. How much money, in dollars, did they all raise in total?\"\nstep.kim: DO calculate(kim = 430 + 320) -> T.kim\nstep.maryam: DO calculate(maryam = 300 + 400) -> T.maryam\nstep.total: DO calculate(total = 430 + 750 + 300 + 700) -> T.total\nstep.sanity: DO check(left = 2180, op = \"ge\", right = 1000) -> T.sanity\nstep.answer: DO calculate(answer = \"Alexandra raised 430 dollars, so Kim raised 430 + 320 = 750 dollars. Sarah raised 300 dollars, so Maryam raised 300 + 400 = 700 dollars. In total they raised 430 + 750 + 300 + 700 = 2180 dollars.\") -> OUT.answer\nRETURN OUT.answer",
+    "quality_score": 0.0,
+    "steps": [],
+    "task_id": "gsm8k-1309",
+    "total_tokens": 6848,
+    "trial": 0,
+    "vm_error": "program did not parse after 3 attempts: invalid argument value: Extra data (line 4, column 5)",
+    "vm_ok": false,
+    "wall_seconds": 35.65364336967468
+  }
+]
