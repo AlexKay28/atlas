@@ -1,0 +1,172 @@
+\begin{thebibliography}{10}
+
+\bibitem{aggarwal2025l1}
+Pranjul Aggarwal and Sean Welleck.
+\newblock L1: Controlling how long a reasoning model thinks with reinforcement
+  learning.
+\newblock {\em arXiv preprint arXiv:2503.04697}, 2025.
+
+\bibitem{altshuller1984creativity}
+Genrich Altshuller.
+\newblock {\em Creativity as an Exact Science: The Theory of the Solution of
+  Inventive Problems}.
+\newblock Gordon and Breach, 1984.
+
+\bibitem{clark2018arc}
+Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabharwal, Carissa
+  Schoenick, and Oyvind Tafjord.
+\newblock Think you have solved question answering? try arc, the ai2 reasoning
+  challenge.
+\newblock {\em arXiv preprint arXiv:1803.05457}, 2018.
+
+\bibitem{cobbe2021gsm8k}
+Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz
+  Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano,
+  Christopher Hesse, and John Schulman.
+\newblock Training verifiers to solve math word problems.
+\newblock {\em arXiv preprint arXiv:2110.14168}, 2021.
+
+\bibitem{colledanchise2018bt}
+Michele Colledanchise and Petter {\"O}gren.
+\newblock Behavior trees in robotics and {AI}: An introduction.
+\newblock {\em arXiv preprint arXiv:1709.00084}, 2018.
+
+\bibitem{deng2026sr2am}
+Mingkai Deng, Jinyu Hou, Lara Neves, Varad Pimpalkhute, Taylor~W. Killian,
+  Zhengzhong Liu, and Eric~P. Xing.
+\newblock Efficient agentic reasoning through self-regulated simulative
+  planning.
+\newblock {\em arXiv preprint arXiv:2605.22138}, 2026.
+
+\bibitem{erol1994htn}
+Kutluhan Erol, James Hendler, and Dana~S Nau.
+\newblock Semantics for hierarchical task-network planning.
+\newblock Technical report, University of Maryland, 1994.
+
+\bibitem{fikes1971strips}
+Richard~E Fikes and Nils~J Nilsson.
+\newblock {STRIPS}: A new approach to the application of theorem proving to
+  problem solving.
+\newblock {\em Artificial Intelligence}, 2(3--4):189--208, 1971.
+
+\bibitem{fox2003pddl}
+Maria Fox and Derek Long.
+\newblock Pddl2.1: An extension to pddl for expressing temporal planning
+  domains.
+\newblock {\em Journal of Artificial Intelligence Research}, 20:61--124, 2003.
+
+\bibitem{han2026scr}
+Jinyi Han, Zixiang Di, Zishang Jiang, Ying Liao, Jiaqing Liang, Yongqi Wang,
+  and Yanghua Xiao.
+\newblock Structured reasoning for large language models.
+\newblock {\em arXiv preprint arXiv:2601.07180}, 2026.
+
+\bibitem{hendrycks2021mmlu}
+Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn
+  Song, and Jacob Steinhardt.
+\newblock Measuring massive multitask language understanding.
+\newblock {\em arXiv preprint arXiv:2009.03300}, 2021.
+
+\bibitem{kim2023llmcompiler}
+Sehoon Kim, Suhong Moon, Ryan Tabrizi, Nicholas Lee, Michael~W. Mahoney, Kurt
+  Keutzer, and Amir Gholami.
+\newblock An llm compiler for parallel function calling.
+\newblock {\em arXiv preprint arXiv:2312.04511}, 2023.
+
+\bibitem{lai2017race}
+Guokun Lai, Qizhe Xie, Hanxiao Liu, Yiming Yang, and Eduard Hovy.
+\newblock Race: Large-scale reading comprehension dataset from examinations.
+\newblock {\em arXiv preprint arXiv:1704.04683}, 2017.
+
+\bibitem{lee2025sketch}
+Simon~A. Lee, Jinheon Baek, and Sung~Ju Hwang.
+\newblock Sketch-of-thought: Efficient llm reasoning with adaptive
+  cognitive-inspired sketching.
+\newblock {\em arXiv preprint arXiv:2503.05179}, 2025.
+
+\bibitem{lee2023rot}
+Soochan Lee and Gunhee Kim.
+\newblock Recursion of thought: A divide-and-conquer approach to multi-context
+  reasoning with language models.
+\newblock {\em arXiv preprint arXiv:2306.06891}, 2023.
+
+\bibitem{lightman2023verify}
+Hunter Lightman, Vineet Kosaraju, Yura Burda, Harri Edwards, Bowen Baker, Teddy
+  Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe.
+\newblock Let's verify step by step.
+\newblock {\em arXiv preprint arXiv:2305.20050}, 2023.
+
+\bibitem{nau2003shop2}
+Dana Nau, Tsz-Chiu Au, Okan Ilghami, Ugur Kuter, J.~William Murdock, Dan Wu,
+  and Fusun Yaman.
+\newblock {SHOP2}: An {HTN} planning system.
+\newblock {\em Journal of Artificial Intelligence Research}, 20:379--404, 2003.
+
+\bibitem{wang2024memgpt}
+Charles Packer, Sarah Wooders, Kevin Lin, Vivian Fang, Shishir~G. Patil, Ion
+  Stoica, and Joseph~E. Gonzalez.
+\newblock Memgpt: Towards llms as operating systems.
+\newblock {\em arXiv preprint arXiv:2310.08560}, 2023.
+
+\bibitem{pearl2009causality}
+Judea Pearl.
+\newblock {\em Causality: Models, Reasoning and Inference}.
+\newblock Cambridge University Press, 2nd edition, 2009.
+
+\bibitem{sumers2023coala}
+Theodore~R Sumers, Shunyu Yao, Karthik Narasimhan, and Thomas~L Griffiths.
+\newblock The cognitive architectures for language agents (coala) framework.
+\newblock {\em arXiv preprint arXiv:2309.02427}, 2023.
+
+\bibitem{sun2025folding}
+Weiwei Sun, Miao Lu, Zhan Ling, Kang Liu, Xuesong Yao, Yiming Yang, and Jiecao
+  Chen.
+\newblock Scaling long-horizon llm agent via context-folding.
+\newblock {\em arXiv preprint arXiv:2510.11967}, 2025.
+
+\bibitem{suzgun2022bbh}
+Mirac Suzgun, Nathan Scales, Nathanael Sch{\"a}rli, Sebastian Gehrmann, Yi~Tay,
+  Hyung~Won Chung, Aakanksha Chowdhery, Quoc~V. Le, Ed~H. Chi, Denny Zhou, and
+  Jason Wei.
+\newblock Challenging big-bench tasks and whether chain-of-thought can solve
+  them.
+\newblock {\em arXiv preprint arXiv:2210.09261}, 2022.
+
+\bibitem{temporal2024}
+{Temporal Technologies}.
+\newblock Temporal workflow documentation.
+\newblock \url{https://docs.temporal.io/workflows}, 2024.
+
+\bibitem{wei2022cot}
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed~Chi, Quoc~V
+  Le, and Denny Zhou.
+\newblock Chain-of-thought prompting elicits reasoning in large language
+  models.
+\newblock {\em Advances in Neural Information Processing Systems},
+  35:24824--24837, 2022.
+
+\bibitem{wu2024stateflow}
+Yiran Wu, Tianwei Yue, Shaokun Zhang, Chi Wang, and Qingyun Wu.
+\newblock Stateflow: Enhancing llm task-solving through state-driven workflows.
+\newblock {\em arXiv preprint arXiv:2403.11322}, 2024.
+
+\bibitem{xu2023rewoo}
+Binfeng Xu, Zhiyuan Peng, Bowen Lei, Subhabrata Mukherjee, Yuchen Liu, and
+  Dongkuan Xu.
+\newblock Rewoo: Decoupling reasoning from observations for efficient augmented
+  language models.
+\newblock {\em arXiv preprint arXiv:2305.18323}, 2023.
+
+\bibitem{xu2025cod}
+Silei Xu, Wenhao Xie, Lingxiao Zhao, and Pengcheng He.
+\newblock Chain of draft: Thinking faster by writing less.
+\newblock {\em arXiv preprint arXiv:2502.18600}, 2025.
+
+\bibitem{yao2023tot}
+Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Thomas~L Griffiths, Yuan Cao,
+  and Karthik Narasimhan.
+\newblock Tree of thoughts: Deliberate problem solving with large language
+  models.
+\newblock {\em Advances in Neural Information Processing Systems}, 36, 2023.
+
+\end{thebibliography}
