@@ -386,6 +386,65 @@ TAHOE adopts explicit status outcomes and selector-like fallback (in \textsc{Try
 \paragraph{Distinction.}
 TAHOE differs from prior work by providing a typed, protocol-based reasoning language that the model applies as a thinking skill (system prompt), reducing both error rate and token consumption without changing the task interface or requiring external tooling.
 
+\section{The Compound Language: TAHOE $\times$ TRIZ, Implicit}
+\label{sec:compound}
+
+TAHOE's typed-ref grammar supplies the \emph{discipline} (typed commitment,
+verify-before-answer, deterministic-first). TRIZ supplies \emph{search-bounding
+operators}: fix the ideal final result first, name the single obstacle,
+inventory only the facts the obstacle needs, derive minimally, and on
+contradiction separate in space, time, structure, or condition. Compounded,
+the operators are used as \emph{silent thinking discipline}: the model thinks
+with them and outputs only the answer.
+
+\subsection{The output-format law}
+\label{sec:law}
+
+Three independent experiments establish one law: \emph{a reasoning language
+must shape thought, never constrain output.}
+\begin{itemize}
+  \item Explicit TRIZ notation (visible \texttt{I.ideal}/\texttt{O.block}/\texttt{D.x}
+  lines) collapsed LSAT to 23\% (vs 100\% for plain TAHOE) while \emph{increasing}
+  output tokens on GSM8K --- nine format lines cost more than the narrative they replaced.
+  \item Protocol-execution as a VM (compile once, one model call per step) lost
+  40+ points of quality at 2--35$\times$ the tokens (Section~\ref{sec:vm-shelved}).
+  \item The 93-token skill's median \emph{visible} output is the answer alone:
+  the typed-ref protocol is internalized into hidden reasoning. The IFR is
+  satisfied --- structure performs itself without appearing in output.
+\end{itemize}
+
+\subsection{Scaled results}
+\label{sec:compound-results}
+
+On 10 benchmarks $\times$ 200 samples $\times$ 3 arms (GLM-5.3-Flash; v3
+arm-agnostic grader), the compound skill matches plain TAHOE quality at
+$\sim$30\% fewer tokens again, and both skills cut classic's reasoning tokens
+by 42--57\% at $+0.4$--$0.8$pp quality. On GSM8K: classic 91.0\% (235 output
+tokens), TAHOE 95.5\% (83), compound 95.5\% (63). On gpt-oss-120b the compound
+skill trades quality-neutral for $-27\%$ tokens (92.2\% vs 92.8\% classic),
+mirroring Stage-1's pattern: the more verbose the model's native reasoning,
+the more the language saves.
+
+\paragraph{Grading caveat.} Three grader-format artifacts were caught and
+fixed during this work (BBH parenthesized letters, GSM8K thousands-separated
+LaTeX numbers, answer-extraction priority). Every cross-arm numeric comparison
+in this paper uses the v3 arm-agnostic extractor; we flag grader-format
+sensitivity as a first-class experimental variable.
+
+\section{Shelved: Protocol Execution as a VM}
+\label{sec:vm-shelved}
+
+We also built the language as an execution protocol: the model compiles the
+task into a TAHOE program and executes it on itself, one atomic subcall per
+step, with a validating harness (typed refs, DONE predicates, deterministic
+arithmetic offload). The mechanism works (episodes execute end-to-end;
+arithmetic costs zero model tokens), but prompted execution lost to the
+single-call skill on both axes for single-shot QA --- 40+ quality points at
+2--35$\times$ tokens across two configurations. Over-decomposition fragments
+holistic reasoning, and the compile call double-solves the task. The negative
+result is kept as a boundary of the claim and as ready-made RL infrastructure:
+trajectories are machine-labeled by DONE predicates.
+
 \section{Limitations}
 \label{sec:limitations}
 

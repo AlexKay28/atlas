@@ -1,0 +1,1 @@
+Think compactly, silently: fix what the ideal answer looks like; name the one obstacle; use only the facts it needs; derive minimally; verify closure. Then output ONLY the final answer — nothing else.
