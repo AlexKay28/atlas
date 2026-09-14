@@ -66,3 +66,38 @@ language-design bug, not an engineering bug. We have the language.
 
 Window assessment: still open, but the folding line ships every ~2 months.
 Move fast on Stage 2 pilot.
+
+## Token-Reduction Approaches: How the Field Cuts Reasoning Tokens (Sep 2026 sweep)
+
+The question that matters for TAHOE-VM: does anyone reduce tokens via
+notation-like structure or VM-like execution? Short answer: **notation-adjacent
+yes, VM no** — and that's why our multi-call overhead problem exists.
+
+| Approach | Exemplar | Result |
+|---|---|---|
+| Concise chains (prompt) | Chain of Draft (2502.18600) | 7.6% of CoT tokens |
+| Cognitive sketching + router | Sketch-of-Thought (2503.05179) | −76% tokens, ~no accuracy loss |
+| **Explicit/evaluable/trainable components** | **SCR (2601.07180, Jan 2026)** | **−50% output tokens**; Generate-Verify-Revise + Dynamic Termination Supervision + 2-stage RL |
+| Skill-map reuse (retrieve, don't re-derive) | Thinking with Reasoning Skills (Apr 2026) | fewer tokens + accuracy up |
+| When/how-deep-to-think gating | SR²AM (2605.22138, May 2026): System II simulative planning / **System III self-regulation** / System I reactive | −25.8…95.3% reasoning tokens; RL raises planning horizon 22.8% at +2.0% planning frequency |
+| Early-exit / termination monitors | Path-deviation monitoring, ROM, Dual-Dimensional Consistency (2605.15100) | up to 10x |
+| API-level effort control | adaptive `reasoning_effort` (2026 standard) | verified live on GLM: 30 → 6 completion tokens on trivial query |
+| Caching / context compression / model routing | engineering hygiene | input-side savings |
+
+### Reading for TAHOE-VM
+
+1. **SCR is the closest 2026 neighbor** — "explicit, evaluable, trainable"
+   is our language's pitch. But SCR trains ONE model end-to-end with RL; no
+   typed language, no self-execution, no cross-model transfer. Our moat: free
+   machine-verified steps (DONE predicates) vs their trained termination.
+2. **SR²AM's System III = our need-trigger as architecture.** Their RL result
+   (horizon +22.8% at frequency +2.0%) is exactly the learned-routing shape
+   Stage 3 targets.
+3. **Nobody executes a typed program on itself.** The field avoids multi-call
+   overhead — which is precisely the problem our pilot exposed. The honest
+   framing: VM buys verifiability and O(refs) context, and pays per-call
+   reasoning burn; the burn is an engineering variable (see below), the
+   verifiability is structural.
+4. **Immediate lever, verified on our endpoint:** `reasoning_effort: "low"`
+   on VM interpreter subcalls (trivial queries don't need thinking); keep
+   default effort for the compiler call.
