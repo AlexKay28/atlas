@@ -188,20 +188,41 @@ def load_single_benchmark(bench_name, n_samples):
 
 def worker_fn(args):
     task, arm, trial_idx, skill_prompt = args
-    try:
-        result = run_trial(task, arm, skill_prompt, trial_idx)
-        return result
-    except Exception as e:
-        return {
-            "task_id": task["task_id"], "benchmark": task["benchmark"],
-            "arm": arm, "trial": trial_idx,
-            "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
-            "wall_seconds": 0.0, "passed": False, "failure_class": "error",
-            "final_answer": f"ERROR: {e}", "quality_score": 0.0,
-            "grader_detail": str(e),
-            "verified_logical_steps": 0, "typed_refs_produced": 0,
-            "repeated_refs": 0, "retired_refs": 0, "total_refs_produced": 0,
-        }
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            result = run_trial(task, arm, skill_prompt, trial_idx)
+            # Retry if empty answer with 0 tokens (rate-limited request)
+            if (result["output_tokens"] == 0 and not result["final_answer"].strip()
+                    and attempt < max_retries - 1):
+                time.sleep(2 ** attempt)
+                continue
+            return result
+        except Exception as e:
+            if "429" in str(e) or "inflight" in str(e) or "rate" in str(e).lower():
+                time.sleep(2 ** attempt)
+                continue
+            return {
+                "task_id": task["task_id"], "benchmark": task["benchmark"],
+                "arm": arm, "trial": trial_idx,
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                "wall_seconds": 0.0, "passed": False, "failure_class": "error",
+                "final_answer": f"ERROR: {e}", "quality_score": 0.0,
+                "grader_detail": str(e),
+                "verified_logical_steps": 0, "typed_refs_produced": 0,
+                "repeated_refs": 0, "retired_refs": 0, "total_refs_produced": 0,
+            }
+    # Exhausted retries
+    return {
+        "task_id": task["task_id"], "benchmark": task["benchmark"],
+        "arm": arm, "trial": trial_idx,
+        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+        "wall_seconds": 0.0, "passed": False, "failure_class": "error",
+        "final_answer": "ERROR: rate limited after retries", "quality_score": 0.0,
+        "grader_detail": "rate limited after retries",
+        "verified_logical_steps": 0, "typed_refs_produced": 0,
+        "repeated_refs": 0, "retired_refs": 0, "total_refs_produced": 0,
+    }
 
 
 def main():

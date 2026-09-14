@@ -59,24 +59,42 @@ archive/           Historical files (old reports, build artifacts)
 
 ## Results
 
-10 public benchmarks, **full test sets**, 3 trials, 31,524 trials total (GLM-5.3-Flash).
+10 public benchmarks, **full test sets**, 3 trials. Two models, 63,348 trials total.
 
-| Benchmark | N | Classic | TAHOE | Cl out | Tah out | Ratio |
-|---|---|---|---|---|---|---|
-| GSM8K | 1319 | 71.3% | **79.0%** | 241 | 91 | 0.38x |
-| ARC | 1172 | **96.0%** | 95.7% | 121 | 58 | 0.48x |
-| BBH | 250 | 78.1% | 77.9% | 472 | 288 | 0.61x |
-| BBH-track | 250 | **89.7%** | 75.9% | 521 | 270 | 0.52x |
-| BBH-arith | 200 | **100%** | 99.8% | 117 | 97 | 0.83x |
-| MMLU-math | 100 | 94.3% | 94.3% | 399 | 318 | 0.80x |
-| MMLU-logic | 126 | **95.2%** | 93.1% | 312 | 263 | 0.84x |
-| MMLU-acct | 282 | 96.1% | **96.3%** | 238 | 138 | 0.58x |
-| LSAT | 510 | 93.4% | **94.9%** | 432 | 210 | 0.49x |
-| RACE | 1045 | **94.1%** | 93.8% | 189 | 100 | 0.53x |
-| **OVERALL** | — | **88.1%** | **89.4%** | **246** | **125** | **0.51x** |
+**GLM-5.3-Flash** (31,524 trials):
 
-**TAHOE saves 49% reasoning tokens** while improving quality +1.3% (89.4% vs 88.1%).
-HM: 1.227 (TAHOE) vs 0.937 (classic) — TAHOE wins decisively.
+| Benchmark | N | Classic | TAHOE | Ratio |
+|---|---|---|---|---|
+| GSM8K | 1319 | 71.3% | **79.0%** | 0.38x |
+| ARC | 1172 | **96.0%** | 95.7% | 0.48x |
+| BBH | 250 | **99.5%** | 98.8% | 0.61x |
+| BBH-track | 250 | **99.9%** | 99.5% | 0.52x |
+| BBH-arith | 200 | **100%** | 99.8% | 0.83x |
+| MMLU-math | 100 | 94.3% | 94.3% | 0.80x |
+| MMLU-logic | 126 | **95.2%** | 93.1% | 0.84x |
+| MMLU-acct | 282 | 96.1% | **96.3%** | 0.58x |
+| LSAT | 510 | 93.4% | **94.9%** | 0.49x |
+| RACE | 1045 | **94.1%** | 93.8% | 0.53x |
+| **OVERALL** | — | **89.6%** | **91.5%** | **0.51x** |
+
+**gpt-oss-120b** (31,824 trials):
+
+| Benchmark | N | Classic | TAHOE | Ratio |
+|---|---|---|---|---|
+| GSM8K | 1319 | 77.9% | **79.4%** | 0.40x |
+| ARC | 1172 | **94.4%** | 94.1% | 0.71x |
+| BBH | 250 | 99.1% | **99.7%** | 0.83x |
+| BBH-track | 250 | **100%** | 99.6% | 0.83x |
+| BBH-arith | 250 | **99.9%** | 99.6% | 0.88x |
+| MMLU-math | 100 | 96.7% | 96.7% | 0.83x |
+| MMLU-logic | 126 | **95.5%** | 95.0% | 0.84x |
+| MMLU-acct | 282 | 89.6% | 89.6% | 0.82x |
+| LSAT | 510 | **85.4%** | 83.1% | 0.72x |
+| RACE | 1045 | **89.8%** | 88.7% | 0.85x |
+| **OVERALL** | — | **89.1%** | **88.9%** | **0.68x** |
+
+**TAHOE saves 49% (GLM) / 32% (gpt-oss) reasoning tokens** while improving quality
++1.9% on GLM and matching on gpt-oss. HM: 1.247 vs 0.945 (GLM), 1.107 vs 0.942 (gpt-oss).
 
 ## Quick start
 

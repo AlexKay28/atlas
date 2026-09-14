@@ -175,23 +175,28 @@ def grade_arc(model_answer, expected_answer):
 
 
 def grade_bbh(model_answer, expected_answer):
-    """BBH: exact match of target string. Official eval = string equality.
+    """BBH: match the correct option letter. Official eval = letter equality.
 
-    Target format is '(X)'. Extract letter from both, compare.
+    Accepts '(X)', 'X', or any text containing the letter as a word/paren.
     """
     model_clean = re.sub(r'\*+', '', model_answer.strip())
     expected_clean = expected_answer.strip()
-    model_match = re.search(r'\(([A-Z])\)', model_clean)
     expected_match = re.search(r'\(([A-Z])\)', expected_clean)
-    if model_match and expected_match:
-        return model_match.group(1) == expected_match.group(1), (
-            f"expected={expected_match.group(1)}, got={model_match.group(1)}"
-        )
+    expected_letter = expected_match.group(1) if expected_match else expected_clean
+
+    # 1. (X) pattern
+    model_match = re.search(r'\(([A-Z])\)', model_clean)
     if model_match:
-        return model_match.group(1) == expected_clean, (
-            f"expected={expected_clean}, got={model_match.group(1)}"
+        return model_match.group(1) == expected_letter, (
+            f"expected={expected_letter}, got={model_match.group(1)}"
         )
-    return model_clean == expected_clean, f"expected={expected_clean}, got={model_clean[:50]}"
+    # 2. bare letter
+    m = re.search(r'\b([A-Z])\b', model_clean.upper())
+    if m:
+        return m.group(1) == expected_letter, (
+            f"expected={expected_letter}, got={m.group(1)}"
+        )
+    return model_clean == expected_clean, f"expected={expected_letter}, got={model_clean[:50]}"
 
 
 def grade_bbh_arith(model_answer, expected_answer):
