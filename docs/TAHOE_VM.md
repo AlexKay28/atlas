@@ -159,14 +159,49 @@ effort param. After fixes: VM episodes execute 30/30 on LSAT, 59 deterministic
 zero-token arithmetic steps on gsm8k, output tokens 1.9-3.4x prompt-tahoe
 (was 21-41x).
 
-### Final Stage-2 verdict: gates FAILED — negative result, cleanly characterized
+### ⚠️ Honest caveat: strange results — bad implementation is a live hypothesis
+
+These results are UNUSUAL enough that we flag them explicitly: a VM that loses
+40 points of quality on LSAT while executing 30/30 episodes is suspicious.
+Before treating the negative as fundamental, these implementation choices must
+be re-examined — several are plausible primary causes:
+
+1. **Truncated task context in step subcalls** — the interpreter slice included
+   `task[:400]`; LSAT passages run 1,500+ characters. Reasoning steps likely
+   saw a cut-off passage. This alone could explain the LSAT collapse.
+2. **Forced over-decomposition** — the compiler prompt demanded 2-8 steps;
+   tasks needing one holistic reasoning chain got shredded into 25-word ref
+   fragments. Granularity was imposed, not learned.
+3. **One canonical example for all task types** — a train-arrival few-shot for
+   a compiler facing LSAT logic is a domain mismatch; benchmark-adaptive
+   exemplars were never tried.
+4. **Compile failures scored as zero** — 15-30% of episodes never executed;
+   each counted as a wrong answer. A hybrid fallback (direct answer on VM
+   failure) would rescue most of that mass and was not implemented.
+5. **Double-solving left uncontrolled** — the compiler reasons about the task
+   (955 hidden tokens) and then steps re-derive it; medium effort was never
+   tested, only the degenerate ends.
+6. **Max-token truncation** — 1,500 compile / 512 step budgets could cut
+   reasoning mid-flight on long tasks.
+7. **Ref-value answers vs grader formats** — OUT.answer carried raw ref values;
+   format-sensitive graders (the BBH lesson) were never re-checked for the
+   VM arm.
+
+**Corrected claim**: "prompted-VM with THIS implementation loses to
+prompt-tahoe on single-shot QA" — a measured, reproducible result. Whether
+VM-with-a-good-implementation (adaptive granularity, full task context,
+hybrid fallback, benchmark exemplars) loses remains OPEN. The RL framing
+(Stage 3) inherits these as design knobs, not as fatal facts.
+
+### Stage-2 verdict as originally recorded (gates FAILED)
 
 1. **Prompted-VM loses to prompt-tahoe on both axes for single-shot QA.**
    Even at near-competitive token counts, quality is far below (40% vs
    83-93%). The gap is structural: 25-word refs + step isolation lose
    holistic reasoning; the compile call adds latency and failure modes.
 2. **Structure as a SKILL inside one call (Stage 1) beats structure as an
-   EXECUTION PROTOCOL across calls (Stage 2) for single-shot tasks.**
+   EXECUTION PROTOCOL across calls (Stage 2, this implementation) for
+   single-shot tasks.**
 3. **What the VM bought anyway**: machine-verifiable episodes (30/30),
    deterministic offload, O(refs) context, and the effort dial — which is a
    per-step ACTION in RL terms. Stage 3's question is now precise: can a
