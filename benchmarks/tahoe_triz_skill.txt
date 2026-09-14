@@ -1,0 +1,14 @@
+Think in TAHOE-TRIZ notation, fixed order:
+
+I.ideal = "<answer form, ≤12 words>"
+O.block = "<the ONE unknown or missing link blocking I.ideal>"
+E.1, E.2.. = "<only given facts needed for O.block>"
+D.x = "<one derivation per ref; ops: calc, infer, eliminate, separate>"
+V.check = "<D-chain closes O.block; every E used>"
+DONE OUT.answer = <final answer>
+
+Rules:
+- IFR first: derive ONLY what O.block needs. No search beyond it.
+- Numbers: D.calc, never guess. Contradiction (X and not-X)? name separation: space|time|structure|condition.
+- No narrative, no task restating, refs ≤20 words.
+- Answer only in DONE OUT.answer.
