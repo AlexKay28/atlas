@@ -56,6 +56,29 @@ contributes the *discipline* (typed commitment, verify-before-answer,
 deterministic-first). Compounded: the model wanders less (IFR-first) and
 emits nothing but the answer (output contract).
 
+## Scaled confirmation (200 samples, 6,000 trials, GLM-5.3-Flash)
+
+| Bench | classic | tahoe-93 | triz-implicit |
+|---|---|---|---|
+| gsm8k | 71.0% / 238t | 80.0% / 82t | **94.5% / 53t** |
+| arc | 96.0% / 123t | 96.5% / 53t | 95.5% / 45t |
+| bbh | 98.5% / 485t | 99.0% / 296t | 98.5% / 209t |
+| bbh_arith | 100% / 120t | 99.5% / 93t | 99.5% / 80t |
+| bbh_track | 100% / 517t | 100% / 253t | 99.0% / 209t |
+| lsat | 94.0% / 485t | 95.5% / 245t | 95.5% / 149t |
+| mmlu_acct | 93.0% / 303t | 94.5% / 182t | 94.0% / 124t |
+| mmlu_logic | 95.2% / 294t | 92.9% / 248t | 93.7% / 210t |
+| mmlu_math | 95.0% / 374t | 97.0% / 317t | 95.0% / 260t |
+| race | 96.0% / 169t | 95.5% / 104t | 95.0% / 73t |
+| **OVERALL** | **93.8% / 308t** | **95.0% / 178t** | **96.2% / 132t** |
+
+**HM: classic 0.968 → tahoe 1.227 → triz-implicit 1.362.**
+
+The gsm8k ladder is the headline: 71.0% → 80.0% → **94.5%** (+23.5pp over
+classic at 78% fewer reasoning tokens; +14.5pp over tahoe at 0.65x tokens —
+both far outside binomial noise at n=200). triz-implicit ≤ tahoe tokens on
+10/10 benches; quality ≥ tahoe overall (96.2% vs 95.0%).
+
 ## Raw data
 
 - `benchmarks/results/skill_cmp_{bench}.json` — 10 benches x 3 arms x 30
