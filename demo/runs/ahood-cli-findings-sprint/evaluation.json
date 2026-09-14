@@ -1,0 +1,41 @@
+{
+  "task": "Resolve the 13 review findings ahood-cli#132 through #144, each as an isolated worktree branch with a PR, preserving every behaviour the existing 581 tests pin",
+  "run_id": "ahood-cli-findings-sprint",
+  "seal": "0b5042ca418e5bf9f6782644e97b49dca76db12add0648a1e8144c9dc2e5777e",
+  "terminal_status": "resolved",
+  "steps_planned": 26,
+  "steps_executed": 26,
+  "outcome": {
+    "findings_resolved": 13,
+    "prs_opened": 12,
+    "prs_merged": 12,
+    "tests": "581 -> 664",
+    "suite_order_independent": true,
+    "readme_in_sync": true
+  },
+  "acceptance": {
+    "every finding fixed with a regression test failing against pre-fix source": "met for all 13; each verified independently by the orchestrator against the branch's merge base, not merely reported",
+    "suite green and order-independent after each wave": "met; --sequence.shuffle --sequence.seed=1 green at every merge",
+    "C.regression no existing test edited to accommodate a fix": "met with two recorded exceptions, both intended interface changes rather than accommodations: update.ts's 'already up to date' fixture (it had no .mcp.json at all and was accidentally asserting the bug's state) and tagsSnap's bare-form tests (the bare form now reads)",
+    "C.risk each fix names its sibling path": "met; produced four convergences recorded in WORKLOG.md"
+  },
+  "protocol_deviations": [
+    "steps w5_snap and w6_snap were executed as ONE change (PR #156) rather than sequentially. #137 and #138 rewrite the same ~15 lines of tagsSnap and both change what the command prints, so done separately the second would have rewritten the first. They are also one problem stated twice: snap tags had no read mode and an over-eager write mode, so both asking and mistyping destroyed data. The sealed program did not anticipate this; the combination was deliberate and is recorded here rather than absorbed silently.",
+    "#141 and #144 executed a wave later than planned. The program's wave table assumed lockfile.ts fixes could be spread one per wave, but #140 needed a second commit after a CI-only failure, and branching a same-file sibling against an about-to-change base guarantees conflict. Lane serialisation dominated the schedule; a future program should express lanes as explicit dependencies rather than as a wave table that implies they are free.",
+    "#136 changed ahood skill search's behaviour, outside its issue's stated scope. skill search shared both the buggy flagValue and the buggy stripping filter, so fixing the shared helpers necessarily fixed it; leaving it inconsistent would have been worse. Flagged in the PR and pinned by a test rather than absorbed.",
+    "#134 edited src/help.ts, outside its assigned file list, to document the -- end-of-options hatch it added. usage and summary were left untouched so the README needed no regeneration. Flagged by the agent."
+  ],
+  "findings_that_corrected_the_plan": [
+    "#141 refuted the renameSync approach this orchestrator proposed in the issue: a rename is atomic but not conditional, and while the directory is renamed away the lock path is absent, so a third process can mkdir and acquire for real -- the mechanism can manufacture the two-holder state it was meant to prevent. A claim directory was used instead.",
+    "#143 corrected this orchestrator's analysis in issue #143 itself: a fingerprint-less entry is NOT handled on the readable branch via mcpEntryModified (that flag stays false, gated on recordedHash), but via !removedMcpEntry. Right conclusion, wrong mechanism, now pinned by a test.",
+    "#140's follow-up found the original regression test was VACUOUS on CI: with the pid file removed during a failed reclaim, isLockStale goes false and even unfixed source terminates at the deadline. The guard would not have guarded in the environment that runs it.",
+    "#144 found that every pre-fix version wrote its temp file beside the symlink rather than the target, so a crash stranded a plaintext-secret orphan nothing would ever collect. Not in the issue.",
+    "#134 rejected all three options this orchestrator offered and found a fourth: leftover positions must be contiguous, because a bare token is indistinguishable from a note word but content on both sides of a consumed flag is never intentional."
+  ],
+  "unresolved": [
+    "Cross-host lock safety is NOT fixed. isPidDead is host-local, so over a bind mount or NFS a live foreign holder reads as ESRCH and the reclaim executes correctly on an incorrect premise. #141 narrowed the damage (an ownership-checked release stops it cascading) but two holders are still reachable. A host identifier beside the pid would fix it; it changes the on-disk format and needs a legacy path, so it was not smuggled in. No issue filed.",
+    "A brand-new .mcp.json still lands at 0644 with secrets in it -- the open posture question from #119, deliberately untouched by #144.",
+    "18 of the 30 candidates raised by the review run were never individually re-derived and remain neither confirmed nor refuted. Only the 13 filed findings carry evidentiary weight."
+  ],
+  "artifacts": ["program.think", "seal.txt", "WORKLOG.md", "solution.md", "evaluation.json"]
+}
