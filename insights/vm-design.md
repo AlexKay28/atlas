@@ -1,7 +1,14 @@
 # TAHOE-VM Design: Model as Compiler + Executor of Its Own Program
 
-> Design locked 2026-09-14 after brainstorm + deep search. Implementation
-> target: src/tahoe/vm_mode/ + benchmarks/run_vm_bench.py.
+> **STATUS (2026-09-14): SHELVED after Stage-2 pilot.** The mechanism works
+> (episodes execute, deterministic offload, folding, trajectories) but
+> prompted-VM loses to prompt-tahoe on both axes for single-shot QA
+> (40% vs 83-93% quality at 1.9-3.4x tokens). Full verdict + tuning table:
+> docs/TAHOE_VM.md §6. Kept as: (a) documented negative result for the paper,
+> (b) ready-made RL infrastructure for Stage 3 if revived — trajectories are
+> machine-labeled by DONE predicates, effort is a per-step action.
+> Design locked 2026-09-14 after brainstorm + deep search. Implementation:
+> src/tahoe/vm_mode/ + benchmarks/run_vm_bench.py.
 
 ## The architecture
 
