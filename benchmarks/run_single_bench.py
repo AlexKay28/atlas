@@ -211,6 +211,8 @@ def main():
 
     bench_name = sys.argv[1]
     n_samples = int(sys.argv[2]) if len(sys.argv) > 2 else 200
+    if str(sys.argv[2]) == "all":
+        n_samples = 999999  # will be capped by dataset size
 
     print(f"Loading {bench_name} ({n_samples} samples)...", flush=True)
     tasks = load_single_benchmark(bench_name, n_samples)
