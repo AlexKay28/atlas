@@ -72,6 +72,7 @@ def run(
     tools: list[dict] | None = None,
     tool_implementations: dict[str, Callable[..., Any]] | None = None,
     system_prompt: str = "",
+    extra_body: dict[str, Any] | None = None,
 ) -> ClassicResult:
     """Run one task through a plain chat-completions loop and return a ClassicResult."""
     resolved_key = api_key or os.environ.get(ENV_API_KEY, "")
@@ -103,6 +104,8 @@ def run(
     }
     if tools:
         request_kwargs["tools"] = tools
+    if extra_body:
+        request_kwargs["extra_body"] = extra_body
 
     implementations = tool_implementations or {}
     input_tokens = 0

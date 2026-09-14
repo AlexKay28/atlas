@@ -72,3 +72,26 @@ GATE 1: VM tokens ≤ prompt-tahoe tokens on ≥2 of 3 pilot benches
 GATE 2: context growth O(refs), not O(history) — measured, not assumed
 If either fails → redesign (batching, program size, prefix shape) — not thresholds.
 ```
+
+## Measured fix (2026-09-14): reasoning_effort kills the thinking burn
+
+Token anatomy on a lean gsm8k episode (compile + 1 step): compile burned
+955 output tokens (hidden reasoning solving the task it was only supposed to
+structure), step subcall 133. The A/B on 10 gsm8k episodes (GLM-5.3-Flash):
+
+| Config | Episodes OK | Passed | avg in | avg out | wall/ep |
+|---|---|---|---|---|---|
+| no effort param | 9/10 | 5/10 | 1,216 | 2,655 | 13.2s |
+| **reasoning_effort=low (steps + compile)** | 7/10 | **5/10** | **948** | **300** | **1.9s** |
+| step=low, compile=default | 4/10 | 4/10 | 729 | 440 | 2.5s |
+
+**8.9x output-token reduction at identical pass rate, 7x faster.** The
+`reasoning_effort` API param (2026-standard, verified live on Eliza GLM:
+30 → 6 completion tokens on trivial queries) is the single biggest
+prompted-VM cost lever. Stage-3 RL can treat effort as a per-step action:
+the policy learns which steps deserve thinking.
+
+Remaining gap vs prompt-tahoe (70 out tokens on gsm8k): VM/low ≈ 4.3x —
+the compile call floor (~300-400 out even at low effort) is the irreducible
+per-episode cost. Need-trigger routing (Stage 3) decides when that floor
+buys enough verifiability to be worth it.

@@ -31,8 +31,13 @@ TRIALS_PER_TASK = 1  # VM is deterministic-ish per program; pilot budget-friendl
 SEED = 42
 
 
-def vm_call_model(system: str, user: str, max_tokens: int):
-    """Adapter: VM subcalls ride the same endpoint as the other arms."""
+def vm_call_model(system: str, user: str, max_tokens: int, effort: str = ""):
+    """Adapter: VM subcalls ride the same endpoint as the other arms.
+
+    Step subcalls are trivial queries — reasoning_effort=low cuts the
+    thinking burn (verified: 30 -> 6 completion tokens on trivial queries).
+    """
+    extra = {"reasoning_effort": effort} if effort else None
     result = run_classic(
         task_id="vm-subcall",
         task_prompt=user,
@@ -43,6 +48,7 @@ def vm_call_model(system: str, user: str, max_tokens: int):
         max_tokens=max_tokens,
         timeout_seconds=90,
         system_prompt=system,
+        extra_body=extra,
     )
     return result.final_answer, result.input_tokens, result.output_tokens
 

@@ -165,6 +165,7 @@ class VMResult:
     wall_seconds: float = 0.0
     program_text: str = ""
     steps: list[StepRecord] = field(default_factory=list)
+    call_log: list[dict] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -186,6 +187,7 @@ class VMResult:
             "wall_seconds": self.wall_seconds,
             "program_text": self.program_text,
             "steps": [s.to_dict() for s in self.steps],
+            "call_log": self.call_log,
         }
 
 
@@ -194,12 +196,13 @@ class VMExecutor:
 
     def __init__(
         self,
-        call_model: Callable[[str, str, int], tuple[str, int, int]],
+        call_model: Callable[..., tuple[str, int, int]],
         max_llm_steps: int = 12,
         max_compile_attempts: int = 3,
         step_retries: int = 1,
         max_tokens: int = 512,
         compile_max_tokens: int = 1500,
+        step_effort: str = "",
     ):
         """
         call_model(system, user, max_tokens) -> (text, input_tokens, output_tokens).
@@ -213,15 +216,22 @@ class VMExecutor:
         self._step_retries = step_retries
         self._max_tokens = max_tokens
         self._compile_max_tokens = compile_max_tokens
+        self._step_effort = step_effort
 
     # -- token/call bookkeeping ------------------------------------------------
 
-    def _invoke(self, result: VMResult, system: str, user: str, max_tokens: int | None = None) -> str:
+    def _invoke(self, result: VMResult, system: str, user: str, max_tokens: int | None = None,
+                phase: str = "call") -> str:
         budget = max_tokens or self._max_tokens
-        text, in_tok, out_tok = self._call(system, user, budget)
+        try:
+            text, in_tok, out_tok = self._call(system, user, budget, effort=self._step_effort) if phase.startswith("step") and self._step_effort else self._call(system, user, budget)
+        except TypeError:
+            text, in_tok, out_tok = self._call(system, user, budget)
         result.llm_input_tokens += in_tok
         result.llm_output_tokens += out_tok
         result.llm_calls += 1
+        result.call_log.append({"phase": phase, "input_tokens": in_tok,
+                                "output_tokens": out_tok, "budget": budget, "empty": not text.strip()})
         if not text.strip():
             # thinking models can exhaust the budget on reasoning and return
             # empty content — one retry with the same budget
@@ -229,6 +239,8 @@ class VMExecutor:
             result.llm_input_tokens += in_tok
             result.llm_output_tokens += out_tok
             result.llm_calls += 1
+            result.call_log.append({"phase": phase + ":retry", "input_tokens": in_tok,
+                                    "output_tokens": out_tok, "budget": budget, "empty": not text.strip()})
         return text
 
     # -- compile phase -----------------------------------------------------------
@@ -244,7 +256,7 @@ class VMExecutor:
                     f"TASK: {task[:1200]}\n\nPREVIOUS PROGRAM:\n{result.program_text[:2000]}\n\n"
                     f"PARSE ERROR: {last_error}"
                 )
-            text = self._invoke(result, system, user, max_tokens=self._compile_max_tokens)
+            text = self._invoke(result, system, user, max_tokens=self._compile_max_tokens, phase="compile")
             result.program_text = text.strip()
             cleaned = self._normalize(self._strip_fences(result.program_text))
             try:
@@ -420,8 +432,7 @@ class VMExecutor:
             step_line = self._render_invocation(invocation)
             refs_text = self._ref_slice(store, self._needed_refs(invocation.args))
             user = f"{step_line}\n\nrefs:\n{refs_text}\n\ntask context: {task[:400]}"
-            text = self._invoke(result, INTERPRETER_SYSTEM, user)
-            record.input_tokens = 0  # already aggregated on result
+            text = self._invoke(result, INTERPRETER_SYSTEM, user, phase=f"step:{invocation.step_id}")
             value = self._parse_step_output(text, invocation.targets)
             retries = 0
             while value is None and retries < self._step_retries:
