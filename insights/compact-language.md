@@ -86,3 +86,44 @@ both far outside binomial noise at n=200). triz-implicit ≤ tahoe tokens on
   vs classic with flat quality; results/prompt_ablation.json
 - Explicit-TRIZ failure evidence: skill_cmp gsm8k/lsat runs (overwritten by
   the implicit run on gsm8k; lsat explicit run in git history 833e987^)
+
+## ⚠️ CORRECTION (2026-09-14, post-scale): the quality ladders were extraction artifacts
+
+After the 200-sample run I audited the gsm8k grader and found the v1 number
+extractor split thousands/LaTeX-formatted numbers ('1{,}430' → '430',
+'2\,000' → '000'), failing ~13-27% of classic-arm answers that were actually
+CORRECT (21 of 22 "rescued" tasks had the right number buried in LaTeX prose).
+Same disease as the BBH '(X)' bug — the third grader-format lesson this
+project has produced.
+
+v3 extractor (priority: #### → boxed → LAST bold span → 'answer is' → last
+separator-aware number) installed arm-agnostically; full gsm8k re-runs:
+
+| Arm | GLM gsm8k | GLM out | oss gsm8k | oss out |
+|---|---|---|---|---|
+| classic | **91.0%** | 235 | **87.0%** | 304 |
+| tahoe-93 | 95.5% | 83 | 93.0% | 121 |
+| triz-implicit | 95.5% | **63** | 92.5% | 118 |
+
+### Corrected honest claims (what survives)
+
+1. **Token savings are the robust result**: −62/−73% (GLM gsm8k), −60/−61%
+   (oss), −42-57% overall across benches. Direction holds on every bench,
+   both models.
+2. **Quality gains are real but modest**: +4.5-6pp on gsm8k, +0.4-0.8pp
+   overall (GLM, within-noise on most benches). NOT +23.5pp.
+3. **The compound language ≈ plain tahoe on quality** (95.5 vs 95.5 GLM
+   gsm8k; overall 96.3 vs 96.7 pre-correction) at −18-26% fewer tokens than
+   tahoe. IFR-first bounding is a token lever, not a quality lever.
+4. The earlier "+23.5pp ladder" and "HM 1.362" headlines are RETRACTED —
+   they compared clean-format skill outputs against broken-extraction classic
+   outputs.
+5. The law (shape thought, never constrain output) still stands — the
+   explicit-TRIZ LSAT collapse (7/30) was quality-real, not extraction.
+6. Every numeric-bench comparison in this project must carry the v3 grader
+   going forward. Stage-1 full-eval gsm8k row also corrected offline
+   (classic 68.5%, tahoe 80.3%).
+
+The meta-lesson, three occurrences deep: **when one arm answers in a
+different FORMAT than another, the grader is part of the experiment.** Audit
+extraction on raw outputs from EVERY arm before believing any cross-arm delta.

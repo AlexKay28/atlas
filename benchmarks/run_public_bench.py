@@ -133,27 +133,51 @@ def extract_gsm8k_gold(answer_text):
     return match.group(1).replace(',', '') if match else ""
 
 
+_SEP_NUM_RE = r"-?\d{1,3}(?:[,\u202f ]\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?"
+
+
 def extract_model_number(text):
     """Extract a number from model output — same for both arms.
 
-    Strategy (frozen, matches common eval harnesses for GSM8K):
-    1. Look for #### N pattern
-    2. Look for 'answer is N' / 'total: N' / 'N.' at start of short answer
-    3. Fallback: last number in the text
+    v3 (grader-format fix, arm-agnostic). Priority order:
+    1. #### N          (official GSM8K marker)
+    2. \\boxed{...}    (nested-brace tolerant)
+    3. LAST bold span  (**Answer: $12** / **It takes 5 hours**)
+    4. 'answer is N' / 'total = N' (last occurrence)
+    5. last separator-aware number
+    Handles '1{,}430', '2\\,000', '$2,180', thin spaces. v1 split formatted
+    numbers ('1,430' -> '430'); v2 broke on brace-stripping order — both
+    under-credited verbose LaTeX answers (the BBH lesson, again).
     """
-    text = text.strip()
-    match = re.search(r'####\s*([\d,]+)', text)
+    text = str(text).strip()
+    match = re.search(r"####\s*([\d,]+)", text)
     if match:
-        return match.group(1).replace(',', '')
-    if len(text) < 60:
-        match = re.match(r'^\$?([\d,]+\.?\d*)', text)
-        if match:
-            return match.group(1).replace(',', '')
-    match = re.search(r'(?:answer|result|total)\s*(?:is|=|:)\s*\$?([\d,]+)', text, re.I)
-    if match:
-        return match.group(1).replace(',', '')
-    nums = re.findall(r'-?\d+', text)
-    return nums[-1] if nums else text
+        return match.group(1).replace(",", "")
+    sep = _SEP_NUM_RE
+    boxed = re.search(r"\\boxed\{((?:[^{}]|\{[^{}]*\})*)\}", text)
+    if boxed:
+        nums = re.findall(sep, boxed.group(1))
+        if nums:
+            return nums[-1].replace(",", "").replace("\u202f", "")
+    norm = (
+        text.replace("\\,", "")
+        .replace("\\ ", "")
+        .replace("\u202f", " ")
+        .replace("$", "")
+    )
+    bolds = re.findall(r"\*\*([^*]+)\*\*", norm)
+    if bolds:
+        nums = re.findall(sep, bolds[-1])
+        if nums:
+            return nums[-1].replace(",", "")
+    matches = re.findall(
+        r"(?:answer|result|total)\s*(?:is|=|:)\s*(" + sep + r")", norm, re.I)
+    if matches:
+        return matches[-1].replace(",", "")
+    nums = re.findall(sep, norm)
+    if nums:
+        return nums[-1].replace(",", "")
+    return norm[:50]
 
 
 def grade_gsm8k(model_answer, expected_answer):

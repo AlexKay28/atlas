@@ -27,25 +27,38 @@ def load_skills(names):
 
 def _worker(args):
     task, arm, prompt = args
-    t0 = time.time()
-    try:
-        r = run_classic(
-            task_id=task["task_id"], task_prompt=task["description"],
-            model=os.environ.get("TAHOE_MODEL", "."), api_base=os.environ.get("TAHOE_API_BASE", ""),
-            api_key=os.environ.get("TAHOE_API_KEY", ""), max_turns=1, max_tokens=2048,
-            timeout_seconds=60, system_prompt=prompt,
-            extra_body={"reasoning_effort": os.environ.get("ARM_EFFORT", "")} if os.environ.get("ARM_EFFORT") else None,
-        )
-        passed, detail = grade_task(task, r.final_answer)
-        return {"task_id": task["task_id"], "benchmark": task["benchmark"], "arm": arm,
-                "passed": passed, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
-                "wall_seconds": time.time() - t0, "final_answer": r.final_answer,
-                "grader_detail": detail}
-    except Exception as e:
-        return {"task_id": task["task_id"], "benchmark": task["benchmark"], "arm": arm,
-                "passed": False, "input_tokens": 0, "output_tokens": 0,
-                "wall_seconds": time.time() - t0, "final_answer": f"ERROR: {e}",
-                "grader_detail": str(e)}
+    max_retries = 5
+    for attempt in range(max_retries):
+        t0 = time.time()
+        try:
+            r = run_classic(
+                task_id=task["task_id"], task_prompt=task["description"],
+                model=os.environ.get("TAHOE_MODEL", "."), api_base=os.environ.get("TAHOE_API_BASE", ""),
+                api_key=os.environ.get("TAHOE_API_KEY", ""), max_turns=1, max_tokens=2048,
+                timeout_seconds=60, system_prompt=prompt,
+                extra_body={"reasoning_effort": os.environ.get("ARM_EFFORT", "")} if os.environ.get("ARM_EFFORT") else None,
+            )
+            # retry on rate-limit symptoms: empty answer with 0 tokens
+            if r.output_tokens == 0 and not r.final_answer.strip() and attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            passed, detail = grade_task(task, r.final_answer)
+            return {"task_id": task["task_id"], "benchmark": task["benchmark"], "arm": arm,
+                    "passed": passed, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
+                    "wall_seconds": time.time() - t0, "final_answer": r.final_answer,
+                    "grader_detail": detail}
+        except Exception as e:
+            msg = str(e)
+            if ("429" in msg or "inflight" in msg or "rate" in msg.lower()) and attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            return {"task_id": task["task_id"], "benchmark": task["benchmark"], "arm": arm,
+                    "passed": False, "input_tokens": 0, "output_tokens": 0,
+                    "wall_seconds": time.time() - t0, "final_answer": f"ERROR: {e}",
+                    "grader_detail": msg}
+    return {"task_id": task["task_id"], "benchmark": task["benchmark"], "arm": arm,
+            "passed": False, "input_tokens": 0, "output_tokens": 0, "wall_seconds": 0.0,
+            "final_answer": "ERROR: retries exhausted", "grader_detail": "rate limited"}
 
 
 def main():
