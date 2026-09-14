@@ -142,6 +142,39 @@ prompt text.
 
 ## 6. Pilot results (2026-09-14, GLM-5.3-Flash, 30 samples/arm)
 
+### The effort dial (measured trade-off)
+
+`reasoning_effort` per phase turned out to be the dominant cost lever — and it
+exposes a clean quality-vs-tokens dial:
+
+| Config | gsm8k pass | gsm8k out | lsat pass | lsat out | lsat episodes OK |
+|---|---|---|---|---|---|
+| full effort (no param) | 60% | 2,649 | 50% | 2,160 | 18/30 |
+| low everywhere (final) | 40% | **230** | 40% | **497** | **30/30** |
+| prompt-tahoe (reference) | **83%** | **67** | **93%** | **267** | — |
+
+Two engineering bugs found and fixed on the way: step retries lost their
+phase tag (burned full-effort thinking), and compile never received the
+effort param. After fixes: VM episodes execute 30/30 on LSAT, 59 deterministic
+zero-token arithmetic steps on gsm8k, output tokens 1.9-3.4x prompt-tahoe
+(was 21-41x).
+
+### Final Stage-2 verdict: gates FAILED — negative result, cleanly characterized
+
+1. **Prompted-VM loses to prompt-tahoe on both axes for single-shot QA.**
+   Even at near-competitive token counts, quality is far below (40% vs
+   83-93%). The gap is structural: 25-word refs + step isolation lose
+   holistic reasoning; the compile call adds latency and failure modes.
+2. **Structure as a SKILL inside one call (Stage 1) beats structure as an
+   EXECUTION PROTOCOL across calls (Stage 2) for single-shot tasks.**
+3. **What the VM bought anyway**: machine-verifiable episodes (30/30),
+   deterministic offload, O(refs) context, and the effort dial — which is a
+   per-step ACTION in RL terms. Stage 3's question is now precise: can a
+   learned policy (routing + granularity + effort per step) recover Stage-1
+   quality while keeping Stage-2 verifiability? SR²AM's System III result
+   (2026) says gating is learnable; nobody has done it over a typed program.
+
+
 | Bench | Arm | Pass | In tok | Out tok | Episodes OK |
 |---|---|---|---|---|---|
 | gsm8k | classic | 63% | 69 | 202 | — |
