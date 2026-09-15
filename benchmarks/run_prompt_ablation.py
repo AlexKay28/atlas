@@ -43,10 +43,10 @@ SEED = 42
 
 PROMPT_FILES = {
     "classic": None,
-    "50": "tahoe_skill_50.txt",
-    "93": "tahoe_skill_prompt.txt",
-    "150": "tahoe_skill_150.txt",
-    "200": "tahoe_skill_200.txt",
+    "50": "tahoe-50.txt",
+    "93": "tahoe-93.txt",
+    "150": "tahoe-150.txt",
+    "200": "tahoe-200.txt",
 }
 
 PROMPT_TOKEN_ESTIMATES = {
@@ -63,14 +63,14 @@ PROMPT_TOKEN_ESTIMATES = {
 def load_prompt(arm: str) -> str:
     """Load the system prompt for a given ablation arm.
 
-    Returns "" for the classic arm (no prompt).
+    Returns "" for the classic arm (no prompt). Resolves through
+    prompt_paths (language/skills + variants).
     """
     filename = PROMPT_FILES.get(arm)
     if filename is None:
         return ""
-    path = os.path.join(os.path.dirname(__file__), filename)
-    with open(path) as f:
-        return f.read()
+    from prompt_paths import resolve_prompt
+    return resolve_prompt(filename).read_text()
 
 
 def load_all_prompts() -> dict:

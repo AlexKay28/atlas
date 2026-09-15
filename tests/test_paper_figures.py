@@ -14,7 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 PAPER_DIR = ROOT / "paper"
 SCRIPT = PAPER_DIR / "generate_figures.py"
-DATA_PATH = ROOT / "benchmarks" / "results" / "public_benchmarks.json"
+DATA_PATH = ROOT / "benchmarks" / "results" / "2026-09-13-stage1-full" / "full_test_eval.json"
 FIG_DIR = PAPER_DIR / "figures"
 
 
@@ -38,7 +38,7 @@ def test_data_file_exists():
 def test_load_data():
     mod = _import_module()
     records = mod.load_data(DATA_PATH)
-    assert len(records) == 600, f"Expected 600 trials, got {len(records)}"
+    assert len(records) == 31524, f"Expected 31524 trials, got {len(records)}"
     arms = {r["arm"] for r in records}
     assert arms == {"classic", "tahoe"}
 

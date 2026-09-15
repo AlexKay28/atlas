@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate PDF figures for the TAHOE arxiv paper (issue #92).
 
-Reads benchmarks/results/public_benchmarks.json (600-trial data)
+Reads benchmarks/results/2026-09-13-stage1-full/full_test_eval.json (corrected full-test-set data)
 and produces four PDF figures in paper/figures/:
 
   Figure 1 — Quality vs Output-Token-Ratio scatter (classic vs tahoe)
@@ -31,7 +31,7 @@ except ImportError:
     HAS_MPL = False
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_PATH = ROOT / "benchmarks" / "results" / "public_benchmarks.json"
+DATA_PATH = ROOT / "benchmarks" / "results" / "2026-09-13-stage1-full" / "full_test_eval.json"
 FIG_DIR = ROOT / "paper" / "figures"
 
 BENCH_LABELS = {

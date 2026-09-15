@@ -31,16 +31,18 @@ from runner_classic import run as run_classic
 from report import generate_markdown_table, generate_json_report, generate_per_task_comparison
 from metrics import compute_all_metrics, count_typed_refs
 
-SKILL_PATH = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
+from prompt_paths import resolve_prompt
+
+SKILL_PATH = str(resolve_prompt("tahoe"))
 
 # Baseline prompt file paths — each arm maps to a prompt file in benchmarks/
 ARM_PROMPT_FILES = {
     "classic": None,  # no system prompt
-    "tahoe": "tahoe_skill_prompt.txt",
-    "cot": "cot_prompt.txt",
-    "cod": "cod_prompt.txt",
-    "tot": "tot_prompt.txt",
-    "react": "react_prompt.txt",
+    "tahoe": "tahoe-93.txt",
+    "cot": "cot.txt",
+    "cod": "cod.txt",
+    "tot": "tot.txt",
+    "react": "react.txt",
 }
 
 DEFAULT_ARMS = ["classic", "tahoe"]
@@ -70,7 +72,8 @@ def load_arm_prompt(arm, prompt_cache=None):
     if prompt_file is None:
         text = ""
     else:
-        path = os.path.join(os.path.dirname(__file__), prompt_file)
+        from prompt_paths import resolve_prompt
+        path = resolve_prompt(prompt_file)
         with open(path) as f:
             text = f.read()
     if prompt_cache is not None:
@@ -570,7 +573,8 @@ def main():
     print(" | ".join(parts))
 
     # Save
-    results_dir = Path(__file__).parent / "results"
+    from outdir import make_run_dir
+    results_dir = make_run_dir("public-bench")
     results_dir.mkdir(parents=True, exist_ok=True)
     with open(results_dir / "public_benchmarks.json", "w") as f:
         json.dump(all_trials, f, indent=2, sort_keys=True)

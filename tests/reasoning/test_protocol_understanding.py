@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "benchmar
 from runner_classic import run as run_classic
 
 SKILL_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "benchmarks", "tahoe_skill_prompt.txt"
+    os.path.dirname(__file__), "..", "..", "language", "skills", "tahoe-93.txt"
 )
 
 SKIP_REASON = "Set TAHOE_API_BASE and TAHOE_API_KEY to run reasoning tests"

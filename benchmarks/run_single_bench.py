@@ -291,9 +291,9 @@ def main():
     print(f"  Token savings: {100*(1-to/co):.0f}%" if co > 0 else "")
 
     # Save
-    results_dir = Path(__file__).parent / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
-    out_file = results_dir / f"single_{bench_name}.json"
+    from outdir import make_run_dir
+    out_dir = make_run_dir(f"single-{bench_name}")
+    out_file = out_dir / "trials.json"
     with open(out_file, "w") as f:
         json.dump(all_trials, f, indent=2, sort_keys=True)
     print(f"\nResults saved to {out_file}", flush=True)

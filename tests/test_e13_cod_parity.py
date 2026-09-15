@@ -141,16 +141,16 @@ def test_arms_env_override_two_arms():
 
 
 def test_cod_prompt_exists():
-    assert (_BENCH_DIR / "cod_prompt.txt").exists()
+    assert (_BENCH_DIR.parent / "language" / "baselines" / "cod.txt").exists()
 
 
 def test_cod_prompt_nonempty():
-    content = (_BENCH_DIR / "cod_prompt.txt").read_text().strip()
+    content = (_BENCH_DIR.parent / "language" / "baselines" / "cod.txt").read_text().strip()
     assert len(content) > 10
 
 
 def test_cod_prompt_mentions_concise_or_brief():
-    content = (_BENCH_DIR / "cod_prompt.txt").read_text().lower()
+    content = (_BENCH_DIR.parent / "language" / "baselines" / "cod.txt").read_text().lower()
     assert any(w in content for w in ("concise", "brief", "minimal", "bullet"))
 
 

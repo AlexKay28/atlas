@@ -18,10 +18,12 @@ from runner_classic import run as run_classic
 
 
 def load_skills(names):
+    from prompt_paths import resolve_prompt, PROMPT_FILES
     arms = [("classic", "")]
     for n in names:
-        path = Path(__file__).parent / n
-        arms.append((n.replace("tahoe_", "").replace(".txt", "").replace("_skill", ""), path.read_text()))
+        path = resolve_prompt(n)
+        label = n.replace("tahoe_", "").replace(".txt", "").replace("_skill", "").replace("triz-implicit-", "triz-")
+        arms.append((PROMPT_FILES.get(n, label), path.read_text()))
     return arms
 
 
@@ -64,7 +66,7 @@ def _worker(args):
 def main():
     bench = sys.argv[1] if len(sys.argv) > 1 else "gsm8k"
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 30
-    skills = sys.argv[3:] if len(sys.argv) > 3 else ["tahoe_skill_prompt.txt", "tahoe_triz_skill.txt"]
+    skills = sys.argv[3:] if len(sys.argv) > 3 else ["tahoe-93.txt", "triz-implicit.txt"]
     workers = int(os.environ.get("N_WORKERS", "6"))
 
     tasks = load_single_benchmark(bench, n)
@@ -105,8 +107,9 @@ def main():
         t, s = stats["skill_prompt"], stats["triz"]
         print(f"triz vs tahoe:   quality {100*(s['pass']-t['pass']):+.1f}pp, out tokens {s['out']/t['out']:.2f}x")
 
-    out_dir = Path(__file__).parent / "results"
-    out_file = out_dir / f"skill_cmp_{bench}.json"
+    from outdir import make_run_dir
+    out_dir = make_run_dir(f"skill-cmp-{bench}")
+    out_file = out_dir / "trials.json"
     with open(out_file, "w") as f:
         json.dump(trials, f, indent=2)
     print(f"\nSaved to {out_file}")

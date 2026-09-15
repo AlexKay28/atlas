@@ -28,6 +28,12 @@ sys.path.insert(0, str(_BENCH_DIR))
 sys.path.insert(0, str(_BENCH_DIR.parent / "src"))
 
 
+def _LANG_SKILLS(name):
+    base = _BENCH_DIR.parent / "language" / "skills"
+    candidate = base / name
+    return candidate if candidate.exists() else base / "variants" / name
+
+
 def _load_ablation_module():
     import benchmarks.run_prompt_ablation as mod
     return mod
@@ -36,13 +42,13 @@ def _load_ablation_module():
 # -- 1. Prompt files exist and are non-empty ------------------------------
 
 @pytest.mark.parametrize("filename", [
-    "tahoe_skill_50.txt",
-    "tahoe_skill_prompt.txt",
-    "tahoe_skill_150.txt",
-    "tahoe_skill_200.txt",
+    "tahoe-50.txt",
+    "tahoe-93.txt",
+    "tahoe-150.txt",
+    "tahoe-200.txt",
 ])
 def test_prompt_file_exists_and_nonempty(filename):
-    path = _BENCH_DIR / filename
+    path = _LANG_SKILLS(filename)
     assert path.exists(), f"Missing prompt file: {filename}"
     content = path.read_text().strip()
     assert len(content) > 10, f"Prompt file {filename} is too short"
@@ -52,12 +58,12 @@ def test_prompt_file_exists_and_nonempty(filename):
 
 def test_prompt_sizes_are_monotonically_increasing():
     files = [
-        "tahoe_skill_50.txt",
-        "tahoe_skill_prompt.txt",
-        "tahoe_skill_150.txt",
-        "tahoe_skill_200.txt",
+        "tahoe-50.txt",
+        "tahoe-93.txt",
+        "tahoe-150.txt",
+        "tahoe-200.txt",
     ]
-    sizes = [len((_BENCH_DIR / f).read_text()) for f in files]
+    sizes = [len((_LANG_SKILLS(f)).read_text()) for f in files]
     for i in range(len(sizes) - 1):
         assert sizes[i] < sizes[i + 1], (
             f"Prompt {files[i]} ({sizes[i]} chars) should be shorter than "
@@ -84,7 +90,7 @@ def test_prompt_files_classic_is_none():
 
 def test_prompt_files_93_points_to_production_skill():
     mod = _load_ablation_module()
-    assert mod.PROMPT_FILES["93"] == "tahoe_skill_prompt.txt"
+    assert mod.PROMPT_FILES["93"] == "tahoe-93.txt"
 
 
 def test_prompt_token_estimates_match_arms():

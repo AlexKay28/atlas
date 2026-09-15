@@ -1,0 +1,126 @@
+{
+  "experiment": "E1_notation_efficiency",
+  "snippets": [
+    {
+      "id": "arith_1",
+      "category": "arithmetic",
+      "description": "Add two numbers and check parity",
+      "tokens": {
+        "verbose_english": 18,
+        "tahoe_typed_refs": 15,
+        "minimal_symbols": 9
+      }
+    },
+    {
+      "id": "arith_2",
+      "category": "arithmetic",
+      "description": "Multiply and compare to threshold",
+      "tokens": {
+        "verbose_english": 21,
+        "tahoe_typed_refs": 22,
+        "minimal_symbols": 13
+      }
+    },
+    {
+      "id": "logic_1",
+      "category": "logical_deduction",
+      "description": "Modus ponens",
+      "tokens": {
+        "verbose_english": 15,
+        "tahoe_typed_refs": 27,
+        "minimal_symbols": 21
+      }
+    },
+    {
+      "id": "logic_2",
+      "category": "logical_deduction",
+      "description": "Contrapositive reasoning",
+      "tokens": {
+        "verbose_english": 21,
+        "tahoe_typed_refs": 26,
+        "minimal_symbols": 15
+      }
+    },
+    {
+      "id": "plan_1",
+      "category": "planning",
+      "description": "Two-step plan with dependency",
+      "tokens": {
+        "verbose_english": 25,
+        "tahoe_typed_refs": 26,
+        "minimal_symbols": 12
+      }
+    },
+    {
+      "id": "plan_2",
+      "category": "planning",
+      "description": "Conditional branching plan",
+      "tokens": {
+        "verbose_english": 25,
+        "tahoe_typed_refs": 34,
+        "minimal_symbols": 15
+      }
+    },
+    {
+      "id": "select_1",
+      "category": "selection",
+      "description": "Choose the maximum of three values",
+      "tokens": {
+        "verbose_english": 23,
+        "tahoe_typed_refs": 30,
+        "minimal_symbols": 19
+      }
+    },
+    {
+      "id": "select_2",
+      "category": "selection",
+      "description": "Filter a list by predicate",
+      "tokens": {
+        "verbose_english": 18,
+        "tahoe_typed_refs": 26,
+        "minimal_symbols": 12
+      }
+    },
+    {
+      "id": "multi_1",
+      "category": "multi_step_reasoning",
+      "description": "Transitive dependency chain",
+      "tokens": {
+        "verbose_english": 31,
+        "tahoe_typed_refs": 37,
+        "minimal_symbols": 22
+      }
+    },
+    {
+      "id": "multi_2",
+      "category": "multi_step_reasoning",
+      "description": "Iterative refinement until convergence",
+      "tokens": {
+        "verbose_english": 27,
+        "tahoe_typed_refs": 45,
+        "minimal_symbols": 23
+      }
+    }
+  ],
+  "totals": {
+    "verbose_english": 224,
+    "tahoe_typed_refs": 288,
+    "minimal_symbols": 161
+  },
+  "averages": {
+    "verbose_english": 22.4,
+    "tahoe_typed_refs": 28.8,
+    "minimal_symbols": 16.1
+  },
+  "ratios": {
+    "verbose_english": {
+      "vs_verbose": 1.0
+    },
+    "tahoe_typed_refs": {
+      "vs_verbose": 1.2857
+    },
+    "minimal_symbols": {
+      "vs_verbose": 0.7188
+    }
+  }
+}

@@ -1,35 +1,52 @@
-# Eval Pilot — Protocol A/B Evaluation Scaffolding (issue #47, methodology #50)
+# Benchmarks & Evaluation
 
-This directory contains the configuration for the first Tier-B pilot run
-of the Tikhon protocol A/B evaluation.
+Evaluation infrastructure for the TAHOE language. Protocol invariants and
+token-accounting rules: `EVAL_PROTOCOL.md`. Research journal: `../insights/`.
+Durable results summary: `../docs/EVALUATION.md`.
 
-## Contents
+## Canonical entry points
 
-- `arms.yaml` — arms 1 (react baseline) and 4 (tikhon core) per #50 section 4
-- `tau-bench-retail.yaml` — tau-bench retail subset manifest stub (placeholder task IDs)
-- `custom-battery.yaml` — 3 deterministic tasks with fake workers proving the runner end-to-end
+| Runner | Purpose | Writes to |
+|---|---|---|
+| `run_skill_compare.py` | **Canonical** single-call arm comparison (any prompt arms, one benchmark, parallel). Prompts resolve by name via `prompt_paths.py` from `language/`. | `results/runs/<ts>_skill-cmp-<bench>/trials.json` |
+| `run_single_bench.py` | One benchmark, classic-vs-tahoe, parallel; supports full test sets (`all` or N). | `results/runs/<ts>_single-<bench>/trials.json` |
+| `run_parallel_bench.py` | All benchmarks + bootstrap CIs + permutation tests (`MAX_SAMPLES`, `BENCH_ARMS` env). | `results/runs/<ts>_public-bench/` |
+| `run_public_bench.py` | Original frozen-protocol runner (sequential). | `results/runs/<ts>_public-bench/` |
+| `run_prompt_ablation.py` | Skill-size ablation (5 arms). | `results/` |
+| `run_vm_bench.py` | TAHOE-VM pilot (shelved branch — see `../docs/TAHOE_VM.md`). | `results/` |
+| `run_e1_notation.py`, `run_e13_cod_parity.py`, `run_multiturn_bench.py`, `run_trials.py` | Earlier experiments (frozen, reference). | `results/` |
 
-## How to run
+**Never write to a fixed filename at the results root.** Active runners use
+`outdir.make_run_dir()` (timestamped `results/runs/<UTC-stamp>_<name>/`); set
+`RUN_TAG` to label, `RESULTS_ROOT` to relocate. At the end of a study, freeze
+its directory into a dated study folder under `results/` (see
+`results/README.md` for the index).
 
-### Scaffold (deterministic, no live model)
+## Shared modules
+
+- `prompt_paths.py` — resolves prompts from `language/skills` (+ `variants/`)
+  and `language/baselines`; legacy filenames alias to canonical names.
+- `runner_classic.py` — the single-call inference arm (OpenAI-compatible,
+  `extra_body` passthrough for `reasoning_effort` etc.).
+- `graders.py`, `stats.py`, `metrics.py`, `report.py`, `token_proxy.py`
+- `outdir.py` — run-directory helper.
+
+## Environment
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests/test_eval.py -q
+export TAHOE_API_BASE=...   # OpenAI-compatible endpoint
+export TAHOE_API_KEY=...
+export TAHOE_MODEL="."      # model id as required by the endpoint
+export SSL_CERT_FILE=...    # if corporate CA
+export TAHOE_API_POOL=...   # quota pool header
+export N_WORKERS=6          # parallel workers (respect endpoint inflight quota!)
 ```
 
-### Live smoke (orchestrator post-merge with TIKHON_* env)
+## Grading rules (hard-won, three incidents)
 
-```bash
-PYTHONPATH=src TIKHON_WORKER_TRANSPORT=http TIKHON_MODEL=glm-5-2 \
-  TIKHON_API_BASE=https://api.example.com TIKHON_API_KEY=$KEY \
-  python3 -c "
-from tikhon.eval import run_pilot, ArmSpec, TaskManifest, DBStateGrader
-import json
-tasks = [TaskManifest(task_id='retail-001', description='...', expected_state={...}, program_source='...')]
-arms = [ArmSpec(name='react-baseline', kind='react'), ArmSpec(name='tikhon-core', kind='tikhon')]
-report = run_pilot(tasks, arms, grader=DBStateGrader())
-print(report.to_json())
-"
-```
-
-See `docs/eval-pilot.md` for full methodology pointers.
+1. Graders must accept every reasonable answer format for the task
+   (parenthesized/bare letters; thousands-separated and LaTeX numbers).
+2. Audit extraction on raw outputs from **every arm** before trusting
+   cross-arm deltas — format differences between arms masquerade as quality
+   differences.
+3. Grading logic never branches on arm identity (frozen invariant).

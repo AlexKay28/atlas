@@ -82,18 +82,25 @@ commit 0645918; stored results re-graded offline.
 
 ## Infrastructure
 
-- Runner: `benchmarks/run_single_bench.py <bench> <n>` — per-benchmark, parallel workers
-- Combined runner: `benchmarks/run_parallel_bench.py` — all benchmarks, bootstrap CIs
+- Runners: `benchmarks/run_skill_compare.py` (canonical arm comparison), `run_single_bench.py` (per-benchmark), `run_parallel_bench.py` (all + CIs) — see `benchmarks/README.md`
+- **Runs never overwrite**: active runners write to `results/runs/<timestamp>_<name>/` via `outdir.py`
 - Stats: `benchmarks/stats.py` — bootstrap CIs, permutation tests, Wilcoxon, Cohen's h
 - Protocol: `benchmarks/EVAL_PROTOCOL.md` — frozen invariants
 - Rate-limit retry: worker_fn backs off on 429/inflight errors, retries empty 0-token answers
 
 ## Raw Data
 
-- GLM: `benchmarks/results/full_test_eval.json` (grader-corrected)
-- gpt-oss-120b: `benchmarks/results/oss_full_eval.json`
-- Per-benchmark: `benchmarks/results/single_{benchmark}.json`
-- Legacy summaries: `FULL_TEST_SET_EVAL.md`, `FULL_EVAL_SUMMARY.md` (pre-grader-fix numbers)
+Results are frozen into dated study directories (see
+`benchmarks/results/README.md` for the index):
+
+- GLM Stage-1: `benchmarks/results/2026-09-13-stage1-full/full_test_eval.json` (grader-corrected)
+- gpt-oss-120b Stage-1: `benchmarks/results/2026-09-13-stage1-full/oss_full_eval.json`
+- Per-benchmark: `benchmarks/results/2026-09-13-stage1-full/single_{benchmark}.json`
+- Skill comparisons: `benchmarks/results/2026-09-14-skill-study/skill_cmp_*.json`
+- Legacy summaries: same directory (`FULL_TEST_SET_EVAL.md`, `FULL_EVAL_SUMMARY.md`)
+
+**Note**: gsm8k rows were re-graded with the v3 extractor (grader-format fix);
+legacy summaries predate that correction.
 
 ## Model Endpoints
 

@@ -585,7 +585,8 @@ def run_multiturn_trial(
 
     system_prompt = ""
     if arm == "tahoe":
-        skill_path = Path(__file__).parent / "tahoe_skill_prompt.txt"
+        from prompt_paths import resolve_prompt
+        skill_path = resolve_prompt("tahoe")
         if skill_path.exists():
             system_prompt = skill_path.read_text()
 

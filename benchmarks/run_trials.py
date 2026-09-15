@@ -97,7 +97,8 @@ def run_tahoe_arm(task, trial_idx):
     Same single API call, same parameters as classic. The ONLY difference
     is the system prompt that teaches the model to structure its reasoning.
     """
-    skill_prompt_path = os.path.join(os.path.dirname(__file__), "tahoe_skill_prompt.txt")
+    from prompt_paths import resolve_prompt
+    skill_prompt_path = str(resolve_prompt("tahoe"))
     with open(skill_prompt_path) as f:
         system_prompt = f.read()
 

@@ -32,26 +32,26 @@ def _load_bench_module():
 # -- 1. Prompt files exist and are non-empty ------------------------------
 
 @pytest.mark.parametrize("filename", [
-    "cot_prompt.txt",
-    "cod_prompt.txt",
-    "tot_prompt.txt",
-    "react_prompt.txt",
+    "cot.txt",
+    "cod.txt",
+    "tot.txt",
+    "react.txt",
 ])
 def test_prompt_file_exists_and_nonempty(filename):
-    path = _BENCH_DIR / filename
+    path = _BENCH_DIR.parent / "language" / "baselines" / filename
     assert path.exists(), f"Missing prompt file: {filename}"
     content = path.read_text().strip()
     assert len(content) > 10, f"Prompt file {filename} is too short"
 
 
 @pytest.mark.parametrize("filename,expected_phrase", [
-    ("cot_prompt.txt", "step by step"),
-    ("cod_prompt.txt", "bullet point"),
-    ("tot_prompt.txt", "multiple"),
-    ("react_prompt.txt", "Reason then act"),
+    ("cot.txt", "step by step"),
+    ("cod.txt", "bullet point"),
+    ("tot.txt", "multiple"),
+    ("react.txt", "Reason then act"),
 ])
 def test_prompt_file_contains_expected_phrase(filename, expected_phrase):
-    content = (_BENCH_DIR / filename).read_text().lower()
+    content = (_BENCH_DIR.parent / "language" / "baselines" / filename).read_text().lower()
     assert expected_phrase.lower() in content
 
 
@@ -70,7 +70,7 @@ def test_arm_prompt_files_classic_is_none():
 
 def test_arm_prompt_files_tahoe_points_to_skill_prompt():
     mod = _load_bench_module()
-    assert mod.ARM_PROMPT_FILES["tahoe"] == "tahoe_skill_prompt.txt"
+    assert mod.ARM_PROMPT_FILES["tahoe"] == "tahoe-93.txt"
 
 
 # -- 3. load_arm_prompt --------------------------------------------------

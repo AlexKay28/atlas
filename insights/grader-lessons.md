@@ -65,4 +65,4 @@ if m: return m.group(1) == expected_letter
 ```
 
 Applied in run_public_bench.py `grade_bbh`; stored GLM results re-graded in
-benchmarks/results/full_test_eval.json.
+benchmarks/results/2026-09-13-stage1-full/full_test_eval.json.
