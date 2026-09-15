@@ -1,0 +1,16 @@
+PROGRAM stage1-full-eval VERSION 1.0
+INPUT
+    G.task = "Full-test-set evaluation of the tahoe-93 skill vs classic"
+    C.protocol = "frozen invariant: identical graders, extraction, max_turns=1, max_tokens=2048, timeout=60s"
+    C.seed = 42
+
+step.benches: DO plan(benches = "gsm8k arc bbh bbh_track bbh_arith mmlu_math mmlu_logic mmlu_acct lsat race") -> E.benches
+step.samples: DO plan(samples = "full test sets: 1319/1172/250/250/250/100/126/282/510/1045") -> E.samples
+step.arms: DO plan(arms = "classic, tahoe-93") -> E.arms
+step.trials: DO plan(design = "3 trials per sample per arm, seed 42") -> E.trials
+step.run: DO run_eval(benches = E.benches, samples = E.samples, arms = E.arms, design = E.trials) -> OUT.trials
+step.grade: DO grade(trials = OUT.trials) -> E.pass_rates
+step.tokens: DO account(trials = OUT.trials) -> E.tokens
+step.report: DO report(pass_rates = E.pass_rates, tokens = E.tokens) -> OUT.summary
+DONE matched(OUT.summary, ".+")
+RETURN OUT.summary

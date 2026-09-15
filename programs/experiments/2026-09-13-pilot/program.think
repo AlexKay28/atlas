@@ -1,0 +1,10 @@
+PROGRAM pilot VERSION 1.0
+INPUT
+    G.task = "First controlled ablation: tahoe-93 vs classic, 10 samples per benchmark"
+    C.status = "superseded by stage1-full-eval"
+
+step.benches: DO plan(benches = "10 public benchmarks x 10 samples") -> E.benches
+step.run: DO run_eval(benches = E.benches, arms = "classic, tahoe-93") -> OUT.trials
+step.report: DO report(trials = OUT.trials) -> OUT.summary
+DONE matched(OUT.summary, ".+")
+RETURN OUT.summary

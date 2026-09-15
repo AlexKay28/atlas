@@ -1,0 +1,13 @@
+PROGRAM vm-pilot VERSION 1.0
+INPUT
+    G.task = "Evaluate the language as an execution protocol (compile once, one subcall per step)"
+    C.status = "SHELVED — negative result kept as claim boundary and RL infrastructure"
+    C.gates = "VM tokens <= prompt-tahoe on >=2 of 3 benches; context growth O(refs)"
+
+step.suites: DO plan(suites = "gsm8k 30, lsat 30, single-shot contrast classes") -> E.suites
+step.arms: DO plan(arms = "classic, prompt-tahoe, vm") -> E.arms
+step.run: DO run_vm(benches = E.suites, arms = E.arms, workers = 5, effort = "low") -> OUT.trials
+step.gates: DO check_gates(trials = OUT.trials, thresholds = C.gates) -> E.gate_results
+step.verdict: DO report(gates = E.gate_results, threats = "truncated task context, forced granularity, double-solving") -> OUT.summary
+DONE matched(OUT.summary, ".+")
+RETURN OUT.summary

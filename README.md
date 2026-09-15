@@ -61,6 +61,7 @@ benchmarks/        EVALUATION INFRA
 
 textbook/          thinking recipes — the language, rules, protocols (human-facing)
 analysis/          trajectory scoring, protocol discovery
+programs/          experiment plans as TAHOE programs (.think) + RUN.md repro guides
 paper/             tahoe.pdf + LaTeX source + figures
 docs/              EVALUATION.md (results record), TAHOE_VM.md (shelved branch)
 insights/          research journal — findings, corrections, landscape surveys
@@ -85,6 +86,8 @@ PYTHONPATH=src python3 benchmarks/run_skill_compare.py gsm8k 100 \
 - **Results record**: `docs/EVALUATION.md` + `benchmarks/results/` (per-study)
 - **Research journal**: `insights/` — including the grader-format lessons and
   the correction history
+- **Experiment programs**: `programs/` — every study's plan as a parser-valid
+  TAHOE program + reproduction commands (enforced by `tests/test_programs.py`)
 - **Skills**: `language/skills/` — the deployable artifact
 
 ## License

@@ -1,0 +1,14 @@
+PROGRAM research-plan VERSION 1.0
+INPUT
+    G.task = "Session research plan: language as skill, VM exploration, compact language"
+    C.law = "a reasoning language must shape thought, never constrain output"
+
+step.stage1: DO eval(skill = "tahoe-93", scale = "full test sets, two models") -> E.stage1
+step.stage2: DO eval(protocol = "vm-mode", scale = "pilot 30 x 2 benches") -> E.stage2
+step.triz: DO analyze(failures = E.stage2, method = "contradiction sharpening, IFR, separations") -> E.direction
+step.compact: DO eval(skill = "triz-implicit goal-bounding variant", scale = "200 x 10 benches") -> E.compact
+step.audit: DO audit(grader = "numeric extraction", per_arm = "every arm") -> E.artifacts
+step.correct: DO regrade(data = E.stage1, extractor = "v3") -> E.corrected
+step.paper: DO write(results = E.corrected, sections = "language, mechanism, proofs, law") -> OUT.paper
+DONE matched(OUT.paper, ".+")
+RETURN OUT.paper

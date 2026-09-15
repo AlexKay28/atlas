@@ -1,0 +1,15 @@
+PROGRAM skill-comparison-study VERSION 1.0
+INPUT
+    G.task = "Compare reasoning-skill arms on full benches with the v3 grader"
+    C.grader = "v3 arm-agnostic extractor: boxed -> last bold -> answer-is -> separator-aware"
+    C.seed = 42
+
+step.skills: DO plan(skills = "classic baseline, tahoe-93, triz-implicit goal-bounding variant") -> E.arms
+step.benches: DO plan(benches = "10 public benchmarks, 200 samples each where available") -> E.benches
+step.run: DO run_compare(benches = E.benches, arms = E.arms) -> OUT.trials
+step.grade: DO grade(trials = OUT.trials, grader = C.grader) -> E.pass_rates
+step.audit: DO audit_extraction(trials = OUT.trials, per_arm = "every arm") -> E.artifacts
+step.tokens: DO account(trials = OUT.trials) -> E.tokens
+step.report: DO report(pass_rates = E.pass_rates, tokens = E.tokens, audit = E.artifacts) -> OUT.summary
+DONE matched(OUT.summary, ".+")
+RETURN OUT.summary
