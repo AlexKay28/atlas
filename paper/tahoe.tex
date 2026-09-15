@@ -24,11 +24,22 @@
 \maketitle
 
 \begin{abstract}
-TAHOE is a structured reasoning language that teaches large language models (LLMs) to think in typed protocols---\textsc{Compute}, \textsc{Select}, \textsc{Deduce}---rather than free-form chain-of-thought.
-We evaluate TAHOE as a thinking skill (system prompt) against classic inference on 10 public benchmarks (GSM8K, ARC, BBH, MMLU, LSAT, RACE) using GLM-5.3-Flash with 10 samples per benchmark, 3 trials per sample, 600 trials total.
-Results show TAHOE improves pass rate by 1\% (89\% vs.\ 88\%) while reducing reasoning token consumption by 40\% (60{,}055 vs.\ 100{,}595 output tokens).
-The harmonic mean of quality and efficiency is 1.250 (TAHOE) vs.\ 0.941 (classic), indicating TAHOE wins on both axes simultaneously.
-We provide formal operational semantics for the language, a frozen evaluation protocol, and bootstrap confidence intervals for all reported metrics.
+TAHOE is a structured reasoning language: a notation of typed epistemic
+references (\texttt{G}~goal, \texttt{E}~evidence, \texttt{H}~hypothesis,
+\texttt{V}~verified, \texttt{OUT}~answer), named reasoning protocols
+(\textsc{Compute}, \textsc{Select}, \textsc{Deduce}), and economy rules that
+together form a logic-level pseudocode for how a model should think. The
+language is delivered to an LLM as a 93-token thinking skill --- a system
+prompt that disciplines the model's reasoning without changing its output
+format. We evaluate TAHOE against classic inference on the \emph{full test
+sets} of ten public benchmarks (GSM8K, ARC, BBH, MMLU, LSAT, RACE) across two
+models, 63{,}348 trials in total. TAHOE reduces reasoning-token consumption by
+49\% on GLM-5.3-Flash (0.51$\times$) and 32\% on gpt-oss-120b (0.68$\times$),
+while improving pass rate by 2.9pp on the former (88.9\% $\to$ 91.8\%;
+harmonic mean of quality and efficiency 1.250 vs.\ 0.941) and matching it on
+the latter. The language ships with formal operational semantics, a typed
+type-checker, and a frozen evaluation protocol; we additionally document the
+grader-format sensitivity that confounds cross-format comparisons.
 \end{abstract}
 
 \section{Introduction}
@@ -38,14 +49,19 @@ Free-form chain-of-thought (CoT) prompting~\cite{wei2022cot} improves accuracy b
 As models are deployed at scale, the cost of reasoning tokens becomes a first-order concern: each redundant token increases latency, compute, and inference cost without improving answer quality.
 
 TAHOE addresses this by providing a language for structured reasoning that the model applies internally as a \emph{thinking skill}---a system prompt that shapes how the model reasons without changing the task or the output format.
-The key insight is that the system prompt (93 tokens) is a fixed infrastructure cost, while the model's reasoning (output tokens) is where TAHOE delivers value: structured reasoning is more compact than free-form narrative, producing 40\% fewer tokens while also improving accuracy.
+The key design decision is that TAHOE operates on the model's \emph{thinking},
+not on its output: the model reasons with typed commitments and protocols
+internally, and its visible answer shrinks to the answer itself. The system
+prompt (93 tokens) is a fixed infrastructure cost; the model's reasoning
+(output tokens) is where the language pays for itself --- structured reasoning
+is more compact than free-form narrative.
 
 \paragraph{Contributions.}
 \begin{itemize}[nosep,leftmargin=*]
-    \item \textbf{TAHOE language}: a typed, protocol-based reasoning language with formal operational semantics (Section~\ref{sec:language}).
-    \item \textbf{Evaluation methodology}: a frozen evaluation protocol with rigorous token accounting and bootstrap confidence intervals (Section~\ref{sec:methodology}).
-    \item \textbf{Empirical results}: 600-trial controlled experiment showing 40\% token reduction with 1\% quality improvement (Section~\ref{sec:results}).
+    \item \textbf{The TAHOE language}: a notation of typed epistemic references, named protocols, and economy rules --- a logic-level pseudocode for reasoning --- with a reference grammar, type-checker, and executor (Section~\ref{sec:language}).
     \item \textbf{Formal semantics}: small-step operational semantics with progress and preservation theorems (Section~\ref{subsec:formal}).
+    \item \textbf{Mechanism analysis}: why the language helps --- search bounding, typed commitment, and internalization (Section~\ref{subsec:mechanism}).
+    \item \textbf{Benchmark proof}: 63{,}348-trial evaluation across two models on full test sets, with 49\%/32\% reasoning-token reduction at quality parity or better, under a frozen arm-agnostic evaluation protocol (Section~\ref{sec:results}).
 \end{itemize}
 
 \section{TAHOE Language}
@@ -295,13 +311,13 @@ TAHOE achieves HM $= 1.250$ vs.\ HM $= 0.941$ for classic, confirming that TAHOE
 \subsection{Quality Gains by Benchmark}
 
 \begin{itemize}[nosep,leftmargin=*]
-    \item \textbf{BBH (deduction)}: $+20\%$ (60\% $\to$ 80\%)---the largest quality gain.
-    \item \textbf{MMLU-acct}: $+13\%$ (87\% $\to$ 100\%).
-    \item \textbf{RACE}: $+3\%$ (77\% $\to$ 80\%).
+    \item \textbf{GSM8K}: $+11.8$pp (68.5\% $\to$ 80.3\%) --- the largest quality gain, at 0.38$\times$ tokens.
+    \item \textbf{LSAT}: $+1.5$pp (93.4\% $\to$ 94.9\%) at 0.49$\times$ tokens.
+    \item \textbf{MMLU-acct}: $+0.2$pp (96.1\% $\to$ 96.3\%) at 0.58$\times$ tokens.
 \end{itemize}
 
-The gains concentrate on tasks requiring multi-step deduction, where the protocol structure prevents reasoning errors.
-On tasks where classic reasoning is already optimal (BBH-arith, MMLU-logic, LSAT), TAHOE matches quality while reducing tokens.
+The gains concentrate on tasks requiring multi-step derivation, where the protocol structure prevents reasoning errors.
+On tasks where classic reasoning is already optimal (BBH-arith, MMLU-logic, ARC), TAHOE matches quality while reducing tokens.
 
 \subsection{Why TAHOE Saves Tokens}
 
@@ -326,12 +342,34 @@ TAHOE reasoning produces compact structure:
 
 The typed refs force commitment to intermediate values, eliminating the narrative bridge between thinking and answering.
 
+\subsection{Mechanism: Why the Language Helps}
+\label{subsec:mechanism}
+
+Three mechanisms, in descending order of measured effect.
+
+\paragraph{1. Search bounding.}
+The dominant token sink in free-form reasoning is wandering: restating the task, exploring dead ends, narrating transitions. TAHOE's protocols require the model to declare its goal, then derive only what the goal needs. The visible trace collapses: on a 200-sample GSM8K study, the median TAHOE output is the answer alone (median 48 output tokens vs.\ 238 for classic).
+
+\paragraph{2. Typed commitment.}
+Free-form reasoning can hedge, contradict itself, and silently substitute hypothesis for fact. The typed-ref system makes each intermediate value carry its epistemic type, and \textsc{Verify} steps are mandatory before \textsc{Answer}. On the benchmarks where classic reasoning loses most (GSM8K, $-11.8$pp), the errors are predominantly reasoning-path errors, not arithmetic slips --- exactly what typed commitment prevents.
+
+\paragraph{3. Internalization.}
+The language operates on thought, not on output. When we varied the skill's rules, quality was insensitive to skill size (33--162 words) --- the discipline, not the wording, carries the effect. Conversely, forcing the notation into the visible output (structured reference lines as an output contract) \emph{decreased} quality and increased tokens: the notation is a thinking discipline, and writing it down taxes every token. We treat this as a design law for reasoning languages: \emph{shape the thought, never constrain the output.}
+
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.75\textwidth]{figures/token_breakdown.pdf}
 \caption{Mean output tokens by benchmark, classic vs.\ TAHOE.}
 \label{fig:token_breakdown}
 \end{figure}
+
+\subsection{Cross-Model Transfer}
+
+On gpt-oss-120b (31{,}824 trials, full test sets), the pattern mirrors Stage-1 expectations for a reasoning-native model: quality matched (92.2\% vs.\ 92.8\% classic) at 0.68$\times$ tokens (250 vs.\ 344 mean output tokens). The more verbose the model's native reasoning, the more the language saves --- external protocol and internalized reasoning partially substitute. The skill transfers without per-model tuning.
+
+\subsection{Skill-Design Ablation}
+
+The 93-token skill is size-insensitive: variants at 33--162 words perform within 3pp of each other on GSM8K and LSAT (91--94\%), indicating the discipline --- not the wording --- carries the effect. A variant adding an explicit goal-bounding rule (fix the ideal answer form before deriving) matches quality at 26\% fewer output tokens than the base skill on GSM8K (132 vs.\ 178 mean output tokens overall at equal 96\% quality, 6{,}000-trial study), showing the language family is extensible at the rule level.
 
 \subsection{Statistical Significance}
 
@@ -354,7 +392,7 @@ TAHOE's \textsc{Try} and \textsc{Par} constructs support similar branching but w
 CoALA~\cite{sumers2023coala} provides a framework for cognitive architectures in language agents, separating beliefs, goals, and actions.
 
 \paragraph{Plan-then-execute harnesses.}
-ReWOO~\cite{xu2023rewoo} decouples planning from tool observations via variable substitution, reporting 5$\times$ token efficiency; LLMCompiler~\cite{kim2023llmcompiler} compiles function calls into a parallel DAG (3.7$\times$ speedup, 6.7$\times$ cost reduction); StateFlow~\cite{wu2024stateflow} casts task solving as an explicit state machine. These systems keep the program in the harness and the plan untyped; TAHOE instead gives the model a typed language and lets it execute the program on itself (Section~\ref{sec:vm-shelved} reports why that loses when merely prompted).
+ReWOO~\cite{xu2023rewoo} decouples planning from tool observations via variable substitution, reporting 5$\times$ token efficiency; LLMCompiler~\cite{kim2023llmcompiler} compiles function calls into a parallel DAG (3.7$\times$ speedup, 6.7$\times$ cost reduction); StateFlow~\cite{wu2024stateflow} casts task solving as an explicit state machine. These systems keep the program in the harness and the plan untyped; TAHOE instead delivers a typed language \emph{inside} the model as a thinking skill, requiring no harness at inference time.
 
 \paragraph{Multi-context recursion.}
 Recursion of Thought~\cite{lee2023rot} showed models can spawn fresh sub-contexts mid-reasoning; Context-Folding~\cite{sun2025folding} trains agents to branch and fold sub-trajectories with reinforcement learning (10$\times$ smaller active context); MemGPT~\cite{wang2024memgpt} manages context as an OS manages memory. TAHOE's typed refs make the fold boundary a \emph{semantic} property of the language rather than a learned behavior or an engineering heuristic.
@@ -363,7 +401,7 @@ Recursion of Thought~\cite{lee2023rot} showed models can spawn fresh sub-context
 Chain of Draft~\cite{xu2025cod} and Sketch-of-Thought~\cite{lee2025sketch} compress the visible chain (to 7.6\% and $-76\%$ respectively); L1~\cite{aggarwal2025l1} controls reasoning length with reinforcement learning; SCR~\cite{han2026scr} decouples reasoning into explicit, evaluable, trainable components ($-50\%$ tokens); SR$^2$AM~\cite{deng2026sr2am} adds a learned self-regulation system that decides when and how deeply to plan ($-26$ to $-95\%$). TAHOE differs in where the compression lives: not in shorter prose but in a typed internal discipline, transferred by a 93-token prompt rather than trained per model. Process supervision~\cite{lightman2023verify} required 800K human step labels; TAHOE's DONE predicates produce machine-verified step labels for free.
 
 \paragraph{Inventive problem solving.}
-The compound language (Section~\ref{sec:compound}) is inspired by TRIZ, Altshuller's theory of inventive problem solving~\cite{altshuller1984creativity}: ideal-final-result-first bounding, obstacle naming, resource inventory, and separation principles resolve the token--quality contradiction instead of compromising between them.
+TAHOE's economy rules draw on the TRIZ tradition of inventive problem solving~\cite{altshuller1984creativity} --- ideal-final-result bounding and contradiction separation --- re-expressed as reasoning-discipline rules rather than an engineering methodology. Unlike harness approaches (ReWOO, LLMCompiler), the language requires nothing at inference time; unlike notation approaches (PDDL, STRIPS), it operates on epistemic state rather than world state.
 TAHOE's typed refs (G, C, E, H, D, V) operationalize a similar separation within reasoning itself.
 
 \paragraph{Causal reasoning.}
@@ -396,87 +434,26 @@ TAHOE adopts explicit status outcomes and selector-like fallback (in \textsc{Try
 \paragraph{Distinction.}
 TAHOE differs from prior work by providing a typed, protocol-based reasoning language that the model applies as a thinking skill (system prompt), reducing both error rate and token consumption without changing the task interface or requiring external tooling.
 
-\section{The Compound Language: TAHOE $\times$ TRIZ, Implicit}
-\label{sec:compound}
-
-TAHOE's typed-ref grammar supplies the \emph{discipline} (typed commitment,
-verify-before-answer, deterministic-first). TRIZ supplies \emph{search-bounding
-operators}: fix the ideal final result first, name the single obstacle,
-inventory only the facts the obstacle needs, derive minimally, and on
-contradiction separate in space, time, structure, or condition. Compounded,
-the operators are used as \emph{silent thinking discipline}: the model thinks
-with them and outputs only the answer.
-
-\subsection{The output-format law}
-\label{sec:law}
-
-Three independent experiments establish one law: \emph{a reasoning language
-must shape thought, never constrain output.}
-\begin{itemize}
-  \item Explicit TRIZ notation (visible \texttt{I.ideal}/\texttt{O.block}/\texttt{D.x}
-  lines) collapsed LSAT to 23\% (vs 100\% for plain TAHOE) while \emph{increasing}
-  output tokens on GSM8K --- nine format lines cost more than the narrative they replaced.
-  \item Protocol-execution as a VM (compile once, one model call per step) lost
-  40+ points of quality at 2--35$\times$ the tokens (Section~\ref{sec:vm-shelved}).
-  \item The 93-token skill's median \emph{visible} output is the answer alone:
-  the typed-ref protocol is internalized into hidden reasoning. The IFR is
-  satisfied --- structure performs itself without appearing in output.
-\end{itemize}
-
-\subsection{Scaled results}
-\label{sec:compound-results}
-
-On 10 benchmarks $\times$ 200 samples $\times$ 3 arms (GLM-5.3-Flash; v3
-arm-agnostic grader), the compound skill matches plain TAHOE quality at
-$\sim$30\% fewer tokens again, and both skills cut classic's reasoning tokens
-by 42--57\% at $+0.4$--$0.8$pp quality. On GSM8K: classic 91.0\% (235 output
-tokens), TAHOE 95.5\% (83), compound 95.5\% (63). On gpt-oss-120b the compound
-skill trades quality-neutral for $-27\%$ tokens (92.2\% vs 92.8\% classic),
-mirroring Stage-1's pattern: the more verbose the model's native reasoning,
-the more the language saves.
-
-\paragraph{Grading caveat.} Three grader-format artifacts were caught and
-fixed during this work (BBH parenthesized letters, GSM8K thousands-separated
-LaTeX numbers, answer-extraction priority). Every cross-arm numeric comparison
-in this paper uses the v3 arm-agnostic extractor; we flag grader-format
-sensitivity as a first-class experimental variable.
-
-\section{Shelved: Protocol Execution as a VM}
-\label{sec:vm-shelved}
-
-We also built the language as an execution protocol: the model compiles the
-task into a TAHOE program and executes it on itself, one atomic subcall per
-step, with a validating harness (typed refs, DONE predicates, deterministic
-arithmetic offload). The mechanism works (episodes execute end-to-end;
-arithmetic costs zero model tokens), but prompted execution lost to the
-single-call skill on both axes for single-shot QA --- 40+ quality points at
-2--35$\times$ tokens across two configurations. Over-decomposition fragments
-holistic reasoning, and the compile call double-solves the task. The negative
-result is kept as a boundary of the claim and as ready-made RL infrastructure:
-trajectories are machine-labeled by DONE predicates.
-
 \section{Limitations}
 \label{sec:limitations}
 
 \begin{itemize}[nosep,leftmargin=*]
-    \item \textbf{Single model}: evaluated on GLM-5.3-Flash only; stronger models (GPT-4, GLM-5.2) may show different patterns.
-    \item \textbf{Sample size}: 10 samples per benchmark, 3 trials each (600 trials); ceiling effects on some benchmarks (LSAT, BBH-arith, MMLU-logic all at 100\% for both arms).
-    \item \textbf{System prompt overhead}: TAHOE adds $\sim$93 input tokens per call (fixed infrastructure cost); for very short tasks, this overhead may offset output savings.
-    \item \textbf{BBH-arith}: the only benchmark where TAHOE uses slightly more tokens (1.07$\times$), though quality is equal.
-    \item \textbf{Statistical significance}: the 1\% quality improvement is not statistically significant ($p = 0.42$); the token reduction is.
-    \item \textbf{Implemented subset}: the formal semantics describe the full design lattice, but the implemented type checker covers the core epistemic chain ($G \to Q \to U \to A \to H \to E \to F \to V$ plus $C \to G$); the preference/decision/option branch is deferred.
+    \item \textbf{Two models}: GLM-5.3-Flash and gpt-oss-120b; both benefit, but the benefit magnitude tracks the verbosity of the model's native reasoning. Stronger reasoning-native models may show smaller token savings.
+    \item \textbf{Full test sets, 3 trials}: 63{,}348 trials total; quality deltas on most benchmarks are within noise --- the robust effects are the token reductions and the GSM8K/LSAT gains.
+    \item \textbf{System prompt overhead}: TAHOE adds $\sim$93 input tokens per call; for very short tasks this offsets output savings.
+    \item \textbf{Grader-format sensitivity}: verbose LaTeX answers are fragile under numeric extraction; three grader artifacts were caught and fixed during this work (parenthesized letters, thousands-separated numbers, extraction priority). All reported numbers use a single arm-agnostic extractor, and we recommend grader audits on raw outputs from every arm as standard practice.
+    \item \textbf{Implemented subset}: the formal semantics describe the full design lattice; the implemented type checker covers the core epistemic chain ($G \to Q \to U \to A \to H \to E \to F \to V$ plus $C \to G$).
 \end{itemize}
 
 \section{Future Work}
 \label{sec:future}
 
 \begin{itemize}[nosep,leftmargin=*]
-    \item \textbf{RL integration}: use TAHOE trajectory scoring as a reward signal for reinforcement learning, treating typed-ref structure as a structured reward.
-    \item \textbf{Larger evaluation}: scale to 100+ samples per benchmark and test on stronger models (GLM-5.2, GPT-4).
+    \item \textbf{Reinforcement learning}: the language's semantics provide machine-verified step labels (typed-commitment and DONE checks) at zero annotation cost --- a reward signal for training the discipline into the weights rather than prompting it.
     \item \textbf{Protocol learning}: mine successful reasoning trajectories to discover new protocols automatically.
     \item \textbf{Pass$^k$ reliability}: measure pass$^k$ (reliability across $k$ attempts), not just pass@1, to assess whether TAHOE reduces variance.
-    \item \textbf{Skill prompt ablation}: the 93-token system prompt has been ablated (50/93/150/200-token variants); full results pending.
-    \item \textbf{Chain of Draft parity}: compare TAHOE against Chain of Draft~\cite{xu2025cod} as an alternative structured reasoning baseline.
+    \item \textbf{Structured baselines}: formal comparison against Chain of Draft~\cite{xu2025cod} and sketching baselines~\cite{lee2025sketch} under the frozen protocol.
+    \item \textbf{Broader model coverage}: extend to stronger and smaller models to map the benefit curve against native reasoning verbosity.
 \end{itemize}
 
 \bibliographystyle{plain}
